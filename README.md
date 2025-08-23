@@ -2,8 +2,8 @@
 
 [![R Version](https://img.shields.io/badge/R-%3E%3D%204.0.0-blue.svg)](https://cran.r-project.org/)
 [![License](https://img.shields.io/badge/License-GPL--3-green.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen.svg)]()
-[![Validation](https://img.shields.io/badge/Validation-FDA%20Compliant-success.svg)]()
+[![Status](https://img.shields.io/badge/Status-Beta-yellow.svg)]()
+[![Validation](https://img.shields.io/badge/Validation-Coming%20Soon-orange.svg)]()
 
 ## 🎯 Overview
 
