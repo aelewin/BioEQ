@@ -328,6 +328,34 @@ help_texts <- list(
         tags$li("Must demonstrate comparable variability")
       )
     )
+  ),
+  
+  welch_correction = list(
+    tooltip = "Statistical method for t-tests in parallel group bioequivalence studies",
+    title = "Welch Correction for Parallel Designs",
+    content = div(
+      p("For parallel group bioequivalence studies, two statistical approaches are available for comparing treatment groups:"),
+      tags$ul(
+        tags$li(
+          tags$strong("Welch correction (unequal variances) - Recommended:"), 
+          " Performs Welch's t-test which does not assume equal variances between treatment groups. This is more robust and appropriate for most bioequivalence studies as it accounts for potential differences in variability between test and reference treatments."
+        ),
+        tags$li(
+          tags$strong("Equal variances assumption:"), 
+          " Performs Student's t-test assuming equal variances between groups. This method requires the assumption that both treatment groups have identical variability, which may not hold in practice."
+        )
+      ),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("Regulatory Recommendation:"), 
+        " The Welch correction is widely accepted and recommended by regulatory agencies for parallel group bioequivalence studies. It provides more conservative and reliable results without requiring the equal variances assumption."
+      ),
+      div(
+        style = "margin-top: 10px; padding: 10px; background-color: #d5f4e6; border-left: 3px solid #27ae60; border-radius: 4px;",
+        tags$strong("Default Setting:"), 
+        " This application defaults to using the Welch correction for all parallel group analyses, consistent with current best practices and regulatory expectations."
+      )
+    )
   )
 )
 

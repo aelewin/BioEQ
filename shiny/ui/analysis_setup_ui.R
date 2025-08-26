@@ -362,16 +362,34 @@ tagList(
                  help_icon("analysis_model", help_texts$analysis_model$tooltip, 
                           help_texts$analysis_model$title, help_texts$analysis_model$content)
               ),
-              selectInput(
-                "anova_model",
-                label = NULL,
-                choices = list(
-                  "Fixed Effects (lm)" = "fixed",
-                  "Mixed Effects - nlme" = "nlme", 
-                  "Mixed Effects - Satterthwaite" = "satterthwaite",
-                  "Mixed Effects - Kenward-Roger" = "kenward-roger"
-                ),
-                selected = "fixed"
+              # Conditional ANOVA model selection based on study design
+              conditionalPanel(
+                condition = "output.study_design_detected && output.detected_design_type == 'parallel'",
+                div(
+                  selectInput(
+                    "anova_model",
+                    label = NULL,
+                    choices = list("Fixed Effects (lm)" = "fixed"),
+                    selected = "fixed"
+                  ),
+                  div(style = "font-size: 11px; color: #666; margin-top: 5px;",
+                    "🔒 Fixed effects model automatically selected for parallel designs."
+                  )
+                )
+              ),
+              conditionalPanel(
+                condition = "!output.study_design_detected || output.detected_design_type != 'parallel'",
+                selectInput(
+                  "anova_model",
+                  label = NULL,
+                  choices = list(
+                    "Fixed Effects (lm)" = "fixed",
+                    "Mixed Effects - nlme" = "nlme", 
+                    "Mixed Effects - Satterthwaite" = "satterthwaite",
+                    "Mixed Effects - Kenward-Roger" = "kenward-roger"
+                  ),
+                  selected = "fixed"
+                )
               ),
               
               # Conditional random effects specification for mixed models
@@ -431,13 +449,13 @@ tagList(
                 )
               ),
               
-              # Information about automatic log-transformation
+              # Note about Tmax methodology
               div(
-                style = "margin-top: 10px; padding: 8px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 3px;",
+                style = "margin-top: 8px; padding: 8px; background-color: #fff3cd; border-left: 3px solid #ffc107; border-radius: 3px;",
                 tags$small(
-                  icon("info-circle"), 
-                  " Log-transformed versions (e.g., lnCmax, lnAUC0t, lnTmax) will be automatically included in the analysis.",
-                  style = "color: #2980b9;"
+                  icon("exclamation-triangle"), 
+                  " Note: Tmax requires non-parametric analysis methods (median differences, Wilcoxon tests) per regulatory guidance and is not suitable for standard confidence interval-based bioequivalence assessment.",
+                  style = "color: #856404;"
                 )
               )
             )
@@ -465,28 +483,6 @@ tagList(
                 ),
                 selected = "ABE",
                 inline = FALSE
-              ),
-              
-              # Conditional panel for ABE limits
-              conditionalPanel(
-                condition = "input.be_analysis_type == 'ABE'",
-                h5("Bioequivalence Limits (%)",
-                   help_icon("be_limits", help_texts$be_limits$tooltip, 
-                            help_texts$be_limits$title, help_texts$be_limits$content)
-                ),
-                div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
-                  fluidRow(
-                    column(6,
-                      numericInput("be_lower", "Lower (%)", value = 80, min = 70, max = 90, step = 1)
-                    ),
-                    column(6,
-                      numericInput("be_upper", "Upper (%)", value = 125, min = 110, max = 140, step = 1)
-                    )
-                  ),
-                  div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
-                    "• Standard: 80.00% - 125.00% for most drugs"
-                  )
-                )
               ),
               
               # Placeholder panels for RSABE and ABEL
@@ -523,27 +519,66 @@ tagList(
             
             # Analysis configuration (moved to right column)
             column(6,
-              h5("Confidence Interval Level",
-                 help_icon("confidence_level", help_texts$confidence_level$tooltip, 
+              h5("Alpha Level (α)",
+                 help_icon("alpha_level", help_texts$confidence_level$tooltip, 
                           help_texts$confidence_level$title, help_texts$confidence_level$content)
               ),
               numericInput(
-                "confidence_level",
+                "alpha_level",
                 label = NULL,
-                value = 90,
-                min = 80,
-                max = 99,
-                step = 1
+                value = 0.05,
+                min = 0.01,
+                max = 0.20,
+                step = 0.01
               ),
-              helpText("90% CI corresponds to α = 0.05 for two one-sided tests"),
+              div(id = "confidence_display", style = "margin-bottom: 15px; color: #6c757d;",
+                "95% CI corresponds to α = 0.05 for two one-sided tests"
+              ),
               
-              h5("Analysis Options"),
-              checkboxInput(
-                "log_transform",
-                "Apply log transformation",
-                value = TRUE
+              # Conditional panel for ABE limits (moved here)
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'ABE'",
+                h5("Bioequivalence Limits (%)",
+                   help_icon("be_limits", help_texts$be_limits$tooltip, 
+                            help_texts$be_limits$title, help_texts$be_limits$content)
+                ),
+                div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
+                  fluidRow(
+                    column(6,
+                      numericInput("be_lower", "Lower (%)", value = 80, min = 70, max = 90, step = 1)
+                    ),
+                    column(6,
+                      numericInput("be_upper", "Upper (%)", value = 125, min = 110, max = 140, step = 1)
+                    )
+                  ),
+                  div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
+                    "• Standard: 80.00% - 125.00% for most drugs"
+                  )
+                )
               ),
-              helpText("Log-transformation required for AUC and Cmax")
+              
+              # Parallel Design Statistical Method Selection
+              conditionalPanel(
+                condition = "output.is_parallel_design == true",
+                div(style = "margin-top: 20px; padding: 15px; background-color: #f1f8ff; border: 1px solid #b8daff; border-radius: 5px;",
+                  h6(tags$strong("Parallel Design Statistical Method"), 
+                     help_icon("welch_correction", help_texts$welch_correction$tooltip, 
+                              help_texts$welch_correction$title, help_texts$welch_correction$content),
+                     style = "color: #004085; margin-bottom: 10px;"
+                  ),
+                  radioButtons(
+                    "welch_correction_be",
+                    "Variance assumption for bioequivalence testing:",
+                    choices = list(
+                      "Welch correction (recommended)" = TRUE,
+                      "Equal variances assumption" = FALSE
+                    ),
+                    selected = TRUE,
+                    inline = FALSE
+                  ),
+                  helpText("Welch correction is preferred for parallel designs as it does not assume equal variances between groups.")
+                )
+              )
             )
           )
         ),
@@ -587,28 +622,39 @@ tagList(
         )
       ), # Close Analysis Parameters box
       
-      # Analysis summary and run button
-      box(
-        title = "Ready to Analyze", 
-        status = "success", 
-        solidHeader = TRUE,
-        width = 12,
-        icon = icon("play"),
-        
-        div(style = "text-align: center; padding: 20px;",
-          h4("Analysis Configuration Complete", style = "color: #27ae60; margin-bottom: 20px;"),
-          p("Review your settings and click the button below to start the analysis.", 
-            style = "color: #7f8c8d; margin-bottom: 30px;"),
-          
-          actionButton(
-            "run_analysis", 
-            "Run Bioequivalence Analysis",
-            class = "btn btn-success btn-lg",
-            icon = icon("calculator"),
-            style = "font-size: 18px; padding: 15px 30px;"
-          )
+      # Analysis run button
+      div(style = "text-align: center; padding: 20px; margin-top: 20px;",
+        actionButton(
+          "run_analysis", 
+          "Run Bioequivalence Analysis",
+          class = "btn btn-success btn-lg",
+          icon = icon("calculator"),
+          style = "font-size: 18px; padding: 15px 30px;"
         )
-      ) # Close Ready to Analyze box
+      )
     ) # Close main configuration column
-  ) # Close main fluidRow
+  ), # Close main fluidRow
+  
+  # JavaScript for alpha to confidence interval conversion
+  tags$script(HTML("
+    $(document).ready(function() {
+      // Function to update confidence interval display
+      function updateConfidenceInterval() {
+        var alpha = $('#alpha_level').val();
+        if (alpha && !isNaN(alpha)) {
+          var ci = (1 - parseFloat(alpha)) * 100;
+          var ciText = ci.toFixed(0) + '% CI corresponds to α = ' + alpha + ' for two one-sided tests';
+          $('#confidence_display').text(ciText);
+        }
+      }
+      
+      // Update on page load
+      updateConfidenceInterval();
+      
+      // Update when alpha level changes
+      $('#alpha_level').on('input change', function() {
+        updateConfidenceInterval();
+      });
+    });
+  "))
 ) # Close tagList

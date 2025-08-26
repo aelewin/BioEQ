@@ -358,7 +358,11 @@ create_individual_concentration_plot <- function(data, selected_subjects = NULL,
     }
     
     # Configure plot layout
-    y_title <- if (log_scale) "Concentration (log scale)" else "Concentration"
+    # Get user-specified units from global options if available
+    concentration_label <- getOption("bioeq.concentration.label", "Concentration")
+    time_label <- getOption("bioeq.time.label", "Time")
+    
+    y_title <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (log scale)") else concentration_label
     y_type <- if (log_scale) "log" else "linear"
     
     p <- p %>% layout(
@@ -367,7 +371,7 @@ create_individual_concentration_plot <- function(data, selected_subjects = NULL,
         font = list(size = 16, color = "#2c3e50")
       ),
       xaxis = list(
-        title = list(text = "Time", font = list(size = 14)),
+        title = list(text = time_label, font = list(size = 14)),
         showgrid = TRUE,
         gridcolor = "#ecf0f1",
         zeroline = FALSE
@@ -560,16 +564,24 @@ plot_concentration_time_static <- function(data, log_scale = FALSE, individual =
                           width = 0.1, alpha = 0.7)
   }
   
+  # Get user-specified units from global options if available
+  concentration_label <- getOption("bioeq.concentration.label", "Concentration (ng/mL)")
+  time_label <- getOption("bioeq.time.label", "Time (h)")
+  
   if (log_scale) {
     p <- p + scale_y_log10()
-    p <- p + labs(y = "Concentration (log scale)")
+    p <- p + labs(y = paste0(gsub(" \\(.*\\)", "", concentration_label), " (log scale)"))
   } else {
-    p <- p + labs(y = "Concentration")
+    p <- p + labs(y = concentration_label)
   }
   
-  p <- p + labs(x = "Time", title = "Concentration-Time Profiles") +
+  p <- p + labs(x = time_label, title = "Concentration-Time Profiles") +
     theme_minimal() +
-    theme(legend.position = "bottom") +
+    theme(
+      legend.position = "bottom",
+      plot.margin = margin(t = 10, r = 10, b = 40, l = 10, unit = "pt"),
+      axis.title.x = element_text(margin = margin(t = 15))
+    ) +
     scale_color_brewer(type = "qual", palette = "Set1")
   
   return(p)
@@ -666,7 +678,11 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
   }
   
   # Configure layout
-  y_title <- if (log_scale) "Concentration (log scale)" else "Concentration"
+  # Get user-specified units from global options if available
+  concentration_label <- getOption("bioeq.concentration.label", "Concentration")
+  time_label <- getOption("bioeq.time.label", "Time")
+  
+  y_title <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (log scale)") else concentration_label
   
   p <- p %>% layout(
     title = list(
@@ -674,7 +690,7 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
       font = list(size = 16)
     ),
     xaxis = list(
-      title = "Time",
+      title = time_label,
       showgrid = TRUE,
       gridcolor = 'rgba(128,128,128,0.2)'
     ),
@@ -689,8 +705,9 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
       orientation = "h",
       x = 0.5,
       xanchor = "center",
-      y = -0.1
+      y = -0.15
     ),
+    margin = list(b = 80, l = 60, r = 40, t = 60),
     plot_bgcolor = 'rgba(0,0,0,0)',
     paper_bgcolor = 'rgba(0,0,0,0)'
   )
@@ -781,6 +798,14 @@ plot_be_confidence_intervals_static <- function(be_results) {
   plot_data$BE_Lower <- 80
   plot_data$BE_Upper <- 125
   
+  # Calculate dynamic y-axis limits based on data
+  data_min <- min(plot_data$Lower, na.rm = TRUE)
+  data_max <- max(plot_data$Upper, na.rm = TRUE)
+  
+  # Ensure limits include BE limits (80-125%) and add some padding
+  y_min <- min(data_min * 0.9, 70)  # 10% padding below data or 70%, whichever is lower
+  y_max <- max(data_max * 1.1, 140)  # 10% padding above data or 140%, whichever is higher
+  
   p <- ggplot(plot_data, aes(x = Parameter, y = Estimate)) +
     geom_point(size = 3, color = "blue") +
     geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.2, linewidth = 1) +
@@ -791,7 +816,7 @@ plot_be_confidence_intervals_static <- function(be_results) {
          y = "Ratio (%) with 90% CI", x = "PK Parameter") +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    coord_cartesian(ylim = c(70, 140))
+    coord_cartesian(ylim = c(y_min, y_max))
   
   return(p)
 }
@@ -826,6 +851,14 @@ plot_be_confidence_intervals_interactive <- function(be_results) {
   plot_data$BE_Upper <- 125
   plot_data$BE_Status <- ifelse(plot_data$Lower >= 80 & plot_data$Upper <= 125, 
                                 "Bioequivalent", "Not Bioequivalent")
+  
+  # Calculate dynamic y-axis limits based on data
+  data_min <- min(plot_data$Lower, na.rm = TRUE)
+  data_max <- max(plot_data$Upper, na.rm = TRUE)
+  
+  # Ensure limits include BE limits (80-125%) and add some padding
+  y_min <- min(data_min * 0.9, 70)  # 10% padding below data or 70%, whichever is lower
+  y_max <- max(data_max * 1.1, 140)  # 10% padding above data or 140%, whichever is higher
   
   # Create plotly plot
   p <- plot_ly(x = plot_data$Parameter, y = plot_data$Estimate) %>%
@@ -886,7 +919,7 @@ plot_be_confidence_intervals_interactive <- function(be_results) {
       ),
       yaxis = list(
         title = "Ratio (%) with 90% CI",
-        range = c(70, 140)
+        range = c(y_min, y_max)
       ),
       hovermode = "closest",
       showlegend = FALSE,
@@ -1087,8 +1120,11 @@ plot_subject_comparison_static <- function(data, log_scale = FALSE, facet_wrap =
          title = "Individual Subject Comparison: Test vs Reference",
          subtitle = "Concentration-Time Profiles by Subject") +
     theme_minimal() +
-    theme(legend.position = "bottom",
-          strip.text = element_text(size = 8, face = "bold"))
+    theme(
+      legend.position = "bottom",
+      plot.margin = margin(t = 10, r = 10, b = 30, l = 10, unit = "pt"),
+      strip.text = element_text(size = 8, face = "bold")
+    )
   
   if (facet_wrap) {
     p <- p + facet_wrap(~ paste("Subject", Subject), ncol = ncol, scales = "free_y")
@@ -1713,6 +1749,7 @@ plot_pk_boxplots_static <- function(data, parameters = c("AUC0t", "Cmax"),
     theme_minimal() +
     theme(
       legend.position = "bottom",
+      plot.margin = margin(t = 10, r = 10, b = 30, l = 10, unit = "pt"),
       strip.text = element_text(size = 12, face = "bold")
     )
   
@@ -1957,6 +1994,7 @@ plot_forest_be_static <- function(be_results, parameters = NULL, be_limits = c(0
     theme_minimal() +
     theme(
       legend.position = "bottom",
+      plot.margin = margin(t = 10, r = 10, b = 30, l = 10, unit = "pt"),
       panel.grid.major.x = element_line(color = "gray"),
       panel.grid.major.y = element_blank()
     ) +

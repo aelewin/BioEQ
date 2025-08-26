@@ -9,7 +9,9 @@ This directory contains the core R functions for bioequivalence analysis.
 #### `bioeq_main.R`
 Main entry point and workflow orchestration
 - `run_bioeq_analysis()`: Complete analysis pipeline
-- `launch_app()`: Start Shiny application
+- `launch_app()`: Start Shiny application (future feature)
+
+**Note**: To launch the Shiny web interface, see [shiny/README.md](../shiny/README.md) for current instructions.
 
 #### `nca_functions.R`
 Non-compartmental analysis functions

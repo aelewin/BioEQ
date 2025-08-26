@@ -1,7 +1,7 @@
 # BioEQ: Bioequivalence Analysis Platform
 
 [![R Version](https://img.shields.io/badge/R-%3E%3D%204.0.0-blue.svg)](https://cran.r-project.org/)
-[![License](https://img.shields.io/badge/License-GPL--3-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Beta-yellow.svg)]()
 [![Validation](https://img.shields.io/badge/Validation-Coming%20Soon-orange.svg)]()
 
@@ -9,7 +9,9 @@
 
 BioEQ is a comprehensive R package and Shiny application for bioequivalence analysis, providing regulatory-compliant statistical analysis for pharmaceutical studies. BioEQ offers both programmatic R functions and an intuitive web interface.
 
-## ✨ Features
+![DataUploadDemo](docs/images/Data-Upload.gif)
+
+## ✨ Planned Features
 
 - **Regulatory Compliance**: FDA, EMA, and ICH M13A guideline adherence
 - **Comprehensive Analysis**: NCA, ANOVA, and bioequivalence assessment
@@ -18,16 +20,22 @@ BioEQ is a comprehensive R package and Shiny application for bioequivalence anal
 - **Report Generation**: Automated regulatory-compliant reports in multiple formats
 - **Validation**: Cross-validated with industry-standard software (WinNonlin, SAS)
 
+![ResultsDemo](docs/images/Results.gif)
+
 ## 🚀 Quick Start
 
 ### Installation
 
 ```r
-# Install from GitHub
-devtools::install_github("yourusername/BioEQ")
+# Option 1: Install dependencies automatically
+Rscript install_dependencies.R
 
-# Load the package
-library(BioEQ)
+# Option 2: Install manually
+install.packages(c("shiny", "shinydashboard", "DT", "readr", "dplyr", 
+                   "readxl", "bslib", "ggplot2", "gridExtra"))
+
+# Option 3: Future - Install from GitHub (when package is complete)
+# devtools::install_github("yourusername/BioEQ")
 ```
 
 ### Basic Usage
@@ -49,14 +57,28 @@ generate_report(be_results, format = "pdf")
 
 #### Shiny Application
 ```r
-# Launch the web interface
-BioEQ::launch_app()
+# Method 1: One-command launch (easiest)
+Rscript launch_app.R
 
-# Or run directly
-shiny::runApp("shiny/app.R")
+# Method 2: From command line with auto-install
+cd shiny
+R -e "options(repos = c(CRAN = 'https://cran.rstudio.com/')); shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)"
+
+# Method 3: From R console (ensure correct working directory)
+setwd("shiny")
+options(repos = c(CRAN = 'https://cran.rstudio.com/'))
+shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)
+
+# Method 4: Using absolute path
+shiny::runApp("/path/to/BioEQ/shiny", host='0.0.0.0', port=4000, launch.browser=TRUE)
+
+# Future: Launch via package (when package is complete)
+# BioEQ::launch_app()
 ```
 
-## 📊 Analysis Capabilities
+**Access the app at:** http://localhost:4000
+
+## 📊 Analysis Capabilities (In Development)
 
 ### Non-Compartmental Analysis (NCA)
 - AUC (linear, log-linear, mixed methods)
@@ -102,33 +124,16 @@ devtools::test()
 devtools::check()
 ```
 
-## 📚 Documentation
+## 📚 Documentation (In Development)
 
 - [User Guide](docs/user_guide.md)
-- [API Reference](https://yourusername.github.io/BioEQ/)
+- [API Reference](https://github.com/BioEQ/)
 - [Shiny App Guide](shiny/README.md)
 - [Validation Report](VALIDATION_REPORT.md)
 
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md).
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests
-5. Submit a pull request
-
 ## 📄 License
 
-This project is licensed under the GPL-3 License - see [LICENSE](LICENSE) for details.
-
-## 🏆 Validation & Compliance
-
-BioEQ has been validated against:
-- FDA Guidance for Industry: Statistical Approaches to Establishing Bioequivalence
-- EMA Guideline on the Investigation of Bioequivalence
-- ICH M13A: Bioequivalence for Immediate-Release Solid Oral Dosage Forms
+This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.
 
 ## 👥 Authors
 
@@ -151,8 +156,8 @@ If you use BioEQ in your research, please cite:
 
 ```
 BioEQ Development Team (2025). BioEQ: Bioequivalence Analysis Platform. 
-R package version 1.0.0. https://github.com/yourusername/BioEQ
 ```
 
 ---
-*Last updated: December 2024*
+Author: Amanda Lewin
+*Version BETA 

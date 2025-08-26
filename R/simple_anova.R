@@ -10,7 +10,41 @@
 #' @param parameters Vector of parameter names to analyze (from NCA table columns)  
 #' @param anova_model ANOVA model type: "fixed", "nlme", "satterthwaite", "kenward-roger"
 #' @param random_effects For mixed models, specification of random effects (default: "(1|subject)")
-#' @return List containing ANOVA results for each parameter
+#' @return List containing ANOVA results#' Detect study design based on data structure
+#' 
+#' @param nca_data NCA results data frame
+#' @return Character string indicating design type ("parallel", "crossover")
+detect_anova_design <- function(nca_data) {
+  
+  # Check if we have a period column (crossover design)
+  if ("period" %in% names(nca_data)) {
+    # Check if each subject appears in multiple periods
+    subject_periods <- nca_data %>%
+      group_by(subject) %>%
+      summarise(n_periods = n_distinct(period), .groups = "drop")
+    
+    # If any subject has more than 1 period, it's a crossover design
+    if (any(subject_periods$n_periods > 1)) {
+      return("crossover")
+    } else {
+      return("parallel")
+    }
+  } else {
+    # No period column - check treatments per subject
+    subject_treatments <- nca_data %>%
+      group_by(subject) %>%
+      summarise(n_treatments = n_distinct(treatment), .groups = "drop")
+    
+    # If any subject has more than 1 treatment, it's likely crossover
+    # If all subjects have exactly 1 treatment, it's parallel
+    if (any(subject_treatments$n_treatments > 1)) {
+      return("crossover")
+    } else {
+      return("parallel")
+    }
+  }
+}
+
 #'
 perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", random_effects = "(1|subject)") {
   
@@ -66,18 +100,27 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
   cat(sprintf("Analyzing parameters: %s\n", paste(parameters, collapse = ", ")))
   cat("========================\n\n")
   
-  # Check required design variables are present
-  required_vars <- c("sequence", "subject", "period", "treatment")
+  # Check required design variables based on study design
+  if (study_design == "crossover") {
+    required_vars <- c("sequence", "subject", "period", "treatment")
+  } else {
+    # For parallel design, only need subject and treatment
+    required_vars <- c("subject", "treatment")
+  }
+  
   missing_vars <- required_vars[!required_vars %in% names(nca_data)]
   
   if (length(missing_vars) > 0) {
-    stop(sprintf("Missing required design variables: %s", paste(missing_vars, collapse = ", ")))
+    stop(sprintf("Missing required design variables for %s design: %s", 
+                 study_design, paste(missing_vars, collapse = ", ")))
   }
   
-  # Map column names to expected ANOVA model names
-  nca_data$seq <- as.factor(nca_data$sequence)
+  # Map column names to expected ANOVA model names based on design
+  if (study_design == "crossover") {
+    nca_data$seq <- as.factor(nca_data$sequence)
+    nca_data$prd <- as.factor(nca_data$period)
+  }
   nca_data$subj <- as.factor(nca_data$subject)
-  nca_data$prd <- as.factor(nca_data$period)
   
   # Explicitly set drug factor levels with R as reference to ensure T/R ratio calculation
   # This ensures drugT coefficient represents ln(Test/Reference)
@@ -766,21 +809,3 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
 }
 
 
-#' Detect Study Design for ANOVA Analysis
-#' 
-#' @param nca_data NCA results data frame
-#' @return Character string indicating design type ("parallel", "crossover")
-detect_anova_design <- function(nca_data) {
-  
-  # Check if each subject appears in multiple periods
-  subject_periods <- nca_data %>%
-    group_by(subject) %>%
-    summarise(n_periods = n_distinct(period), .groups = "drop")
-  
-  # If any subject has more than 1 period, it's a crossover design
-  if (any(subject_periods$n_periods > 1)) {
-    return("crossover")
-  } else {
-    return("parallel")
-  }
-}
