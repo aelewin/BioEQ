@@ -104,6 +104,7 @@ output$detected_design <- renderUI({
     
     div(
       p(strong("Design: "), detected_design, style = "margin: 8px 0;"),
+      p(strong("Treatments: "), n_treatments, style = "margin: 8px 0;"),
       p(strong("Subjects: "), n_subjects, style = "margin: 8px 0;"),
       p(strong("Observations: "), n_observations, style = "margin: 8px 0;"),
       if ("period" %in% names(data)) {
@@ -120,6 +121,31 @@ output$detected_design <- renderUI({
     )
   })
 })
+
+# Detected design type output for conditional UI
+output$detected_design_type <- reactive({
+  req(values$uploaded_data)
+  
+  tryCatch({
+    data <- values$uploaded_data
+    
+    # Detect study design
+    n_treatments <- length(unique(data$treatment))
+    treatments_per_subject <- data %>%
+      group_by(subject) %>%
+      summarise(n_treatments = length(unique(treatment)), .groups = "drop")
+    is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
+    
+    if (is_crossover) {
+      return("crossover")
+    } else {
+      return("parallel")
+    }
+  }, error = function(e) {
+    return("unknown")
+  })
+})
+outputOptions(output, "detected_design_type", suspendWhenHidden = FALSE)
 
 # Available PK parameters UI for pk_parameters data type
 output$available_pk_parameters_ui <- renderUI({
@@ -311,6 +337,13 @@ output$settings_summary <- renderUI({
         span("Confidence:", style = "font-weight: 500;"),
         span(paste0(confidence, "%"), style = "color: #28a745;")
       ),
+      if(study_design == "parallel" || (study_design == "auto" && detected_design == "Parallel Group Design")) {
+        welch_setting <- as.logical(input$welch_correction_be %||% TRUE)
+        div(style = "display: flex; justify-content: space-between; margin-bottom: 5px;",
+          span("Welch Correction:", style = "font-weight: 500;"),
+          span(if(welch_setting) "Enabled" else "Disabled", style = "color: #28a745;")
+        )
+      },
       div(style = "display: flex; justify-content: space-between; margin-bottom: 5px;",
         span("Log Transform:", style = "font-weight: 500;"),
         span(if(log_transform) "Yes" else "No", style = "color: #28a745;")
@@ -431,6 +464,8 @@ observeEvent(input$run_analysis, {
     # ANOVA Configuration
     anova_model = input$anova_model %||% "fixed",
     random_effects = input$random_effects %||% "(1|subject)",
+    # Parallel Design Configuration
+    welch_correction = as.logical(input$welch_correction_be %||% TRUE),
     # PK Parameter Selection for ANOVA
     selected_pk_params = c(input$primary_pk_params %||% c("Cmax", "AUC0t", "AUC0inf"), 
                           input$secondary_pk_params),
@@ -525,7 +560,14 @@ observeEvent(input$run_analysis, {
           excluded_subjects <- carryover_results$flagged_subjects$Subject  # Capital S to match carryover function output
           cat(sprintf("[DEBUG] Excluding subjects with carryover: %s\n", paste(excluded_subjects, collapse = ", ")))
           cat(sprintf("[DEBUG] Original data has %d rows\n", nrow(analysis_data)))
-          analysis_data <- analysis_data[!analysis_data$subject %in% excluded_subjects, ]
+          
+          # Check which column name exists in analysis_data and use that for filtering
+          if ("Subject" %in% names(analysis_data)) {
+            analysis_data <- analysis_data[!analysis_data$Subject %in% excluded_subjects, ]
+          } else if ("subject" %in% names(analysis_data)) {
+            analysis_data <- analysis_data[!analysis_data$subject %in% excluded_subjects, ]
+          }
+          
           cat(sprintf("[DEBUG] Filtered data has %d rows\n", nrow(analysis_data)))
           # Carryover notification removed; summary is now only in Results view
         } # No pop-up for carryover detection
@@ -793,17 +835,17 @@ observeEvent(input$run_analysis, {
       
       # Ensure proper column names for BE analysis functions
       # BE analysis functions expect: Subject, Formulation, Period, Sequence
-      if ("subject" %in% names(be_data) && !("Subject" %in% names(be_data))) {
-        be_data$Subject <- be_data$subject
+      if ("subject" %in% names(be_data)) {
+        names(be_data)[names(be_data) == "subject"] <- "Subject"
       }
-      if ("treatment" %in% names(be_data) && !("Formulation" %in% names(be_data))) {
-        be_data$Formulation <- be_data$treatment
+      if ("treatment" %in% names(be_data)) {
+        names(be_data)[names(be_data) == "treatment"] <- "Formulation"
       }
-      if ("period" %in% names(be_data) && !("Period" %in% names(be_data))) {
-        be_data$Period <- be_data$period
+      if ("period" %in% names(be_data)) {
+        names(be_data)[names(be_data) == "period"] <- "Period"
       }
-      if ("sequence" %in% names(be_data) && !("Sequence" %in% names(be_data))) {
-        be_data$Sequence <- be_data$sequence
+      if ("sequence" %in% names(be_data)) {
+        names(be_data)[names(be_data) == "sequence"] <- "Sequence"
       }
       
       # Debug: Check data structure
@@ -818,11 +860,13 @@ observeEvent(input$run_analysis, {
         
         # Prepare NCA data for merging - ensure proper column names
         nca_merge <- nca_results
-        if ("subject" %in% names(nca_merge) && !("Subject" %in% names(nca_merge))) {
-          nca_merge$Subject <- nca_merge$subject
+        
+        # Standardize column names - rename instead of duplicating
+        if ("subject" %in% names(nca_merge)) {
+          names(nca_merge)[names(nca_merge) == "subject"] <- "Subject"
         }
-        if ("treatment" %in% names(nca_merge) && !("Formulation" %in% names(nca_merge))) {
-          nca_merge$Formulation <- nca_merge$treatment
+        if ("treatment" %in% names(nca_merge)) {
+          names(nca_merge)[names(nca_merge) == "treatment"] <- "Formulation"
         }
         
         # Create a subject-treatment summary from BE data for merging
@@ -979,6 +1023,7 @@ observeEvent(input$run_analysis, {
           pk_parameters = valid_params,
           confidence_level = analysis_config$confidence_level,
           anova_model = analysis_config$anova_model,
+          welch_correction = analysis_config$welch_correction,
           anova_results = anova_results$anova_results  # Pass the ANOVA results
         )
       )
@@ -1034,14 +1079,8 @@ observeEvent(input$run_analysis, {
   shinyjs::hide("analysis_progress")
   updateTabItems(session, "sidebar", "results")
   
-  # Show success notification with configuration summary
-  notification_text <- paste0(
-    "Analysis completed successfully!\n",
-    "Design: ", values$be_results$study_design, "\n",
-    "Parameters: ", length(analysis_config$pk_parameters)
-  )
-  
-  showNotification(notification_text, type = "message", duration = 5)
+  # Show success notification (simplified)
+  showNotification("Analysis completed successfully!", type = "message", duration = 5)
 })
 
 # Custom template saving
@@ -1065,15 +1104,6 @@ observeEvent(input$confirm_save_template, {
   showNotification("Custom template saved successfully!", type = "message")
   removeModal()
 })
-
-# Progress bar animation (if using shinyWidgets)
-observeEvent(input$run_analysis, {
-  # Simple progress simulation without shinyWidgets dependency
-  showNotification("Analysis started...", type = "message", duration = 3)
-  # In a real implementation, this would trigger the actual analysis
-  Sys.sleep(2)
-  showNotification("Analysis completed!", type = "message", duration = 3)
-}, ignoreInit = TRUE)
 
 # Update available PK parameters based on data type and uploaded data
 observe({

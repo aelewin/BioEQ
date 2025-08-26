@@ -10,7 +10,7 @@ Professional web interface for bioequivalence analysis, providing an intuitive G
 
 ```bash
 # From the BioEQ project root directory:
-cd shiny && R -e "shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)"
+cd shiny && R -e "options(repos = c(CRAN = 'https://cran.rstudio.com/')); shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)"
 ```
 
 The app will automatically open in your browser at: **http://localhost:4000**
@@ -18,25 +18,27 @@ The app will automatically open in your browser at: **http://localhost:4000**
 ### Launch Application
 
 ```r
-# Method 1: Via package (if BioEQ package is installed)
-library(BioEQ)
-BioEQ::launch_app()
-
-# Method 2: From command line (recommended)
+# Method 1: From command line (recommended)
 # Navigate to the shiny directory first
 cd /path/to/BioEQ/shiny
-R -e "shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)"
+R -e "options(repos = c(CRAN = 'https://cran.rstudio.com/')); shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)"
 
-# Method 3: From R console (in shiny directory)
+# Method 2: From R console (in shiny directory)
 setwd("/path/to/BioEQ/shiny")
+options(repos = c(CRAN = 'https://cran.rstudio.com/'))
 shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)
 
-# Method 4: Direct execution (alternative)
-shiny::runApp("app.R", port=4000, host="0.0.0.0", launch.browser=TRUE)
+# Method 3: Direct execution with absolute path
+shiny::runApp("/path/to/BioEQ/shiny", port=4000, host="0.0.0.0", launch.browser=TRUE)
+
+# Method 4: Via package (when BioEQ package is installed - future feature)
+# library(BioEQ)
+# BioEQ::launch_app()
 ```
 
 **Important Notes:**
 - Ensure you're in the `shiny/` directory before running the app
+- The `options(repos = ...)` setting ensures packages install from CRAN if needed
 - The app requires several R packages (automatically loaded on startup)
 - Some optional packages (officer, zip) may show warnings but don't affect core functionality
 
@@ -77,10 +79,10 @@ shiny/
 
 ### Analysis Setup
 - **Study Designs**: 2×2×2, parallel, replicate
-- **PK Parameters**: AUC, Cmax, Tmax selection
-- **Methods**: Linear, log, mixed AUC calculation
+- **NCA Methods**: Linear, log, mixed AUC calculation
 - **Carryover**: ICH M13A compliant detection
-- **Templates**: FDA, EMA, ICH standard configurations
+- **ANOVA**: Fixed and Mixed effects models
+- **BE Analysis**: Average BE, Reference Scaled ABE, Average BE with Expanding Limits
 
 ### Results Dashboard
 - **Interactive Tables**: Sortable, searchable results
@@ -96,21 +98,33 @@ shiny/
 - **Code**: R script generation
 - **Archive**: Complete analysis package
 
+## ✅ Validation & Testing
+
+The BioEQ application has been tested against established reference datasets from peer-reviewed publications:
+
+### 2×2 Crossover Studies
+**Reference**: Schütz, H., Labes, D., & Fuglsang, A. (2014). Reference Datasets for 2-Treatment, 2-Sequence, 2-Period Bioequivalence Studies. *The AAPS Journal*, 16(6), 1292-1297.  
+**DOI**: [10.1208/s12248-014-9661-0](https://doi.org/10.1208/s12248-014-9661-0)
+
+### Parallel Group Studies  
+**Reference**: Fuglsang, A., Schütz, H., & Labes, D. (2015). Reference Datasets for Bioequivalence Trials in a Two-Group Parallel Design. *The AAPS Journal*, 17(2), 400-404.  
+**DOI**: [10.1208/s12248-014-9704-6](https://doi.org/10.1208/s12248-014-9704-6)
+
+
 ## 🎨 User Interface
 
 ### Navigation Flow
-1. **Data Upload** → Upload and validate data
-2. **Analysis Setup** → Configure parameters
+1. **Data Upload** → Upload and validate mapping of data
+2. **Analysis Setup** → Configure data analysis
 3. **Run Analysis** → Execute calculations
 4. **View Results** → Review outcomes
 5. **Export** → Download results and reports
 
 ### Design Features
-- **Responsive**: Mobile and desktop compatible
-- **Theme**: Professional navy blue design
 - **Progress**: Step-by-step indicators
 - **Help**: Contextual tooltips and guides
 - **Validation**: Real-time input checking
+- **Data Detection**: Automatic detection of standard BE data
 
 ## 🔧 Configuration
 
@@ -172,6 +186,22 @@ shiny::testApp(".")
 
 ### Common Issues
 
+**App Won't Start - "App dir must contain either app.R or server.R"**
+```bash
+# This error occurs when R is looking in the wrong directory
+# Solution: Ensure you're in the shiny directory
+
+# Check current directory
+pwd  # Should show .../BioEQ/shiny
+ls app.R  # Should show the app.R file exists
+
+# If not in shiny directory, navigate there:
+cd /path/to/BioEQ/shiny
+
+# Alternative: Set working directory within R
+R -e "setwd('shiny'); options(repos = c(CRAN = 'https://cran.rstudio.com/')); shiny::runApp(host='0.0.0.0', port=4000)"
+```
+
 **App Won't Start - "No such file or directory"**
 ```bash
 # Ensure you're in the correct directory
@@ -225,9 +255,14 @@ options(shiny.maxRequestSize = 100*1024^2)  # 100MB
 
 ### Local Server
 ```bash
-# Navigate to shiny directory first
+# Navigate to shiny directory first (IMPORTANT!)
 cd /path/to/BioEQ/shiny
-R -e "shiny::runApp(host='0.0.0.0', port=4000)"
+
+# Then launch the app
+R -e "options(repos = c(CRAN = 'https://cran.rstudio.com/')); shiny::runApp(host='0.0.0.0', port=4000)"
+
+# Alternative: Set directory within R command
+R -e "setwd('shiny'); options(repos = c(CRAN = 'https://cran.rstudio.com/')); shiny::runApp(host='0.0.0.0', port=4000)"
 ```
 
 ### Shiny Server
@@ -260,4 +295,5 @@ For issues or questions:
 - Email: support@bioeq.org
 
 ---
-*Version 1.0.0 | Last updated: December 2024*
+Author: Amanda Lewin
+*Version BETA 

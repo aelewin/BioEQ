@@ -336,11 +336,7 @@ results_dashboard_ui <- function(id) {
                   )
                 ),
                 
-                DT::dataTableOutput(ns("individual_subject_table")),
-                div(class = "interpretation-box",
-                  h5("📖 Individual Subject Data Guide"),
-                  uiOutput(ns("individual_subject_interpretation"))
-                )
+                DT::dataTableOutput(ns("individual_subject_table"))
               )
             )
           ),

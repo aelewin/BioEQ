@@ -1021,7 +1021,8 @@ server <- function(input, output, session) {
                be_results = reactive(values$be_results),
                nca_results = reactive(values$nca_results),
                analysis_config = reactive(values$analysis_config),
-               uploaded_data = reactive(values$uploaded_data))
+               uploaded_data = reactive(values$uploaded_data),
+               validation_result = reactive(values$validation_result))
   
   # Exports & Reports server logic
   # Results availability check for exports view

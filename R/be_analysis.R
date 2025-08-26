@@ -22,7 +22,8 @@ perform_be_analysis <- function(data,
                                be_limits = c(0.8, 1.25),
                                parameters = c("lnAUC0t", "lnAUC0inf", "lnCmax"),
                                regulatory_standard = "FDA",
-                               custom_config = NULL) {
+                               custom_config = NULL,
+                               welch_correction = TRUE) {
   
   cat("🔬 Starting bioequivalence analysis...\n")
   
@@ -43,7 +44,7 @@ perform_be_analysis <- function(data,
   # Perform analysis by design
   results <- switch(design,
     "2x2x2" = be_crossover_2x2x2(validated_data, alpha, be_limits, parameters, "fixed"),
-    "parallel" = be_parallel(validated_data, alpha, be_limits, parameters),
+    "parallel" = be_parallel(validated_data, alpha, be_limits, parameters, welch_correction),
     "replicate" = be_replicate(validated_data, alpha, be_limits, parameters),
     stop("Unsupported study design: ", design)
   )
@@ -111,11 +112,12 @@ perform_average_be <- function(data, design = "auto", params = list()) {
   parameters <- params$pk_parameters %||% c("lnAUC0t", "lnAUC0inf", "lnCmax")
   anova_model <- params$anova_model %||% "fixed"
   anova_results <- params$anova_results %||% NULL
+  welch_correction <- params$welch_correction %||% TRUE
   
   # Use existing BE analysis functions
   results <- switch(design,
     "2x2x2" = be_crossover_2x2x2(data, alpha, be_limits, parameters, anova_model, anova_results),
-    "parallel" = be_parallel(data, alpha, be_limits, parameters),
+    "parallel" = be_parallel(data, alpha, be_limits, parameters, welch_correction),
     "replicate" = be_replicate(data, alpha, be_limits, parameters),
     "2x2x3" = be_replicate(data, alpha, be_limits, parameters, design = "2x2x3"),
     "2x2x4" = be_replicate(data, alpha, be_limits, parameters, design = "2x2x4"),
@@ -308,27 +310,40 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
 #' @return BE analysis results
 #' @export
 be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25), 
-                       parameters = c("lnAUC0t", "lnAUC0inf", "lnCmax")) {
+                       parameters = c("AUC0t", "AUC0inf", "Cmax"), 
+                       welch_correction = TRUE) {
   
   cat("🔬 Analyzing parallel group bioequivalence study...\n")
   
-  # Define appropriate parameters for parallel BE analysis
-  # Exclude time-based parameters (Tmax, Tlast) and parameters with low variability
-  appropriate_params <- c("lnAUC0t", "lnAUC0inf", "lnCmax", "AUC0t", "AUC0inf", "Cmax", 
-                         "CL_F", "Vd_F", "lambda_z", "MRT")
+  # For parallel BE analysis, we need raw parameters because log transformation 
+  # happens inside the analysis function (prepare_parameter_data)
+  # Filter to only raw parameters (not log-transformed ones)
+  available_params <- intersect(parameters, names(data))
   
-  # Filter requested parameters to only include appropriate ones
-  filtered_parameters <- intersect(parameters, appropriate_params)
+  # Remove any log-transformed parameters to avoid double log transformation
+  raw_params <- available_params[!startsWith(available_params, "ln")]
   
-  if (length(filtered_parameters) == 0) {
-    cat("⚠️ No appropriate parameters found for parallel BE analysis.\n")
-    cat("Appropriate parameters: ", paste(appropriate_params, collapse = ", "), "\n")
-    cat("Requested parameters: ", paste(parameters, collapse = ", "), "\n")
+  # Remove Tmax as it requires non-parametric analysis, not confidence intervals
+  # Tmax should be analyzed using median differences and Wilcoxon tests per regulatory guidance
+  if ("Tmax" %in% raw_params) {
+    cat("ℹ️  Note: Tmax excluded from parametric BE analysis (requires non-parametric methods)\n")
+    cat("   For Tmax assessment, use median differences and Wilcoxon signed-rank tests\n")
+    cat("   as recommended by FDA and EMA guidance documents.\n")
+    raw_params <- raw_params[raw_params != "Tmax"]
+  }
+  
+  if (length(raw_params) == 0) {
+    cat("⚠️ No suitable raw parameters found for parallel BE analysis.\n")
+    cat("Available parameters in data: ", paste(names(data), collapse = ", "), "\n")
+    cat("Original requested parameters: ", paste(parameters, collapse = ", "), "\n")
+    cat("Note: Parallel analysis requires raw parameters for internal log transformation.\n")
     return(NULL)
   }
   
+  cat("Using raw parameters for parallel analysis:", paste(raw_params, collapse = ", "), "\n")
+  
   # Validate PK parameters
-  pk_params <- validate_pk_parameters(data, filtered_parameters)
+  pk_params <- validate_pk_parameters(data, raw_params)
   
   # Perform analysis for each parameter
   confidence_intervals <- list()
@@ -337,9 +352,9 @@ be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
   for (param in pk_params) {
     cat("  Analyzing", param, "...\n")
     
-    # Perform parallel group analysis using geometric mean ratio method with error handling
+    # Perform parallel group analysis
     tryCatch({
-      param_results <- analyze_parallel_parameter(data, param, alpha)
+      param_results <- analyze_parallel_parameter(data, param, alpha, welch_correction)
       
       if (!is.null(param_results)) {
         confidence_intervals[[param]] <- param_results$ci
@@ -780,7 +795,15 @@ analyze_crossover_parameter <- function(data, parameter, alpha, be_limits, anova
 #' @param parameter Parameter name
 #' @param alpha Significance level
 #' @return Parameter analysis results
-analyze_parallel_parameter <- function(data, parameter, alpha) {
+analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction = TRUE) {
+  
+  # Debug: show the data structure being passed
+  cat(sprintf("  [DEBUG] analyze_parallel_parameter called with parameter: %s (Welch: %s)\n", parameter, welch_correction))
+  
+  # Print ALL the raw data values for debugging (optional)
+  if (parameter %in% names(data)) {
+    cat(sprintf("  [DEBUG] Analysis of %s values (n=%d)\n", parameter, nrow(data)))
+  }
   
   # Prepare parameter data
   param_data <- prepare_parameter_data(data, parameter)
@@ -790,88 +813,73 @@ analyze_parallel_parameter <- function(data, parameter, alpha) {
     return(NULL)
   }
   
-  # Separate test and reference data
-  test_data <- subset(param_data, Formulation == "Test" | Formulation == "T")
-  ref_data <- subset(param_data, Formulation == "Reference" | Formulation == "R")
+  # Separate test and reference data - handle all possible column names and values
+  treatment_col <- NULL
+  
+  # Check all possible treatment column names in order of preference
+  possible_cols <- c("Formulation", "Treatment", "treatment", "Treat")
+  for (col in possible_cols) {
+    if (col %in% names(param_data)) {
+      treatment_col <- col
+      break
+    }
+  }
+  
+  if (is.null(treatment_col)) {
+    stop("Cannot find treatment column in data. Available columns: ", paste(names(param_data), collapse = ", "))
+  }
+  
+  # Get unique treatment values to debug
+  unique_treatments <- unique(param_data[[treatment_col]])
+  cat(sprintf("  [DEBUG] Treatment column: %s, values: %s\n", treatment_col, paste(unique_treatments, collapse = ", ")))
+  
+  # Handle all possible test/reference value mappings
+  test_data <- subset(param_data, param_data[[treatment_col]] %in% c("Test", "T", "test"))
+  ref_data <- subset(param_data, param_data[[treatment_col]] %in% c("Reference", "R", "ref", "reference"))
+  
+  cat(sprintf("  [DEBUG] Test group size: %d, Ref group size: %d\n", nrow(test_data), nrow(ref_data)))
   
   if (nrow(test_data) == 0 || nrow(ref_data) == 0) {
     warning("Missing test or reference data for parameter: ", parameter)
     return(NULL)
   }
   
-  # Geometric Mean Ratio approach (same as 2x2 crossover but with parallel data)
-  # Use pooled variance approach for parallel design
+  # EXACTLY like reference code: t.test on log data
+  test_result <- t.test(
+    test_data$log_param, 
+    ref_data$log_param, 
+    conf.level = 1 - alpha,  # Correct confidence level calculation for two-sided test
+    var.equal = !welch_correction    # Use welch_correction parameter
+  )
   
-  # Calculate geometric means
-  test_geom_mean <- exp(mean(test_data$log_param, na.rm = TRUE))
-  ref_geom_mean <- exp(mean(ref_data$log_param, na.rm = TRUE))
+  # Debug: show the t.test results (key information only)
+  cat(sprintf("  [DEBUG] t-test: t=%.3f, df=%.1f, p=%.4f\n", test_result$statistic, test_result$parameter, test_result$p.value))
   
-  # Calculate log geometric mean difference (point estimate on log scale)
-  log_pe <- mean(test_data$log_param, na.rm = TRUE) - mean(ref_data$log_param, na.rm = TRUE)
+  # EXACTLY like reference code: calculate results
+  logPE <- as.numeric(test_result$estimate[1] - test_result$estimate[2])
+  point_estimate <- 100 * exp(logPE)
+  ci_lower <- 100 * exp(test_result$conf.int[1])
+  ci_upper <- 100 * exp(test_result$conf.int[2])
   
-  # Calculate pooled variance for parallel design
-  n_test <- nrow(test_data)
-  n_ref <- nrow(ref_data)
+  cat(sprintf("  [DEBUG] Results: PE=%.2f%%, CI=[%.2f%%, %.2f%%]\n", point_estimate, ci_lower, ci_upper))
   
-  var_test <- var(test_data$log_param, na.rm = TRUE)
-  var_ref <- var(ref_data$log_param, na.rm = TRUE)
-  
-  # Pooled variance for parallel design
-  pooled_var <- ((n_test - 1) * var_test + (n_ref - 1) * var_ref) / (n_test + n_ref - 2)
-  
-  # Standard error for parallel design
-  se <- sqrt(pooled_var * (1/n_test + 1/n_ref))
-  
-  # Degrees of freedom
-  df <- n_test + n_ref - 2
-  
-  # t-value for 90% CI
-  t_val <- qt(1 - alpha, df)
-  
-  # Confidence interval on log scale
-  log_ci_lower <- log_pe - t_val * se
-  log_ci_upper <- log_pe + t_val * se
-  
-  # Transform to geometric scale (as percentages)
-  point_estimate <- exp(log_pe) * 100
-  ci_lower <- exp(log_ci_lower) * 100
-  ci_upper <- exp(log_ci_upper) * 100
-  
-  # Calculate t-statistic for testing
-  t_statistic <- log_pe / se
-  p_value <- 2 * (1 - pt(abs(t_statistic), df))
-  
-  # Prepare results with both scales
+  # Return simple results structure
   ci_result <- list(
-    # Geometric scale (traditional BE presentation)
     point_estimate = point_estimate,
     ci_lower = ci_lower,
     ci_upper = ci_upper,
-    confidence_level = (1 - 2 * alpha) * 100,
-    
-    # Log scale (regulatory assessment scale)
-    log_point_estimate = log_pe,
-    log_ci_lower = log_ci_lower,
-    log_ci_upper = log_ci_upper,
-    
-    # Statistical details
-    t_statistic = t_statistic,
-    df = df,
-    p_value = p_value,
-    
-    # Scale identification
-    scale = "both"
+    confidence_level = (1 - alpha) * 100,  # Correct confidence level
+    t_statistic = test_result$statistic,
+    df = test_result$parameter,
+    p_value = test_result$p.value
   )
   
   stats_result <- list(
-    pooled_variance = pooled_var,
-    standard_error = se,
-    p_value = p_value,
-    degrees_freedom = df,
-    n_test = n_test,
-    n_ref = n_ref,
-    test_geom_mean = test_geom_mean,
-    ref_geom_mean = ref_geom_mean
+    method = test_result$method,
+    degrees_freedom = test_result$parameter,
+    p_value = test_result$p.value,
+    n_test = nrow(test_data),
+    n_ref = nrow(ref_data)
   )
   
   return(list(

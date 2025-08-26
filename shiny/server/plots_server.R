@@ -24,7 +24,7 @@ if (!require(digest, quietly = TRUE)) {
 source("../R/plotting.R", local = TRUE)
 source("../R/cumulative_be_analysis.R", local = TRUE)
 
-plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_data) {
+plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_data, validation_result = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
@@ -111,6 +111,24 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         } else {
           cat("Concentration data is NULL\n")
         }
+        
+        # Get user-specified units from validation result
+        concentration_label <- "Concentration (ng/mL)"
+        time_label <- "Time (h)"
+        
+        if (!is.null(validation_result()) && !is.null(validation_result()$units_settings)) {
+          units_settings <- validation_result()$units_settings
+          if (!is.null(units_settings$concentration)) {
+            concentration_label <- paste0("Concentration (", units_settings$concentration, ")")
+          }
+          if (!is.null(units_settings$time)) {
+            time_label <- paste0("Time (", units_settings$time, ")")
+          }
+        }
+        
+        # Set global options for the plotting functions to access
+        options(bioeq.concentration.label = concentration_label)
+        options(bioeq.time.label = time_label)
         
         # Standardize column names for concentration-time plotting
         if (!is.null(conc_data)) {

@@ -704,6 +704,63 @@ body {
   color: white;
 }
 
+/* Progress Modal Styling - Make it look like notifications */
+.shiny-modal {
+  background: rgba(0, 0, 0, 0.3) !important;
+}
+
+.shiny-modal .modal-dialog {
+  position: fixed !important;
+  top: 20px !important;
+  right: 20px !important;
+  left: auto !important;
+  margin: 0 !important;
+  width: 350px !important;
+  max-width: 350px !important;
+}
+
+.shiny-modal .modal-content {
+  background: linear-gradient(135deg, #3498db 0%, #2980b9 100%) !important;
+  color: white !important;
+  border: none !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+}
+
+.shiny-modal .modal-header {
+  border: none !important;
+  padding: 15px 20px 10px 20px !important;
+}
+
+.shiny-modal .modal-title {
+  color: white !important;
+  font-weight: 500 !important;
+  font-size: 16px !important;
+}
+
+.shiny-modal .modal-body {
+  border: none !important;
+  padding: 0 20px 15px 20px !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.shiny-modal .progress {
+  background: rgba(255, 255, 255, 0.2) !important;
+  margin-top: 10px !important;
+  height: 6px !important;
+  border-radius: 3px !important;
+}
+
+.shiny-modal .progress-bar {
+  background: white !important;
+  box-shadow: none !important;
+}
+
+/* Hide close button on progress modal */
+.shiny-modal .close {
+  display: none !important;
+}
+
 /* Loading Animations */
 .loading-spinner {
   display: inline-block;

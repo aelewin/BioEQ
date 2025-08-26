@@ -6,6 +6,37 @@ source("utils/dashboard_utils.R", local = TRUE)
 source("utils/interpretation_guides.R", local = TRUE)
 source("utils/report_generation.R", local = TRUE)
 
+#' Convert log-transformed parameter names to display names
+#' 
+#' @param log_param_name Log-transformed parameter name (e.g., "lnCmax")
+#' @return Display name (e.g., "Cmax")
+log_param_to_display_name <- function(log_param_name) {
+  # Mapping from log-transformed names to display names
+  log_to_display_map <- c(
+    "lnCmax" = "Cmax",
+    "lnAUC0t" = "AUC0-t", 
+    "lnAUC0inf" = "AUC0-∞",
+    "lnAUClast" = "AUClast",
+    "lnAUC072" = "AUC0-72h",
+    "lnpAUC" = "pAUC",
+    "lnTmax" = "Tmax",
+    "lnT12" = "T½",
+    "lnkel" = "kel"
+  )
+  
+  # Return display name if mapping exists, otherwise return original name
+  display_name <- log_to_display_map[log_param_name]
+  if (is.na(display_name)) {
+    # If no mapping found, try to remove "ln" prefix
+    if (startsWith(log_param_name, "ln")) {
+      return(substring(log_param_name, 3))
+    } else {
+      return(log_param_name)
+    }
+  }
+  return(display_name)
+}
+
 #' Calculate PK Comparison Statistics
 #' 
 #' @param nca_data Data frame with NCA results containing subject_data
@@ -1206,36 +1237,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
     })
 
     # Individual subject interpretation - moved to PK Parameters tab
-    output$individual_subject_interpretation <- renderUI({
-      req(results_available())
-      
-      div(
-        h5("📖 Individual Subject Data Guide"),
-        
-        div(style = "background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 15px;",
-          h6("Understanding Individual Results", style = "color: #495057;"),
-          tags$ul(
-            tags$li(strong("Subject"), ": Individual study participant identifier"),
-            tags$li(strong("Treatment"), ": Test or Reference formulation administered"),
-            tags$li(strong("Sequence"), ": Order of treatment administration (RT = Reference→Test, TR = Test→Reference)"),
-            tags$li(strong("Period"), ": Study period (1 or 2 for crossover design)"),
-            tags$li(strong("AUC0t/AUC0inf"), ": Individual exposure measurements"),
-            tags$li(strong("Cmax/Tmax"), ": Peak concentration and time to peak"),
-            tags$li(strong("λz parameters"), ": Terminal elimination phase characteristics"),
-            tags$li(strong("CV indicators"), ": Variability assessment for highly variable drugs")
-          )
-        ),
-        
-        div(style = "background: #e7f3ff; padding: 15px; border-radius: 5px; border-left: 4px solid #007bff;",
-          h6("Clinical Interpretation Notes", style = "color: #0056b3;"),
-          p("Individual subject data enables identification of outliers, assessment of within-subject variability, and evaluation of carryover effects in crossover studies.", 
-            style = "margin-bottom: 8px;"),
-          p("Use the column selection controls to focus on specific parameters relevant to your analysis objectives.", 
-            style = "margin: 0;")
-        )
-      )
-    })
-    
     # Carryover summary output
     output$carryover_summary <- renderUI({
       if (is.null(carryover_results) || is.null(carryover_results())) {
@@ -1381,18 +1382,37 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           )
         )
         
-        # Filter for log-transformed primary PK parameters only (regulatory standard)
-        primary_log_params <- c("lnCmax", "lnAUC0t", "lnAUC0inf")
-        primary_ci <- ci_results[names(ci_results) %in% primary_log_params]
-        primary_conclusions <- be_conclusions[names(be_conclusions) %in% primary_log_params]
+        # Filter for ANY PK parameters that have BE results (not just primary)
+        # Look for all parameters with both confidence intervals and BE conclusions
+        
+        primary_ci <- list()
+        primary_conclusions <- list()
+        
+        # Get all parameters that have both CI results and BE conclusions
+        all_available_params <- intersect(names(ci_results), names(be_conclusions))
+        
+        cat(sprintf("[DEBUG] All available parameters with BE results: %s\n", 
+                   paste(all_available_params, collapse = ", ")))
+        
+        # Include all available parameters (not just primary ones)
+        for (param in all_available_params) {
+          if (!is.null(ci_results[[param]]) && !is.null(be_conclusions[[param]])) {
+            primary_ci[[param]] <- ci_results[[param]]
+            primary_conclusions[[param]] <- be_conclusions[[param]]
+            cat(sprintf("[DEBUG] Including parameter: %s\n", param))
+          }
+        }
+        
+        cat(sprintf("[DEBUG] Found %d parameters with BE results: %s\n", 
+                   length(primary_ci), paste(names(primary_ci), collapse = ", ")))
         
         if (length(primary_ci) == 0) {
           return(tagList(
             analysis_header,
             div(
               class = "alert alert-info",
-              h5("ℹ️ Log-Transformed Primary Parameters Not Available"),
-              p("Log-transformed primary PK parameters (lnCmax, lnAUC0t, lnAUC0inf) are not available in the results.")
+              h5("ℹ️ No BE Results Available"),
+              p("No parameters with BE results are available for display.")
             )
           ))
         }
@@ -1404,7 +1424,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         status_color <- if (all_be) "#28a745" else "#dc3545"
         status_bg <- if (all_be) "#d4edda" else "#f8d7da"
         
-        # Create results table
+        # Create results table with display names
         results_list <- mapply(function(param, is_be) {
           ci <- primary_ci[[param]]
           
@@ -1423,8 +1443,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             "❌ FAIL"
           }
           
+          # Convert log parameter name to display name
+          display_param <- log_param_to_display_name(param)
+          
           data.frame(
-            Parameter = param,
+            Parameter = display_param,  # Use display name instead of log name
             `Point Estimate` = sprintf("%.2f%%", ci$point_estimate),
             `90% CI Lower` = sprintf("%.2f%%", ci$ci_lower),
             `90% CI Upper` = sprintf("%.2f%%", ci$ci_upper),
@@ -1441,7 +1464,10 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           analysis_header,
           
           # Results table
-          h5("📊 Primary PK Parameters - Bioequivalence Assessment"),
+          h5("📊 Bioequivalence Assessment - All Parameters"),
+          p(style = "font-size: 0.9em; color: #6c757d; margin-bottom: 15px;", 
+            "Bioequivalence assessment for all analyzed parameters. ",
+            "Statistical analysis performed on log-transformed data where appropriate; results displayed with original parameter names for clarity."),
           DT::datatable(
             results_rows,
             options = list(
@@ -1475,8 +1501,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             style = "padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid #6c757d;",
             tags$small(
               tags$strong("Note: "), 
-              "Results shown are for primary pharmacokinetic parameters used in bioequivalence assessment. ",
-              "Complete statistical analysis including all parameters is available in the 'BE Analysis' tab."
+              "Bioequivalence evaluation performed on log-transformed data (regulatory requirement) but results displayed with original parameter names (Cmax, AUC0-t, AUC0-∞) for clarity. ",
+              "Complete statistical analysis including all calculated parameters is available in the 'BE Analysis' tab."
             )
           )
         ))
@@ -1898,7 +1924,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         # Find common parameters that exist in both CI results and BE conclusions
         common_params <- intersect(valid_ci_params, valid_be_params)
         
-        if (length(common_params) == 0) {
+        # Use ALL parameters that have BE results (not just log-transformed)
+        # since the analysis should already be ensuring only appropriate parameters are analyzed
+        valid_be_params_final <- common_params
+        
+        if (length(valid_be_params_final) == 0) {
           return(div(
             class = "alert alert-warning",
             h5("⚠️ No Valid BE Results"),
@@ -1906,15 +1936,20 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           ))
         }
         
-        # Create comprehensive results table for valid parameters only
-        results_list <- lapply(common_params, function(param) {
+        cat(sprintf("[DEBUG] Complete BE analysis showing %d parameters: %s\n", 
+                   length(valid_be_params_final), paste(valid_be_params_final, collapse = ", ")))
+        
+        # Create comprehensive results table for all valid BE parameters
+        results_list <- lapply(valid_be_params_final, function(param) {
           ci <- ci_results[[param]]
           is_be <- be_conclusions[[param]]
           
           # Validate CI data exists
           if (is.null(ci) || is.na(ci$point_estimate)) {
+            # Convert log parameter name to display name
+            display_param <- log_param_to_display_name(param)
             return(data.frame(
-              Parameter = param,
+              Parameter = display_param,
               `Ratio (%)` = "N/A",
               `90% CI (%)` = "N/A",
               `BE Status` = "⚠️ UNKNOWN",
@@ -1927,8 +1962,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           ci_lower_geom <- ci$ci_lower
           ci_upper_geom <- ci$ci_upper
           
+          # Convert log parameter name to display name
+          display_param <- log_param_to_display_name(param)
+          
           data.frame(
-            Parameter = param,
+            Parameter = display_param,  # Use display name instead of log name
             `Ratio (%)` = sprintf("%.2f%%", point_est_geom),
             `90% CI (%)` = sprintf("[%.2f%%, %.2f%%]", ci_lower_geom, ci_upper_geom),
             `BE Status` = ifelse(is.na(is_be), "⚠️ UNKNOWN", 
@@ -1953,8 +1991,9 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         return(div(
           h5("📋 Bioequivalence Assessment Results"),
           p(style = "font-size: 0.9em; color: #6c757d;", 
-            "Bioequivalence assessment results with 90% confidence intervals. ",
-            "Bioequivalence is determined by whether the confidence interval falls within the acceptance limits."),
+            "Bioequivalence assessment results with 90% confidence intervals for all evaluated parameters. ",
+            "Analysis performed on log-transformed data; parameter names shown without 'ln' prefix for clarity. ",
+            "Bioequivalence is determined by whether the confidence interval falls within 80.00%-125.00%."),
           DT::datatable(
             all_results,
             options = list(
@@ -2012,15 +2051,17 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         be_lower <- analysis_cfg$be_lower %||% 80
         be_upper <- analysis_cfg$be_upper %||% 125
         
-        # Count parameters - focus on primary log-transformed parameters
-        primary_log_params <- c("lnAUC0t", "lnAUC0inf", "lnCmax")
+        # Count all available BE parameters (not just specific log-transformed ones)
+        total_params <- length(be_res$confidence_intervals)
+        total_be_params <- sum(unlist(be_res$be_conclusions), na.rm = TRUE)
         
-        # Filter to primary parameters for regulatory summary
-        primary_ci_results <- be_res$confidence_intervals[names(be_res$confidence_intervals) %in% primary_log_params]
-        primary_be_conclusions <- be_res$be_conclusions[names(be_res$be_conclusions) %in% primary_log_params]
+        # Identify the parameter types we have
+        param_names <- names(be_res$confidence_intervals)
+        has_log_params <- any(startsWith(param_names, "ln"))
         
-        total_primary_params <- length(primary_ci_results)
-        be_primary_params <- sum(unlist(primary_be_conclusions), na.rm = TRUE)
+        # Create a list of parameter display names
+        param_display_names <- sapply(param_names, log_param_to_display_name)
+        unique_display_names <- unique(param_display_names)
         
         return(div(
           tags$ul(
@@ -2028,18 +2069,19 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             tags$li(tags$strong("Number of Subjects: "), n_subjects),
             tags$li(tags$strong("Confidence Level: "), paste0(confidence_level, "%")),
             tags$li(tags$strong("BE Limits: "), paste0(be_lower, "% - ", be_upper, "%")),
-            tags$li(tags$strong("Primary Parameters: "), total_primary_params, " (lnAUC0t, lnAUC0inf, lnCmax)"),
-            tags$li(tags$strong("Bioequivalent Parameters: "), paste0(be_primary_params, " of ", total_primary_params)),
+            tags$li(tags$strong("Parameters Analyzed: "), total_params, " (", paste(unique_display_names, collapse = ", "), ")"),
+            tags$li(tags$strong("Bioequivalent Parameters: "), paste0(total_be_params, " of ", total_params)),
             tags$li(tags$strong("Analysis Model: "), analysis_cfg$anova_model %||% "Fixed Effects"),
-            tags$li(tags$strong("Analysis Scale: "), "Log-transformed (multiplicative model)"),
-            tags$li(tags$strong("Results Presentation: "), "Geometric scale (%) and log scale")
+            tags$li(tags$strong("Analysis Scale: "), if(has_log_params) "Log-transformed (multiplicative model)" else "Original scale"),
+            tags$li(tags$strong("Results Presentation: "), "Geometric scale (%) with original parameter names")
           ),
           br(),
           h6("📊 Scale Information:"),
           tags$ul(
+            tags$li(tags$strong("Statistical Analysis: "), "Performed on log-transformed data (e.g., ln(Cmax), ln(AUC0-t))"),
+            tags$li(tags$strong("Results Display: "), "Shown with original parameter names (e.g., Cmax, AUC0-t) for clarity"),
             tags$li(tags$strong("Geometric Scale: "), "Results expressed as percentage ratios (Test/Reference × 100%)"),
-            tags$li(tags$strong("Log Scale: "), "Natural logarithm differences (ln(Test) - ln(Reference))"),
-            tags$li(tags$strong("BE Assessment: "), "Performed on log scale per regulatory guidelines")
+            tags$li(tags$strong("BE Assessment: "), "Based on log-scale analysis per regulatory guidelines")
           )
         ))
         
@@ -2057,27 +2099,33 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       
       tryCatch({
         be_res <- be_results()
-        # Focus only on log-transformed primary parameters for regulatory assessment
-        primary_log_params <- c("lnCmax", "lnAUC0t", "lnAUC0inf")
-        primary_conclusions <- be_res$be_conclusions[names(be_res$be_conclusions) %in% primary_log_params]
+        # Use all available BE conclusions for regulatory assessment
+        all_conclusions <- be_res$be_conclusions
         
-        # Regulatory status
-        primary_be <- all(unlist(primary_conclusions))
-        overall_status <- if (primary_be) "✅ BIOEQUIVALENT" else "❌ NOT BIOEQUIVALENT"
-        status_color <- if (primary_be) "#28a745" else "#dc3545"
+        # Remove any NULL or NA conclusions
+        valid_conclusions <- all_conclusions[!is.na(unlist(all_conclusions))]
+        
+        # Regulatory status based on all available results
+        overall_be <- length(valid_conclusions) > 0 && all(unlist(valid_conclusions))
+        overall_status <- if (overall_be) "✅ BIOEQUIVALENT" else "❌ NOT BIOEQUIVALENT"
+        status_color <- if (overall_be) "#28a745" else "#dc3545"
+        
+        # Check if log-transformed parameters were used
+        param_names <- names(be_res$confidence_intervals)
+        has_log_params <- any(startsWith(param_names, "ln"))
         
         # Regulatory guidelines compliance
         regulatory_notes <- list(
           "✓ 90% Confidence Interval used (regulatory standard)",
-          "✓ Log-transformed analysis for primary parameters",
+          if(has_log_params) "✓ Log-transformed analysis performed" else "✓ Analysis performed on available parameters",
           "✓ BE limits: 80.00% - 125.00% (FDA/EMA standard)",
-          if (primary_be) "✓ Meets regulatory bioequivalence criteria" else "✗ Does not meet regulatory bioequivalence criteria"
+          if (overall_be) "✓ Meets regulatory bioequivalence criteria" else "✗ Does not meet regulatory bioequivalence criteria"
         )
         
         return(div(
           div(
             style = paste0("padding: 10px; margin-bottom: 15px; border-radius: 5px; background-color: ", 
-                          if (primary_be) "#d4edda" else "#f8d7da", ";"),
+                          if (overall_be) "#d4edda" else "#f8d7da", ";"),
             h6(style = paste0("color: ", status_color, "; margin: 0;"), overall_status)
           ),
           tags$ul(
@@ -2310,11 +2358,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         formatted_data,
         options = list(
           pageLength = 15,
-          dom = 't',
+          dom = 'tp',  # 't' = table, 'p' = pagination
           ordering = FALSE,
           columnDefs = list(
             list(className = 'dt-center', targets = '_all')
-          )
+          ),
+          scrollX = TRUE,
+          lengthMenu = c(15, 25, 50, 100),
+          pagingType = "simple_numbers"
         ),
         rownames = FALSE
       )

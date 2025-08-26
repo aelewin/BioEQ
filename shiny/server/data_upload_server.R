@@ -28,7 +28,7 @@ validate_bioeq_data_enhanced <- function(data) {
   # Define expected column mappings (case insensitive)
   column_mappings <- list(
     subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
-    treatment = c("treatment", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
+    treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
     period = c("period", "per", "phase", "visit"),
     sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
     time = c("time", "timepoint", "hour", "hours", "hr", "sampling_time"),
@@ -345,23 +345,11 @@ observeEvent(input$data_file, {
           ")
         }
         
-        # Different success messages based on data type - use processed data
-        processed_data <- validation_result$processed_data
+        # Simple success message
         if (input$data_type == "concentration") {
-          showNotification(
-            paste("✅ Concentration data uploaded successfully!", 
-                  length(unique(processed_data$subject)), "subjects,", 
-                  nrow(processed_data), "observations"), 
-            type = "message", duration = 5
-          )
+          showNotification("Data uploaded successfully!", type = "message", duration = 3)
         } else {
-          pk_params <- names(validation_result$mapped_pk_parameters)
-          showNotification(
-            paste("✅ PK parameter data uploaded successfully!", 
-                  length(unique(processed_data$subject)), "subjects,", 
-                  length(pk_params), "PK parameters"), 
-            type = "message", duration = 5
-          )
+          showNotification("Data uploaded successfully!", type = "message", duration = 3)
         }
       } else {
         values$uploaded_data <- NULL
@@ -370,16 +358,13 @@ observeEvent(input$data_file, {
         error_count <- length(validation_result$errors)
         warning_count <- length(validation_result$warnings)
         
-        showNotification(
-          paste("⚠️ Data validation issues:", error_count, "errors,", warning_count, "warnings"), 
-          type = "warning", duration = 8
-        )
+        showNotification("Data validation issues found", type = "warning", duration = 5)
       }
       
     }, error = function(e) {
       values$uploaded_data <- NULL
       values$validation_result <- NULL
-      showNotification(paste("❌ Error processing file:", e$message), type = "error", duration = 10)
+      showNotification("Error processing file", type = "error", duration = 5)
     })
   })
 })
@@ -400,6 +385,112 @@ observeEvent(input$reset_upload, {
   }
   
   showNotification("Upload reset", type = "message", duration = 3)
+})
+
+# Observer to update treatment designation dropdowns when treatment column is mapped
+observe({
+  req(values$uploaded_data_original)
+  
+  data <- values$uploaded_data_original
+  all_columns <- names(data)
+  
+  for (col in all_columns) {
+    clean_col_id <- gsub("[^A-Za-z0-9]", "_", col)
+    mapping_input <- input[[paste0("conc_mapping_", clean_col_id)]]
+    
+    if (!is.null(mapping_input) && mapping_input == "treatment") {
+      # Get unique treatment values from this column
+      treatment_values <- unique(data[[col]])
+      treatment_values <- treatment_values[!is.na(treatment_values)]
+      treatment_choices <- setNames(treatment_values, treatment_values)
+      
+      # Auto-detect Test and Reference
+      test_value <- NULL
+      ref_value <- NULL
+      
+      # Try to auto-detect based on common patterns
+      for (val in treatment_values) {
+        val_upper <- toupper(as.character(val))
+        if (val_upper %in% c("T", "TEST", "TREATMENT")) {
+          test_value <- val
+        } else if (val_upper %in% c("R", "REF", "REFERENCE")) {
+          ref_value <- val
+        }
+      }
+      
+      # If not auto-detected, try alphabetical assignment
+      if (is.null(test_value) || is.null(ref_value)) {
+        sorted_vals <- sort(treatment_values)
+        if (length(sorted_vals) >= 2) {
+          # Assign first as Reference, second as Test (common convention)
+          if (is.null(ref_value)) ref_value <- sorted_vals[1]
+          if (is.null(test_value)) test_value <- sorted_vals[2]
+        }
+      }
+      
+      # Update the dropdowns
+      updateSelectInput(session, paste0("test_treatment_", clean_col_id),
+                       choices = c("Select..." = "", treatment_choices),
+                       selected = test_value)
+      
+      updateSelectInput(session, paste0("ref_treatment_", clean_col_id),
+                       choices = c("Select..." = "", treatment_choices),
+                       selected = ref_value)
+    }
+  }
+})
+
+# Observer to update treatment designation dropdowns for PK data module
+observe({
+  req(values$uploaded_data_original)
+  
+  data <- values$uploaded_data_original
+  all_columns <- names(data)
+  
+  for (col in all_columns) {
+    clean_col_id <- gsub("[^A-Za-z0-9]", "_", col)
+    mapping_input <- input[[paste0("pk_general_mapping_", clean_col_id)]]
+    
+    if (!is.null(mapping_input) && mapping_input == "treatment") {
+      # Get unique treatment values from this column
+      treatment_values <- unique(data[[col]])
+      treatment_values <- treatment_values[!is.na(treatment_values)]
+      treatment_choices <- setNames(treatment_values, treatment_values)
+      
+      # Auto-detect Test and Reference
+      test_value <- NULL
+      ref_value <- NULL
+      
+      # Try to auto-detect based on common patterns
+      for (val in treatment_values) {
+        val_upper <- toupper(as.character(val))
+        if (val_upper %in% c("T", "TEST", "TREATMENT")) {
+          test_value <- val
+        } else if (val_upper %in% c("R", "REF", "REFERENCE")) {
+          ref_value <- val
+        }
+      }
+      
+      # If not auto-detected, try alphabetical assignment
+      if (is.null(test_value) || is.null(ref_value)) {
+        sorted_vals <- sort(treatment_values)
+        if (length(sorted_vals) >= 2) {
+          # Assign first as Reference, second as Test (common convention)
+          if (is.null(ref_value)) ref_value <- sorted_vals[1]
+          if (is.null(test_value)) test_value <- sorted_vals[2]
+        }
+      }
+      
+      # Update the dropdowns
+      updateSelectInput(session, paste0("pk_test_treatment_", clean_col_id),
+                       choices = c("Select..." = "", treatment_choices),
+                       selected = test_value)
+      
+      updateSelectInput(session, paste0("pk_ref_treatment_", clean_col_id),
+                       choices = c("Select..." = "", treatment_choices),
+                       selected = ref_value)
+    }
+  }
 })
 
 # =============================================================================
@@ -766,7 +857,7 @@ validate_pk_data_enhanced <- function(data) {
     # Subject mappings
     subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol"),
     # Treatment mappings  
-    treatment = c("treatment", "tmt", "trt", "formulation", "form", "drug", "product")
+    treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product")
   )
   
   # PK parameter mappings
@@ -844,10 +935,15 @@ validate_pk_data_enhanced <- function(data) {
   required_columns <- c("subject", "treatment")
   missing_required <- setdiff(required_columns, names(mapped_columns))
   
+  cat("[DEBUG] PK Validation - Required columns check:\n")
+  cat("[DEBUG] PK Validation - Mapped columns:", paste(names(mapped_columns), collapse = ", "), "\n")
+  cat("[DEBUG] PK Validation - Missing required:", paste(missing_required, collapse = ", "), "\n")
+  
   if (length(missing_required) > 0) {
     for (missing in missing_required) {
       possible_names <- paste(column_mappings[[missing]], collapse = ", ")
       errors <- c(errors, paste0("Missing required column '", missing, "'. Expected one of: ", possible_names))
+      cat("[DEBUG] PK Validation - Error added for missing:", missing, "\n")
     }
   }
   
@@ -857,6 +953,9 @@ validate_pk_data_enhanced <- function(data) {
     warnings <- c(warnings, "No standard PK parameters automatically identified. You will need to specify which columns contain PK parameters.")
     suggestions <- c(suggestions, paste0("Available columns that could be PK parameters: ", 
                                        paste(setdiff(names(data), names(mapped_columns)), collapse = ", ")))
+    cat("[DEBUG] PK Validation - No PK parameters found in columns:", paste(names(data), collapse = ", "), "\n")
+    cat("[DEBUG] PK Validation - Mapped columns:", paste(names(mapped_columns), collapse = ", "), "\n")
+    cat("[DEBUG] PK Validation - Unmapped columns:", paste(setdiff(names(data), names(mapped_columns)), collapse = ", "), "\n")
   } else {
     # Check for primary PK parameters
     primary_params <- c("AUC0t", "AUC0inf", "Cmax")
@@ -1023,7 +1122,7 @@ output$concentration_column_mapper <- renderUI({
       # Define expected column mappings (case insensitive)
       column_mappings <- list(
         subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
-        treatment = c("treatment", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
+        treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
         period = c("period", "per", "phase", "visit"),
         sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
         time = c("time", "timepoint", "hour", "hours", "hr", "sampling_time"),
@@ -1125,6 +1224,24 @@ output$concentration_column_mapper <- renderUI({
                 )
               ),
               column(3,
+                # Treatment designation for treatment columns
+                conditionalPanel(
+                  condition = paste0("input.conc_mapping_", clean_col_id, " == 'treatment'"),
+                  div(style = "margin-top: 10px;",
+                    selectInput(
+                      paste0("test_treatment_", clean_col_id),
+                      label = "Test Treatment:",
+                      choices = NULL,  # Will be populated dynamically
+                      width = "100%"
+                    ),
+                    selectInput(
+                      paste0("ref_treatment_", clean_col_id),
+                      label = "Reference Treatment:",
+                      choices = NULL,  # Will be populated dynamically
+                      width = "100%"
+                    )
+                  )
+                ),
                 # Units selection for concentration and time
                 conditionalPanel(
                   condition = paste0("input.conc_mapping_", clean_col_id, " == 'concentration'"),
@@ -1285,10 +1402,7 @@ observeEvent(input$confirm_concentration_mapping, {
   missing_required <- setdiff(required_mappings, names(column_mappings))
   
   if (length(missing_required) > 0) {
-    showNotification(
-      paste("⚠️ Missing required column mappings:", paste(missing_required, collapse = ", ")), 
-      type = "warning", duration = 8
-    )
+    showNotification("Missing required column mappings", type = "warning", duration = 5)
     return()
   }
   
@@ -1296,11 +1410,41 @@ observeEvent(input$confirm_concentration_mapping, {
   mapped_types <- names(column_mappings)
   duplicated_types <- mapped_types[duplicated(mapped_types)]
   if (length(duplicated_types) > 0) {
-    showNotification(
-      paste("⚠️ Duplicate column mappings found for:", paste(unique(duplicated_types), collapse = ", ")), 
-      type = "warning", duration = 8
-    )
+    showNotification("Duplicate column mappings found", type = "warning", duration = 5)
     return()
+  }
+  
+  # Validate treatment designations
+  if ("treatment" %in% names(column_mappings)) {
+    treatment_col <- column_mappings[["treatment"]]
+    clean_col_id <- gsub("[^A-Za-z0-9]", "_", treatment_col)
+    
+    test_treatment <- input[[paste0("test_treatment_", clean_col_id)]]
+    ref_treatment <- input[[paste0("ref_treatment_", clean_col_id)]]
+    
+    if (is.null(test_treatment) || test_treatment == "" || 
+        is.null(ref_treatment) || ref_treatment == "") {
+      showNotification(
+        "⚠️ Please specify both Test Treatment and Reference Treatment designations.", 
+        type = "warning", duration = 8
+      )
+      return()
+    }
+    
+    if (test_treatment == ref_treatment) {
+      showNotification(
+        "⚠️ Test Treatment and Reference Treatment must be different.", 
+        type = "warning", duration = 8
+      )
+      return()
+    }
+    
+    # Store treatment designations
+    values$treatment_designations <- list(
+      test = test_treatment,
+      reference = ref_treatment,
+      column = treatment_col
+    )
   }
   
   # Store the mappings and units
@@ -1312,6 +1456,21 @@ observeEvent(input$confirm_concentration_mapping, {
   for (data_type in names(column_mappings)) {
     original_col <- column_mappings[[data_type]]
     names(processed_data)[names(processed_data) == original_col] <- data_type
+  }
+  
+  # Apply treatment designations to remap treatment values
+  if (!is.null(values$treatment_designations)) {
+    treatment_designations <- values$treatment_designations
+    treatment_col_name <- "treatment"  # Column is now renamed to "treatment"
+    
+    if (treatment_col_name %in% names(processed_data)) {
+      # Remap treatment values based on user designations
+      processed_data[[treatment_col_name]] <- ifelse(
+        processed_data[[treatment_col_name]] == treatment_designations$test, "T",
+        ifelse(processed_data[[treatment_col_name]] == treatment_designations$reference, "R",
+               processed_data[[treatment_col_name]])  # Keep other values unchanged
+      )
+    }
   }
   
   # Re-run validation with user mappings
@@ -1335,10 +1494,8 @@ observeEvent(input$confirm_concentration_mapping, {
   values$data_summary$mapped_columns <- names(column_mappings)
   values$data_summary$units_settings <- units_settings
   
-  showNotification(
-    paste("✅ Column mapping confirmed!", length(column_mappings), "columns mapped"), 
-    type = "message", duration = 5
-  )
+  # Simple confirmation
+  showNotification("Column mapping confirmed!", type = "message", duration = 3)
 })
 
 # Simplified PK parameter selector - only column mapping
@@ -1361,7 +1518,7 @@ output$pk_parameter_selector <- renderUI({
       # Define expected column mappings (case insensitive)
       column_mappings <- list(
         subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
-        treatment = c("treatment", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
+        treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
         period = c("period", "per", "phase", "visit"),
         sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
         dose = c("dose", "dosage", "dose_amount"),
@@ -1474,6 +1631,24 @@ output$pk_parameter_selector <- renderUI({
                   )
                 ),
                 column(3,
+                  # Treatment designation for treatment columns
+                  conditionalPanel(
+                    condition = paste0("input.pk_general_mapping_", clean_col_id, " == 'treatment'"),
+                    div(style = "margin-top: 10px;",
+                      selectInput(
+                        paste0("pk_test_treatment_", clean_col_id),
+                        label = "Test Treatment:",
+                        choices = NULL,  # Will be populated dynamically
+                        width = "100%"
+                      ),
+                      selectInput(
+                        paste0("pk_ref_treatment_", clean_col_id),
+                        label = "Reference Treatment:",
+                        choices = NULL,  # Will be populated dynamically
+                        width = "100%"
+                      )
+                    )
+                  ),
                   # Units selection for dose
                   conditionalPanel(
                     condition = paste0("input.pk_general_mapping_", clean_col_id, " == 'dose'"),
@@ -1883,6 +2058,39 @@ observeEvent(input$confirm_pk_mapping, {
     return()
   }
   
+  # Validate treatment designations for PK data
+  if ("treatment" %in% names(general_mappings)) {
+    treatment_col <- general_mappings[["treatment"]]
+    clean_col_id <- gsub("[^A-Za-z0-9]", "_", treatment_col)
+    
+    test_treatment <- input[[paste0("pk_test_treatment_", clean_col_id)]]
+    ref_treatment <- input[[paste0("pk_ref_treatment_", clean_col_id)]]
+    
+    if (is.null(test_treatment) || test_treatment == "" || 
+        is.null(ref_treatment) || ref_treatment == "") {
+      showNotification(
+        "⚠️ Please specify both Test Treatment and Reference Treatment designations.", 
+        type = "warning", duration = 8
+      )
+      return()
+    }
+    
+    if (test_treatment == ref_treatment) {
+      showNotification(
+        "⚠️ Test Treatment and Reference Treatment must be different.", 
+        type = "warning", duration = 8
+      )
+      return()
+    }
+    
+    # Store treatment designations
+    values$treatment_designations <- list(
+      test = test_treatment,
+      reference = ref_treatment,
+      column = treatment_col
+    )
+  }
+  
   if (length(pk_mappings) == 0) {
     showNotification("⚠️ At least one PK parameter must be identified", type = "warning")
     return()
@@ -1913,6 +2121,21 @@ observeEvent(input$confirm_pk_mapping, {
     }
   }
   
+  # Apply treatment designations to remap treatment values for PK data
+  if (!is.null(values$treatment_designations)) {
+    treatment_designations <- values$treatment_designations
+    treatment_col_name <- "treatment"  # Column is now renamed to "treatment"
+    
+    if (treatment_col_name %in% names(processed_data)) {
+      # Remap treatment values based on user designations
+      processed_data[[treatment_col_name]] <- ifelse(
+        processed_data[[treatment_col_name]] == treatment_designations$test, "T",
+        ifelse(processed_data[[treatment_col_name]] == treatment_designations$reference, "R",
+               processed_data[[treatment_col_name]])  # Keep other values unchanged
+      )
+    }
+  }
+  
   # Re-run validation and update state
   validation_result <- validate_pk_data_enhanced(processed_data)
   validation_result$mapped_pk_parameters <- pk_mappings
@@ -1932,12 +2155,7 @@ observeEvent(input$confirm_pk_mapping, {
   values$data_summary$pk_mappings_confirmed <- TRUE
   values$data_summary$data_type <- "pk_parameters"
   
-  showNotification(
-    paste("✅ Column mapping confirmed!", 
-          length(general_mappings), "general columns,", 
-          length(pk_mappings), "PK parameters mapped"), 
-    type = "message", duration = 5
-  )
+  showNotification("Column mapping confirmed!", type = "message", duration = 3)
 })
 
 # Help modal

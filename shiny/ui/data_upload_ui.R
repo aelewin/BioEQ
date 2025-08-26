@@ -289,55 +289,16 @@ fluidRow(
         p("Choose your data type and upload your bioequivalence study data", 
           style = "font-size: 16px; color: #7f8c8d; margin-bottom: 20px;"),
         
-        # Data type selection with enhanced styling and flow explanation
-        div(class = "data-type-selection",
-          h4("Select Your Data Type", style = "color: #2c3e50; margin-bottom: 20px; text-align: center;"),
-          div(style = "display: flex; justify-content: center; gap: 30px; flex-wrap: wrap;",
-            div(style = "flex: 1; min-width: 280px; max-width: 400px;",
-              radioButtons(
-                "data_type",
-                label = NULL,
-                choices = list(
-                  "Concentration-Time Data" = "concentration",
-                  "Pre-calculated PK Parameters" = "pk_parameters"
-                ),
-                selected = "concentration",
-                inline = FALSE
-              )
-            )
+        # Data type selection
+        radioButtons(
+          "data_type",
+          label = NULL,
+          choices = list(
+            "Concentration-Time Data" = "concentration",
+            "Pre-calculated PK Parameters" = "pk_parameters"
           ),
-          
-          # Flow explanation based on selected data type
-          conditionalPanel(
-            condition = "input.data_type == 'concentration'",
-            div(style = "background: #e8f5e8; padding: 15px; border-radius: 8px; margin-top: 20px; border-left: 4px solid #27ae60;",
-              h5(icon("route", style = "color: #27ae60;"), " Concentration-Time Data Flow:", style = "color: #27ae60; margin-bottom: 10px;"),
-              div(style = "color: #2d5016;",
-                tags$ol(style = "margin: 0; padding-left: 20px;",
-                  tags$li("Upload Your Bioequivalence Data"),
-                  tags$li("Review Data Preview & Summary"),
-                  tags$li("Specify Concentration & Time Units"),
-                  tags$li("Complete Data Validation")
-                )
-              )
-            )
-          ),
-          
-          conditionalPanel(
-            condition = "input.data_type == 'pk_parameters'",
-            div(style = "background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 20px; border-left: 4px solid #ffc107;",
-              h5(icon("route", style = "color: #856404;"), " PK Parameters Data Flow:", style = "color: #856404; margin-bottom: 10px;"),
-              div(style = "color: #856404;",
-                tags$ol(style = "margin: 0; padding-left: 20px;",
-                  tags$li("Upload Your Bioequivalence Data"),
-                  tags$li("Review Data Preview & Summary"),
-                  tags$li("Identify & Map PK Parameters"),
-                  tags$li("Specify Parameter Units"),
-                  tags$li("Complete Data Validation")
-                )
-              )
-            )
-          )
+          selected = "concentration",
+          inline = FALSE
         ),
         
         # Enhanced file upload area with conditional descriptions
