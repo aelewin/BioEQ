@@ -1,0 +1,36 @@
+# R files
+.Rhistory
+.RData
+.Rproj.user
+*.Rproj
+
+# Logs
+*.log
+
+# Output files
+*.pdf
+*.html
+*.docx
+
+# Temporary files
+*~
+*.tmp
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.so
+*.dll
+
+# Package files
+*.tar.gz
+
+# Data files
+data/
+
+# Shiny templates
+shiny/inst/templates/

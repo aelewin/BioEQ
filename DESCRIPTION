@@ -1,0 +1,37 @@
+Package: BioEQ
+Type: Package
+Title: Bioequivalence Analysis Platform
+Version: 0.1.0
+Author: Amanda Lewin
+Maintainer: BioEQ Team <support@bioeq.org>
+Description: Comprehensive R package and Shiny application for bioequivalence analysis, 
+    providing regulatory-compliant statistical analysis for pharmaceutical studies.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Depends: 
+    R (>= 4.0.0)
+Imports:
+    shiny (>= 1.7.0),
+    shinydashboard (>= 0.7.0),
+    DT (>= 0.20),
+    readr (>= 2.0.0),
+    dplyr (>= 1.0.0),
+    readxl (>= 1.4.0),
+    bslib (>= 0.4.0),
+    ggplot2 (>= 3.4.0),
+    gridExtra (>= 2.3)
+Suggests:
+    shinyjs (>= 2.1.0),
+    digest (>= 0.6.0),
+    shinycssloaders (>= 1.0.0),
+    rmarkdown (>= 2.20),
+    knitr (>= 1.40),
+    officer (>= 0.6.0),
+    flextable (>= 0.9.0),
+    zip (>= 2.3.0),
+    plotly (>= 4.10.0),
+    htmlwidgets (>= 1.6.0),
+    testthat (>= 3.0.0)
+RoxygenNote: 7.2.0
+VignetteBuilder: knitr

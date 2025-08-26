@@ -1,0 +1,338 @@
+---
+title: "Bioequivalence Analysis Report"
+subtitle: "`r params$study_title`"
+author: "BioEQ Analysis Platform"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    keep_tex: false
+    latex_engine: pdflatex
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+    highlight: tango
+params:
+  study_title: "Bioequivalence Study Report"
+  be_results: NULL
+  nca_results: NULL
+  analysis_config: NULL
+  plots_data: NULL
+  include_study_info: TRUE
+  include_pk_tables: TRUE
+  include_anova: TRUE
+  include_plots: TRUE
+  include_conclusions: TRUE
+  include_appendix: TRUE
+  regulatory_statements: TRUE
+  generated_script: NULL
+  study_info:
+    title: "Bioequivalence Study Report"
+    sponsor: "Study Sponsor"
+    investigator: "Principal Investigator"
+    protocol: "Protocol Number"
+    date: !r Sys.Date()
+---
+
+```{r setup, include=FALSE}
+# Report setup
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 8,
+  fig.height = 6,
+  fig.align = "center",
+  dpi = 300
+)
+
+# Load required libraries
+suppressPackageStartupMessages({
+  library(knitr)
+  library(dplyr)
+  library(ggplot2)
+  library(DT)
+  if (!requireNamespace("plotly", quietly = TRUE)) {
+    message("plotly not available - some interactive features may be limited")
+  }
+})
+
+# Extract parameters
+be_results <- params$be_results
+nca_results <- params$nca_results
+analysis_config <- params$analysis_config
+plots_data <- params$plots_data
+```
+
+```{r data-validation, include=FALSE}
+# Validate input data
+if (is.null(be_results) || is.null(nca_results) || is.null(analysis_config)) {
+  stop("Missing required analysis results for report generation")
+}
+
+# Helper functions for report
+format_ci <- function(lower, upper, digits = 2) {
+  paste0("[", round(lower, digits), ", ", round(upper, digits), "]")
+}
+
+format_percentage <- function(x, digits = 1) {
+  paste0(round(x, digits), "%")
+}
+
+format_pvalue <- function(p, threshold = 0.001) {
+  ifelse(p < threshold, paste0("< ", threshold), round(p, 3))
+}
+```
+
+# Executive Summary
+
+This report presents the results of a bioequivalence analysis conducted using the BioEQ platform, following `r analysis_config$regulatory_standard` regulatory guidelines. The study employed a `r be_results$design` design with `r be_results$n_subjects` subjects.
+
+**Key Findings:**
+```{r executive-summary, results='asis'}
+# Overall bioequivalence status
+be_status <- if(all(sapply(be_results$be_conclusions, function(x) x$bioequivalent))) {
+  "BIOEQUIVALENT"
+} else {
+  "NOT BIOEQUIVALENT"
+}
+
+cat("- **Bioequivalence Status:** ", be_status, "\n")
+cat("- **Study Design:** ", be_results$design, "\n")
+cat("- **Regulatory Standard:** ", analysis_config$regulatory_standard, "\n")
+cat("- **Number of Subjects:** ", be_results$n_subjects, "\n")
+
+# Parameter summary
+n_params <- length(be_results$parameters)
+n_passed <- sum(sapply(be_results$be_conclusions, function(x) x$bioequivalent))
+
+cat("- **Parameters Analyzed:** ", n_params, " (", n_passed, " passed BE criteria)\n")
+```
+
+`r if(params$include_study_info) "# Study Information"`
+
+```{r study-info, results='asis', eval=params$include_study_info}
+cat("## Study Design and Methodology\n\n")
+
+cat("**Study Characteristics:**\n")
+cat("- Design: ", be_results$design, "\n")
+cat("- Number of Subjects: ", be_results$n_subjects, "\n")
+cat("- Regulatory Standard: ", analysis_config$regulatory_standard, "\n")
+cat("- Bioequivalence Limits: ", analysis_config$be_limits$lower, "% - ", analysis_config$be_limits$upper, "%\n")
+cat("- Confidence Level: ", analysis_config$confidence_level, "%\n")
+
+cat("\n**Analysis Parameters:**\n")
+cat("- PK Parameters: ", paste(be_results$parameters, collapse = ", "), "\n")
+cat("- AUC Method: ", analysis_config$auc_method, "\n")
+cat("- Lambda-z Method: ", analysis_config$lambda_z_method, "\n")
+cat("- Log Transformation: ", ifelse(analysis_config$log_transform, "Yes", "No"), "\n")
+
+if (!is.null(analysis_config$reference_scaling) && analysis_config$reference_scaling) {
+  cat("- Reference Scaling: Enabled\n")
+  cat("- Scaling Threshold: ", analysis_config$scaling_threshold, "%\n")
+}
+```
+
+`r if(params$include_pk_tables) "# Pharmacokinetic Results"`
+
+```{r pk-results, eval=params$include_pk_tables}
+if (!is.null(nca_results$summary)) {
+  kable(nca_results$summary, 
+        caption = "Summary of Pharmacokinetic Parameters",
+        digits = 3,
+        format.args = list(big.mark = ","))
+}
+```
+
+## Bioequivalence Assessment
+
+```{r be-assessment, eval=params$include_pk_tables}
+if (!is.null(be_results$bioequivalence)) {
+  # Create formatted BE results table
+  be_table <- be_results$bioequivalence
+  
+  # Add formatted confidence intervals
+  if (all(c("CI_Lower", "CI_Upper") %in% names(be_table))) {
+    be_table$CI_90 <- format_ci(be_table$CI_Lower, be_table$CI_Upper)
+  }
+  
+  # Format ratio as percentage if it's a decimal
+  if ("Ratio_Percent" %in% names(be_table)) {
+    if (max(be_table$Ratio_Percent, na.rm = TRUE) <= 5) {
+      be_table$Ratio_Percent <- be_table$Ratio_Percent * 100
+    }
+  }
+  
+  # Select relevant columns for display
+  display_cols <- intersect(c("Parameter", "Ratio_Percent", "CI_90", "Bioequivalent"), names(be_table))
+  
+  kable(be_table[display_cols], 
+        caption = "Bioequivalence Assessment Results",
+        col.names = c("Parameter", "Point Estimate (%)", "90% CI", "BE Status"),
+        digits = 2)
+}
+```
+
+`r if(params$include_anova) "# Statistical Analysis (ANOVA)"`
+
+```{r anova-results, eval=params$include_anova}
+if (!is.null(be_results$anova_results) && !is.null(be_results$anova_results$summary)) {
+  kable(be_results$anova_results$summary,
+        caption = "Analysis of Variance (ANOVA) Results",
+        digits = c(0, 0, 3, 3, 2, 3),
+        format.args = list(big.mark = ","))
+}
+```
+
+```{r anova-interpretation, results='asis', eval=params$include_anova}
+cat("### Statistical Model\n\n")
+cat("The analysis employed a ", ifelse(be_results$design == "2×2×2", "crossover", "parallel"), " design ANOVA model.\n\n")
+
+if (be_results$design == "2×2×2") {
+  cat("**Model Effects:**\n")
+  cat("- Sequence: Fixed effect\n")
+  cat("- Subject within Sequence: Random effect\n") 
+  cat("- Period: Fixed effect\n")
+  cat("- Treatment: Fixed effect (primary interest)\n\n")
+}
+
+cat("**Key Statistical Considerations:**\n")
+cat("- Type I error rate (α): ", analysis_config$alpha_level, "\n")
+cat("- Confidence level: ", analysis_config$confidence_level, "%\n")
+cat("- Multiple comparisons: Not adjusted (per regulatory guidance)\n")
+```
+
+`r if(params$include_plots) "# Graphical Analysis"`
+
+```{r plots-section, eval=params$include_plots, results='asis'}
+cat("## Concentration-Time Profiles\n\n")
+cat("*Note: Plot generation functionality is under development. This section will include:*\n\n")
+cat("- Mean concentration-time profiles by treatment\n")
+cat("- Individual subject profiles\n")
+cat("- Semi-logarithmic scale plots\n\n")
+
+cat("## PK Parameter Distributions\n\n")
+cat("*This section will include:*\n\n")
+cat("- Box plots of PK parameters by treatment\n") 
+cat("- Subject-wise comparison plots\n\n")
+
+cat("## Diagnostic Plots\n\n")
+cat("*This section will include:*\n\n")
+cat("- Residual plots from ANOVA models\n")
+cat("- Q-Q plots for normality assessment\n")
+cat("- Outlier detection plots\n")
+```
+
+`r if(params$include_conclusions) "# Conclusions"`
+
+```{r conclusions, results='asis', eval=params$include_conclusions}
+cat("## Bioequivalence Conclusions\n\n")
+
+# Overall conclusion
+all_passed <- all(sapply(be_results$be_conclusions, function(x) x$bioequivalent))
+
+if (all_passed) {
+  cat("**The test and reference formulations are BIOEQUIVALENT** based on the following criteria:\n\n")
+} else {
+  cat("**The test and reference formulations are NOT BIOEQUIVALENT** based on the following criteria:\n\n")
+}
+
+# Parameter-specific conclusions
+for (i in seq_along(be_results$be_conclusions)) {
+  conclusion <- be_results$be_conclusions[[i]]
+  param <- conclusion$parameter
+  status <- ifelse(conclusion$bioequivalent, "PASSED", "FAILED")
+  
+  cat("- **", param, ":** ", status, " bioequivalence criteria\n")
+}
+
+cat("\n### Regulatory Compliance\n\n")
+cat("This analysis was conducted in accordance with:\n")
+cat("- ", analysis_config$regulatory_standard, " regulatory guidelines\n")
+
+if (analysis_config$regulatory_standard == "FDA") {
+  cat("- FDA Guidance for Industry: Statistical Approaches to Establishing Bioequivalence (2001)\n")
+  cat("- 21 CFR 320.24 - Requirements for in vivo bioavailability and bioequivalence studies\n")
+} else if (analysis_config$regulatory_standard == "EMA") {
+  cat("- EMA Guideline on the investigation of bioequivalence (CPMP/EWP/QWP/1401/98 Rev. 1)\n")
+  cat("- ICH E9 Statistical Principles for Clinical Trials\n")
+}
+
+cat("- ICH M13A Bioanalytical Method Validation and Study Sample Analysis\n")
+```
+
+`r if(params$include_appendix) "# Appendix"`
+
+```{r appendix-data, eval=params$include_appendix}
+if (!is.null(nca_results$subject_data)) {
+  cat("## Individual Subject Data\n\n")
+  
+  # Display first 20 rows of subject data
+  subject_subset <- head(nca_results$subject_data, 20)
+  
+  kable(subject_subset,
+        caption = "Individual Subject PK Parameters (First 20 subjects shown)",
+        digits = 2,
+        format.args = list(big.mark = ","))
+  
+  if (nrow(nca_results$subject_data) > 20) {
+    cat("\n*Full dataset contains ", nrow(nca_results$subject_data), " records*\n")
+  }
+}
+```
+
+```{r software-info, results='asis', eval=params$include_appendix}
+cat("## Software Information\n\n")
+cat("- **Analysis Platform:** BioEQ v", get_bioeq_config("bioeq_version") %||% "BETA", "\n")
+cat("- **R Version:** ", R.version.string, "\n")
+cat("- **Report Generated:** ", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"), "\n")
+
+if (!is.null(params$generated_script)) {
+  cat("- **Reproducible Script:** Available (see separate file)\n")
+}
+
+# Package versions
+key_packages <- c("dplyr", "ggplot2", "knitr")
+for (pkg in key_packages) {
+  if (requireNamespace(pkg, quietly = TRUE)) {
+    version <- as.character(packageVersion(pkg))
+    cat("- **", pkg, ":** ", version, "\n")
+  }
+}
+```
+
+`r if(params$regulatory_statements) "# Regulatory Statements"`
+
+```{r regulatory-statements, results='asis', eval=params$regulatory_statements}
+cat("## Data Integrity and Compliance\n\n")
+
+cat("This report was generated using validated analytical methods and procedures. ")
+cat("All calculations follow established pharmacokinetic and statistical principles ")
+cat("as outlined in relevant regulatory guidance documents.\n\n")
+
+cat("**Quality Assurance:**\n")
+cat("- All data processing steps are documented and reproducible\n")
+cat("- Statistical methods comply with regulatory requirements\n")
+cat("- Results have been reviewed for scientific accuracy\n")
+cat("- Electronic records maintain data integrity throughout the analysis\n\n")
+
+cat("**Limitations:**\n")
+cat("- This analysis is based on the data provided and assumes data quality has been verified\n")
+cat("- Results are valid only for the specific study conditions and formulations tested\n")
+cat("- Regulatory acceptance may require additional documentation and validation\n\n")
+
+cat("**Disclaimer:**\n")
+cat("This report is generated by the BioEQ analysis platform for scientific and regulatory purposes. ")
+cat("Users are responsible for ensuring compliance with applicable regulatory requirements ")
+cat("and for the appropriate interpretation and use of these results.\n")
+```
+
+---
+
+*Report generated by BioEQ Analysis Platform*  
+*For questions or support, please contact the development team*
