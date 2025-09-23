@@ -1492,6 +1492,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               )
             ),
             rownames = FALSE,
+            colnames = c("Parameter", "Point Estimate", "90% CI Lower", "90% CI Upper", "BE Criteria", "BE Status"),
             escape = FALSE
           ) %>% 
             DT::formatStyle(columns = 1:6, fontSize = '14px'),
@@ -1988,6 +1989,9 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         
         all_results <- do.call(rbind, valid_results)
         
+        # Define clean column names for display
+        clean_column_names <- c("Parameter", "Ratio (%)", "90% CI (%)", "BE Status")
+        
         return(div(
           h5("📋 Bioequivalence Assessment Results"),
           p(style = "font-size: 0.9em; color: #6c757d;", 
@@ -2021,9 +2025,10 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               )
             ),
             rownames = FALSE,
+            colnames = clean_column_names,
             escape = FALSE
           ) %>% 
-            DT::formatStyle(columns = 1:8, fontSize = '13px')
+            DT::formatStyle(columns = 1:4, fontSize = '13px')
         ))
         
       }, error = function(e) {
@@ -2229,7 +2234,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       # Create the select input
       selectInput(
         inputId = session$ns("pk_comparison_parameter"),
-        label = "Select Parameter:",
+        label = NULL,  # No label since we show it inline in UI
         choices = choices,
         selected = unlist(choices)[1],
         width = "100%"
@@ -2241,8 +2246,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       input$pk_comparison_parameter
     })
     
-    # PK Comparison Display
-    output$pk_comparison_display <- renderUI({
+    # PK Comparison Display - Left Panel (Individual Subject Table)
+    output$pk_comparison_table_display <- renderUI({
       param <- selected_comparison_param()
       
       if (is.null(param) || param == "") {
@@ -2282,58 +2287,82 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         ))
       }
       
-      # Format the display
+      # Format the left panel display
       tagList(
-        h4(icon("chart-line"), paste("PK Comparison Analysis:", param)),
-        
-        # Individual subject data table
         div(
-          class = "pk-comparison-section",
-          h5("Individual Subject Data", 
-             if (comparison_results$unit != "") paste0(" (", comparison_results$unit, ")") else ""),
-          DT::dataTableOutput(session$ns("pk_comparison_individual_table"))
-        ),
-        
-        br(),
-        
-        # Summary statistics
-        div(
-          class = "pk-comparison-section",
-          h5("Summary Statistics"),
-          
-          # Least squares means
-          div(
-            class = "stats-subsection",
-            h6("Least Squares Means:"),
-            DT::dataTableOutput(session$ns("pk_comparison_lsmeans_table"))
+          class = "panel panel-default",
+          div(class = "panel-heading",
+            h4(class = "panel-title", 
+               icon("chart-line"), 
+               paste("PK Comparison Analysis:", param))
           ),
-          
-          # Arithmetic statistics
-          br(),
-          div(
-            class = "stats-subsection",
-            h6("Arithmetic Statistics:"),
-            DT::dataTableOutput(session$ns("pk_comparison_arithmetic_table"))
-          ),
-          
-          # Geometric statistics (if applicable)
-          if (!is.null(comparison_results$geometric_stats)) {
-            tagList(
-              br(),
-              div(
-                class = "stats-subsection",
-                h6("Geometric Statistics:"),
-                DT::dataTableOutput(session$ns("pk_comparison_geometric_table"))
-              )
+          div(class = "panel-body",
+            # Individual subject data table
+            div(
+              class = "pk-comparison-section",
+              h5("Individual Subject Data", 
+                 if (comparison_results$unit != "") paste0(" (", comparison_results$unit, ")") else ""),
+              DT::dataTableOutput(session$ns("pk_comparison_individual_table"))
             )
-          }
-        ),
-        
-        # Sample size info
-        br(),
+          )
+        )
+      )
+    })
+    
+    # PK Comparison Display - Right Panel (Summary Statistics)
+    output$pk_comparison_stats_display <- renderUI({
+      param <- selected_comparison_param()
+      
+      if (is.null(param) || param == "") {
+        return(div(
+          class = "alert alert-light",
+          style = "text-align: center; color: #6c757d;",
+          icon("info-circle"),
+          br(), br(),
+          "Summary statistics will appear here once a parameter is selected."
+        ))
+      }
+      
+      nca_res <- nca_results()
+      if (is.null(nca_res)) {
+        return(div(class = "alert alert-warning", "No NCA results available"))
+      }
+      
+      # Calculate comparison statistics
+      comparison_results <- calculate_pk_comparison(nca_res, param)
+      
+      if (is.null(comparison_results) || !is.null(comparison_results$error)) {
+        return(div(
+          class = "alert alert-light",
+          style = "text-align: center; color: #6c757d;",
+          "Summary statistics not available for this parameter."
+        ))
+      }
+      
+      # Format the right panel display
+      tagList(
         div(
-          class = "alert alert-info",
-          paste("Analysis based on", comparison_results$n_subjects, "subjects")
+          class = "panel panel-default",
+          div(class = "panel-heading",
+            h4(class = "panel-title", 
+               icon("calculator"), 
+               "Summary Statistics")
+          ),
+          div(class = "panel-body",
+            # Sample size info at the top
+            div(
+              class = "alert alert-info",
+              style = "margin-bottom: 20px;",
+              icon("users"),
+              paste(" Analysis based on", comparison_results$n_subjects, "subjects")
+            ),
+            
+            # Single consolidated statistics table (removed redundant h6 label)
+            div(
+              class = "stats-subsection",
+              DT::dataTableOutput(session$ns("pk_comparison_consolidated_table"))
+            )
+          )
         )
       )
     })
@@ -2354,6 +2383,9 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       formatted_data$Reference <- round(formatted_data$Reference, 3)
       formatted_data$Ratio <- round(formatted_data$Ratio, 3)
       
+      # Clean column names
+      col_names <- c("Subject", "Test", "Reference", "T/R Ratio")
+      
       DT::datatable(
         formatted_data,
         options = list(
@@ -2367,12 +2399,13 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           lengthMenu = c(15, 25, 50, 100),
           pagingType = "simple_numbers"
         ),
-        rownames = FALSE
+        rownames = FALSE,
+        colnames = col_names
       )
     })
     
-    # Render least squares means table
-    output$pk_comparison_lsmeans_table <- DT::renderDataTable({
+    # Render consolidated statistics table
+    output$pk_comparison_consolidated_table <- DT::renderDataTable({
       param <- selected_comparison_param()
       if (is.null(param)) return(NULL)
       
@@ -2381,90 +2414,164 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       
       if (is.null(comparison_results)) return(NULL)
       
-      # Format the LSMeans
-      formatted_lsmeans <- comparison_results$lsmeans
-      formatted_lsmeans$Test <- round(formatted_lsmeans$Test, 3)
-      formatted_lsmeans$Reference <- round(formatted_lsmeans$Reference, 3)
-      formatted_lsmeans$Ratio <- round(formatted_lsmeans$Ratio, 3)
+      # Helper function for smart mean formatting (3 significant figures minimum)
+      format_mean <- function(value) {
+        if (is.na(value)) return(NA)
+        
+        # Determine decimal places based on magnitude to maintain 3 significant figures
+        if (value >= 1000) {
+          return(round(value, 0))  # #### (no decimals)
+        } else if (value >= 100) {
+          return(round(value, 1))  # ###.#
+        } else if (value >= 10) {
+          return(round(value, 2))  # ##.##
+        } else {
+          return(round(value, 3))  # #.###
+        }
+      }
+      
+      # Create consolidated data frame
+      consolidated_data <- data.frame(
+        Statistic = character(),
+        Test = character(),  # Changed to character for mixed formatting
+        Reference = character(),
+        Ratio = character(),
+        stringsAsFactors = FALSE
+      )
+      
+      # Add Arithmetic Mean section
+      arith_stats <- comparison_results$arithmetic_stats
+      consolidated_data <- rbind(consolidated_data, data.frame(
+        Statistic = c("Arithmetic Mean", "SD", "CV%"),
+        Test = c(
+          as.character(format_mean(arith_stats$Test[1])),  # Smart formatting for mean
+          as.character(round(arith_stats$Test[2], 3)),     # 3 decimals for SD
+          as.character(round(arith_stats$Test[3], 3))      # 3 decimals for CV%
+        ),
+        Reference = c(
+          as.character(format_mean(arith_stats$Reference[1])),  # Smart formatting for mean
+          as.character(round(arith_stats$Reference[2], 3)),     # 3 decimals for SD
+          as.character(round(arith_stats$Reference[3], 3))      # 3 decimals for CV%
+        ),
+        Ratio = c(
+          as.character(format_mean(arith_stats$Ratio[1])),  # Smart formatting for mean
+          as.character(round(arith_stats$Ratio[2], 3)),     # 3 decimals for SD
+          as.character(round(arith_stats$Ratio[3], 3))      # 3 decimals for CV%
+        )
+      ))
+      
+      # Add separator row
+      consolidated_data <- rbind(consolidated_data, data.frame(
+        Statistic = "─────────────────",
+        Test = "NA",
+        Reference = "NA",
+        Ratio = "NA"
+      ))
+      
+      # Add Geometric Mean section (if available)
+      if (!is.null(comparison_results$geometric_stats)) {
+        geom_stats <- comparison_results$geometric_stats
+        consolidated_data <- rbind(consolidated_data, data.frame(
+          Statistic = c("Geometric Mean", "Geometric SD", "Geometric CV%"),
+          Test = c(
+            as.character(format_mean(geom_stats$Test[1])),    # Smart formatting for mean
+            as.character(round(geom_stats$Test[2], 3)),       # 3 decimals for SD
+            as.character(round(geom_stats$Test[3], 3))        # 3 decimals for CV%
+          ),
+          Reference = c(
+            as.character(format_mean(geom_stats$Reference[1])),    # Smart formatting for mean
+            as.character(round(geom_stats$Reference[2], 3)),       # 3 decimals for SD
+            as.character(round(geom_stats$Reference[3], 3))        # 3 decimals for CV%
+          ),
+          Ratio = c(
+            as.character(format_mean(geom_stats$Ratio[1])),    # Smart formatting for mean
+            as.character(round(geom_stats$Ratio[2], 3)),       # 3 decimals for SD
+            as.character(round(geom_stats$Ratio[3], 3))        # 3 decimals for CV%
+          )
+        ))
+        
+        # Add separator row
+        consolidated_data <- rbind(consolidated_data, data.frame(
+          Statistic = "─────────────────",
+          Test = "NA",
+          Reference = "NA",
+          Ratio = "NA"
+        ))
+      }
+      
+      # Add Least Squares Mean section
+      lsmeans <- comparison_results$lsmeans
+      consolidated_data <- rbind(consolidated_data, data.frame(
+        Statistic = c("Least Squares Mean", "SD", "CV%"),
+        Test = c(
+          as.character(format_mean(lsmeans$Test[1])),    # Smart formatting for mean
+          as.character(round(lsmeans$Test[2], 3)),       # 3 decimals for SD
+          as.character(round(lsmeans$Test[3], 3))        # 3 decimals for CV%
+        ),
+        Reference = c(
+          as.character(format_mean(lsmeans$Reference[1])),    # Smart formatting for mean
+          as.character(round(lsmeans$Reference[2], 3)),       # 3 decimals for SD
+          as.character(round(lsmeans$Reference[3], 3))        # 3 decimals for CV%
+        ),
+        Ratio = c(
+          as.character(format_mean(lsmeans$Ratio[1])),    # Smart formatting for mean
+          as.character(round(lsmeans$Ratio[2], 3)),       # 3 decimals for SD
+          as.character(round(lsmeans$Ratio[3], 3))        # 3 decimals for CV%
+        )
+      ))
+      
+      # Clean column names (remove "Statistic" as requested)
+      col_names <- c("", "Test", "Reference", "T/R Ratio")
       
       DT::datatable(
-        formatted_lsmeans,
+        consolidated_data,
         options = list(
           dom = 't',
           paging = FALSE,
           searching = FALSE,
           ordering = FALSE,
+          scrollX = FALSE,  # Disable horizontal scrolling
+          autoWidth = FALSE,  # Control width manually
           columnDefs = list(
-            list(className = 'dt-left', targets = 0),
-            list(className = 'dt-center', targets = 1:3)
+            list(className = 'dt-left', targets = 0, width = '35%'),
+            list(className = 'dt-center', targets = 1, width = '20%'),
+            list(className = 'dt-center', targets = 2, width = '20%'), 
+            list(className = 'dt-center', targets = 3, width = '25%'),
+            # Bold the main statistic headers
+            list(
+              targets = 0,
+              createdCell = JS(
+                "function(td, cellData, rowData, row, col) {",
+                "  if (cellData.includes('Mean')) {",
+                "    $(td).css('font-weight', 'bold');",
+                "  }",
+                "  if (cellData.includes('─')) {",
+                "    $(td).css('color', '#dee2e6');",
+                "    $(td).css('font-weight', 'normal');",
+                "  }",
+                "}"
+              )
+            ),
+            # Hide values in separator rows
+            list(
+              targets = 1:3,
+              createdCell = JS(
+                "function(td, cellData, rowData, row, col) {",
+                "  if (rowData[0].includes('─')) {",
+                "    $(td).css('color', '#dee2e6');",
+                "    $(td).html('─────');",
+                "  }",
+                "}"
+              )
+            )
           )
         ),
-        rownames = FALSE
-      )
-    })
-    
-    # Render arithmetic statistics table
-    output$pk_comparison_arithmetic_table <- DT::renderDataTable({
-      param <- selected_comparison_param()
-      if (is.null(param)) return(NULL)
-      
-      nca_res <- nca_results()
-      comparison_results <- calculate_pk_comparison(nca_res, param)
-      
-      if (is.null(comparison_results)) return(NULL)
-      
-      # Format the arithmetic statistics
-      formatted_stats <- comparison_results$arithmetic_stats
-      formatted_stats$Test <- round(formatted_stats$Test, 3)
-      formatted_stats$Reference <- round(formatted_stats$Reference, 3)
-      formatted_stats$Ratio <- round(formatted_stats$Ratio, 3)
-      
-      DT::datatable(
-        formatted_stats,
-        options = list(
-          dom = 't',
-          paging = FALSE,
-          searching = FALSE,
-          ordering = FALSE,
-          columnDefs = list(
-            list(className = 'dt-left', targets = 0),
-            list(className = 'dt-center', targets = 1:3)
-          )
-        ),
-        rownames = FALSE
-      )
-    })
-    
-    # Render geometric statistics table (if applicable)
-    output$pk_comparison_geometric_table <- DT::renderDataTable({
-      param <- selected_comparison_param()
-      if (is.null(param)) return(NULL)
-      
-      nca_res <- nca_results()
-      comparison_results <- calculate_pk_comparison(nca_res, param)
-      
-      if (is.null(comparison_results) || is.null(comparison_results$geometric_stats)) return(NULL)
-      
-      # Format the geometric statistics
-      formatted_stats <- comparison_results$geometric_stats
-      formatted_stats$Test <- round(formatted_stats$Test, 3)
-      formatted_stats$Reference <- round(formatted_stats$Reference, 3)
-      formatted_stats$Ratio <- round(formatted_stats$Ratio, 3)
-      
-      DT::datatable(
-        formatted_stats,
-        options = list(
-          dom = 't',
-          paging = FALSE,
-          searching = FALSE,
-          ordering = FALSE,
-          columnDefs = list(
-            list(className = 'dt-left', targets = 0),
-            list(className = 'dt-center', targets = 1:3)
-          )
-        ),
-        rownames = FALSE
-      )
+        rownames = FALSE,
+        colnames = col_names
+      ) %>%
+      DT::formatStyle(columns = 1:4, fontSize = '13px') %>%  # Slightly smaller font
+      DT::formatStyle(columns = 1:4, 'white-space' = 'nowrap') %>%  # Prevent text wrapping
+      DT::formatStyle(columns = 1:4, 'padding' = '8px 4px')  # Reduce padding
     })
     
     # Render least squares means table

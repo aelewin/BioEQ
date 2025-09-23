@@ -364,6 +364,13 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             cat("Found PK data with", nrow(pk_data), "rows and", ncol(pk_data), "columns\n")
             cat("Available columns:", paste(names(pk_data), collapse = ", "), "\n")
             
+            # Debug: Check subjects in pk_data
+            if ("subject" %in% names(pk_data)) {
+              pk_subjects <- sort(unique(pk_data$subject))
+              cat("Subjects in PK data:", paste(pk_subjects, collapse = ", "), "\n")
+              cat("Subject 113 in PK data:", "113" %in% as.character(pk_data$subject), "\n")
+            }
+            
             # Setup cumulative analysis data using the new approach
             cumulative_setup <- generate_cumulative_be_plots(
               data = pk_data,
@@ -437,24 +444,92 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       create_cumulative_plot_card(plot_data)
     })
     
-    # BE Assessment Plot Tab
+    # Individual T/R Ratio Plot Tab
     output$be_ci_display <- renderUI({
       req(plot_values$plot_objects)
-      plot_data <- plot_values$plot_objects[["be_ci"]]
       
-      if (is.null(plot_data)) {
-        return(div(class = "alert alert-info text-center",
-          icon("info-circle"), " Bioequivalence assessment plot will appear here once analysis is complete."
-        ))
+      # Get available parameters from actual data
+      available_params <- if (!is.null(plot_values$plot_objects$cumulative_be$analysis_data)) {
+        # Get PK parameter columns from the data
+        data_cols <- names(plot_values$plot_objects$cumulative_be$analysis_data)
+        pk_params <- intersect(data_cols, c("AUC0t", "AUC0inf", "Cmax", "Tmax"))
+        if (length(pk_params) > 0) pk_params else c("Cmax")  # Fallback to Cmax
+      } else if (!is.null(plot_values$available_parameters)) {
+        plot_values$available_parameters
+      } else {
+        c("AUC0t", "AUC0inf", "Cmax")  # Fallback
       }
       
-      if (!is.null(plot_data$error)) {
-        return(div(class = "alert alert-danger",
-          strong("Error: "), plot_data$error
-        ))
+      available_subjects <- if (!is.null(plot_values$plot_objects$concentration$available_subjects)) {
+        plot_values$plot_objects$concentration$available_subjects
+      } else {
+        1:20  # Fallback
       }
       
-      create_simple_plot_card(plot_data, "Bioequivalence Assessment", "bullseye")
+      div(class = "plot-card",
+        div(class = "plot-card-header",
+          icon("bullseye"), "Individual T/R Ratio"
+        ),
+        div(class = "plot-card-body",
+          div(class = "mb-3",
+            p("Individual subject Test/Reference ratios for bioequivalence analysis. Each point represents one subject's T/R ratio. Red dashed lines show bioequivalence limits (80-125%).",
+              style = "color: var(--neutral-600); font-size: 14px; margin-bottom: 15px;")
+          ),
+          
+          # Analysis controls
+          div(class = "row mb-3",
+            column(4,
+              h6("PK Parameter", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+              selectInput(ns("individual_tr_parameter"), 
+                         label = NULL,
+                         choices = setNames(available_params, available_params),
+                         selected = available_params[1],
+                         width = "100%")
+            ),
+            column(4,
+              h6("Subject Order", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+              selectInput(ns("individual_tr_subject_order"), 
+                         label = NULL,
+                         choices = list(
+                           "Sequential (1, 2, 3...)" = "sequential",
+                           "Custom Order" = "custom"
+                         ),
+                         selected = "sequential",
+                         width = "100%")
+            ),
+            column(4,
+              div(style = "text-align: center; margin-top: 25px;",
+                actionButton(ns("run_individual_tr_analysis"), "Update Plot", 
+                            class = "btn btn-primary", icon = icon("sync-alt"))
+              )
+            )
+          ),
+          
+          # Custom subject order selector (shown when "custom" is selected)
+          conditionalPanel(
+            condition = paste0("input['", ns("individual_tr_subject_order"), "'] == 'custom'"),
+            div(class = "row mb-3",
+              column(12,
+                h6("Custom Subject Order", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+                p("Drag subjects to reorder, or use the text input below:", 
+                  style = "color: var(--neutral-600); font-size: 12px; margin-bottom: 10px;"),
+                textInput(ns("individual_tr_custom_order"), 
+                         label = "Subject order (comma-separated):",
+                         value = paste(available_subjects, collapse = ", "),
+                         placeholder = "e.g., 1, 3, 2, 5, 4..."),
+                div(class = "text-muted", style = "font-size: 11px;",
+                  paste("Available subjects:", paste(available_subjects, collapse = ", "))
+                )
+              )
+            )
+          ),
+          
+          # Plot output
+          div(id = ns("individual_tr_plot_container"),
+            plotlyOutput(ns("individual_tr_plot"), height = "500px")
+          )
+        )
+      )
     })
     
     # Individual Subjects Plot Tab
@@ -481,7 +556,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     create_concentration_plot_card <- function(plot_data) {
       div(class = "plot-card",
         div(class = "plot-card-header",
-          icon("line-chart"), "Concentration-Time Profiles"
+          icon("line-chart"), "All Subject Profiles"
         ),
         div(class = "plot-card-body",
           div(class = "mb-3",
@@ -556,7 +631,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     get_plot_description <- function(title) {
       switch(title,
         "PK Parameter Boxplots" = "Distribution of pharmacokinetic parameters by treatment group.",
-        "Bioequivalence Assessment" = "90% confidence intervals for bioequivalence ratios.",
+        "Individual T/R Ratio" = "90% confidence intervals for bioequivalence ratios.",
         "Interactive visualization of analysis results."
       )
     }
@@ -640,8 +715,13 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         ))
       }
       
-      # Extract available parameters and subjects from the setup data
-      available_params <- if (!is.null(plot_data$parameters)) {
+      # Extract available parameters from actual data
+      available_params <- if (!is.null(plot_data$analysis_data)) {
+        # Get PK parameter columns from the data
+        data_cols <- names(plot_data$analysis_data)
+        pk_params <- intersect(data_cols, c("AUC0t", "AUC0inf", "Cmax", "Tmax"))
+        if (length(pk_params) > 0) pk_params else c("Cmax")  # Fallback to Cmax
+      } else if (!is.null(plot_data$parameters)) {
         plot_data$parameters
       } else {
         c("Cmax", "AUC0t", "AUC0inf")
@@ -655,7 +735,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       
       div(class = "plot-card",
         div(class = "plot-card-header",
-          icon("line-chart"), "Cumulative Bioequivalence Analysis"
+          icon("line-chart"), "Cummulative T/R Ratio"
         ),
         div(class = "plot-card-body",
           div(class = "mb-3",
@@ -687,8 +767,8 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             ),
             column(4,
               div(style = "text-align: center; margin-top: 25px;",
-                actionButton(ns("run_cumulative_analysis"), "Run Analysis", 
-                            class = "btn btn-success", icon = icon("play"))
+                actionButton(ns("run_cumulative_analysis"), "Update Plot", 
+                            class = "btn btn-primary", icon = icon("sync-alt"))
               )
             )
           ),
@@ -764,6 +844,100 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       }
     })
     
+    # Auto-generate individual T/R ratio plot when data becomes available
+    observe({
+      req(plot_values$plot_objects$cumulative_be)
+      
+      cumulative_setup <- plot_values$plot_objects$cumulative_be
+      
+      # Only proceed if data is available and no error
+      if (!is.null(cumulative_setup) && is.null(cumulative_setup$error)) {
+        # Get default parameter (first available)
+        available_params <- if (!is.null(plot_values$available_parameters)) {
+          plot_values$available_parameters
+        } else {
+          c("AUC0t", "AUC0inf", "Cmax")
+        }
+        
+        default_param <- available_params[1]
+        default_order <- sort(cumulative_setup$available_subjects)
+        
+        tryCatch({
+          # Create initial simple T/R ratio plot
+          tr_plot <- create_simple_tr_plot(
+            data = cumulative_setup$analysis_data,
+            parameter = default_param,
+            subject_order = default_order
+          )
+          
+          # Convert to plotly with custom hover
+          interactive_plot <- plotly::ggplotly(tr_plot, tooltip = "text") %>%
+            plotly::layout(height = 500)
+          
+          # Render initial plot
+          output$individual_tr_plot <- renderPlotly({
+            interactive_plot
+          })
+          
+          cat("Initial simple T/R ratio plot created for", default_param, "\n")
+          
+        }, error = function(e) {
+          cat("Error creating initial individual T/R ratio plot:", e$message, "\n")
+        })
+      }
+    })
+    
+    # Auto-generate cumulative T/R ratio plot when data becomes available
+    observe({
+      req(plot_values$plot_objects$cumulative_be)
+      
+      cumulative_setup <- plot_values$plot_objects$cumulative_be
+      
+      # Only proceed if data is available and no error
+      if (!is.null(cumulative_setup) && is.null(cumulative_setup$error)) {
+        # Get default parameter (first available)
+        available_params <- if (!is.null(plot_values$available_parameters)) {
+          plot_values$available_parameters
+        } else {
+          c("AUC0t", "AUC0inf", "Cmax")
+        }
+        
+        default_param <- available_params[1]
+        default_order <- sort(cumulative_setup$available_subjects)
+        
+        tryCatch({
+          # Perform progressive analysis with default settings
+          progressive_results <- perform_progressive_be_analysis(
+            data = cumulative_setup$analysis_data,
+            parameter = default_param,
+            subject_order = default_order,
+            anova_method = cumulative_setup$anova_method,
+            be_limits = cumulative_setup$be_limits
+          )
+          
+          if (!is.null(progressive_results) && nrow(progressive_results) > 0) {
+            # Create cumulative plot
+            cumulative_plot <- create_cumulative_plot(
+              cumulative_data = progressive_results,
+              parameter = default_param,
+              be_limits = cumulative_setup$be_limits,
+              interactive = TRUE
+            )
+            
+            # Update plot output
+            output$cumulative_pk_plot <- renderPlotly({
+              cumulative_plot
+            })
+            
+            cat("Initial cumulative T/R ratio plot created for", default_param, "\n")
+          }
+          
+        }, error = function(e) {
+          cat("Error creating initial cumulative T/R ratio plot:", e$message, "\n")
+        })
+      }
+    })
+
     # Select all observers for individual subjects
     # Handle select all test subjects
     observeEvent(input$select_all_test, {
@@ -925,6 +1099,84 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       })
     })
     
+    # Handle individual T/R ratio analysis
+    observeEvent(input$run_individual_tr_analysis, {
+      req(input$individual_tr_parameter, input$individual_tr_subject_order)
+      req(plot_values$plot_objects$cumulative_be)  # Use same data as cumulative
+      
+      cumulative_setup <- plot_values$plot_objects$cumulative_be
+      
+      # Check if setup data is available
+      if (is.null(cumulative_setup) || !is.null(cumulative_setup$error)) {
+        showNotification("Analysis data not available for individual T/R ratios", type = "error")
+        return()
+      }
+      
+      tryCatch({
+        # Determine subject order
+        available_subjects <- cumulative_setup$available_subjects
+        
+        subject_order <- switch(input$individual_tr_subject_order,
+          "sequential" = sort(available_subjects),
+          "custom" = {
+            if (!is.null(input$individual_tr_custom_order) && nchar(input$individual_tr_custom_order) > 0) {
+              # Parse custom order
+              custom_order <- trimws(strsplit(input$individual_tr_custom_order, ",")[[1]])
+              custom_order <- as.numeric(custom_order[!is.na(as.numeric(custom_order))])
+              # Validate subjects exist
+              valid_subjects <- intersect(custom_order, available_subjects)
+              if (length(valid_subjects) > 0) valid_subjects else sort(available_subjects)
+            } else {
+              sort(available_subjects)
+            }
+          }
+        )
+        
+        cat(sprintf("Creating simple T/R ratio plot for %s with subject order: %s\n", 
+                   input$individual_tr_parameter, paste(subject_order, collapse = ", ")))
+        
+        # Create simple T/R ratio plot
+        tr_plot <- create_simple_tr_plot(
+          data = cumulative_setup$analysis_data,
+          parameter = input$individual_tr_parameter,
+          subject_order = subject_order
+        )
+        
+        # Convert to plotly for interactivity with custom hover
+        interactive_plot <- plotly::ggplotly(tr_plot, tooltip = "text") %>%
+          plotly::layout(height = 500)
+        
+        # Update plot output
+        output$individual_tr_plot <- renderPlotly({
+          interactive_plot
+        })
+        
+        cat("Individual T/R ratio plot updated successfully\n")
+        showNotification("Individual T/R ratio plot updated", type = "message")
+        
+      }, error = function(e) {
+        cat("Error creating individual T/R ratio plot:", e$message, "\n")
+        
+        showNotification(paste("Plot error:", e$message), type = "error")
+        
+        # Show error in plot area
+        output$individual_tr_plot <- renderPlotly({
+          plot_ly() %>% 
+            add_annotations(
+              text = paste("Error:", e$message),
+              x = 0.5, y = 0.5,
+              xref = "paper", yref = "paper",
+              showarrow = FALSE,
+              font = list(size = 16, color = "red")
+            ) %>%
+            layout(
+              xaxis = list(showticklabels = FALSE, showgrid = FALSE),
+              yaxis = list(showticklabels = FALSE, showgrid = FALSE)
+            )
+        })
+      })
+    })
+
     # Individual subjects plot update handler
     observeEvent(input$update_individual_plot, {
       req(plot_values$plot_objects$individual_subjects)

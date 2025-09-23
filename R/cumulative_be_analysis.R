@@ -58,6 +58,21 @@ generate_cumulative_be_plots <- function(data, parameters = c("Cmax", "AUC0t", "
     n_subjects <- length(subjects)
     
     cat(sprintf("Found %d subjects for cumulative analysis\n", n_subjects))
+    cat("Available subjects in cumulative data:", paste(subjects, collapse = ", "), "\n")
+    
+    # Debug: Check if subject 113 is in the original data
+    cat("Checking for subject 113 in data...\n")
+    has_113 <- "113" %in% as.character(analysis_data$subject)
+    cat("Subject 113 present:", has_113, "\n")
+    
+    if (has_113) {
+      subj_113_data <- analysis_data[analysis_data$subject == "113", ]
+      cat("Subject 113 data rows:", nrow(subj_113_data), "\n")
+      if (nrow(subj_113_data) > 0) {
+        cat("Subject 113 treatments:", paste(unique(subj_113_data$treatment), collapse = ", "), "\n")
+        cat("Subject 113 columns:", paste(names(subj_113_data), collapse = ", "), "\n")
+      }
+    }
     
     # Filter parameters to only those available in data
     available_params <- intersect(parameters, names(analysis_data))
@@ -535,11 +550,11 @@ create_cumulative_plot <- function(cumulative_data, parameter, be_limits, intera
     ggplot2::geom_hline(yintercept = 100, color = "gray", linetype = "solid", alpha = 0.5) +
     
     # Add confidence interval lines (black, simple)
-    ggplot2::geom_line(ggplot2::aes(y = ci_lower), color = "black", linewidth = 1) +
-    ggplot2::geom_line(ggplot2::aes(y = ci_upper), color = "black", linewidth = 1) +
+    ggplot2::geom_line(ggplot2::aes(y = ci_lower), color = "black", linewidth = 0.5) +
+    ggplot2::geom_line(ggplot2::aes(y = ci_upper), color = "black", linewidth = 0.5) +
     
     # Add point estimate line and points (blue)
-    ggplot2::geom_line(ggplot2::aes(y = point_estimate), color = "blue", linewidth = 1) +
+    ggplot2::geom_line(ggplot2::aes(y = point_estimate), color = "blue", linewidth = 0.5) +
     ggplot2::geom_point(ggplot2::aes(y = point_estimate), color = "blue", size = 2) +
     
     # Simple scaling

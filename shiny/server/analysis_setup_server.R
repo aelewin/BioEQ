@@ -54,6 +54,27 @@ output$is_parallel_design <- reactive({
 })
 outputOptions(output, "is_parallel_design", suspendWhenHidden = FALSE)
 
+# Check if groups are detected in the data
+output$groups_detected <- reactive({
+  if (is.null(values$uploaded_data)) return(FALSE)
+  
+  tryCatch({
+    data <- values$uploaded_data
+    has_group <- "group" %in% names(data)
+    
+    if (has_group) {
+      # Check if there are actually multiple groups
+      n_groups <- length(unique(data$group[!is.na(data$group)]))
+      return(n_groups > 1)
+    }
+    
+    return(FALSE)
+  }, error = function(e) {
+    return(FALSE)
+  })
+})
+outputOptions(output, "groups_detected", suspendWhenHidden = FALSE)
+
 # Observer for BE analysis type selection - show notifications for RSABE/ABEL
 observe({
   req(input$be_analysis_type)
@@ -417,6 +438,11 @@ observeEvent(input$run_analysis, {
   selected_primary <- input$primary_pk_params %||% c()
   selected_secondary <- input$secondary_pk_params %||% c()
   
+  # Debug: Check what parameters are actually selected
+  cat(sprintf("[DEBUG] Primary PK params from input: %s\n", paste(selected_primary, collapse = ", ")))
+  cat(sprintf("[DEBUG] Secondary PK params from input: %s\n", paste(selected_secondary, collapse = ", ")))
+  cat(sprintf("[DEBUG] Combined selected: %s\n", paste(c(selected_primary, selected_secondary), collapse = ", ")))
+  
   if (length(selected_primary) == 0 && length(selected_secondary) == 0) {
     showNotification(
       "Please select at least one PK parameter for ANOVA analysis.",
@@ -464,11 +490,29 @@ observeEvent(input$run_analysis, {
     # ANOVA Configuration
     anova_model = input$anova_model %||% "fixed",
     random_effects = input$random_effects %||% "(1|subject)",
+    # Group Effects Configuration
+    include_group_fixed = input$include_group_fixed %||% FALSE,
+    include_group_random = input$include_group_random %||% FALSE,
+    include_group_treatment_interaction = input$include_group_treatment_interaction %||% FALSE,
     # Parallel Design Configuration
     welch_correction = as.logical(input$welch_correction_be %||% TRUE),
     # PK Parameter Selection for ANOVA
-    selected_pk_params = c(input$primary_pk_params %||% c("Cmax", "AUC0t", "AUC0inf"), 
-                          input$secondary_pk_params),
+    selected_pk_params = {
+      primary_selected <- input$primary_pk_params %||% c("Cmax", "AUC0t", "AUC0inf")
+      secondary_selected <- input$secondary_pk_params %||% c()
+      combined_params <- c(primary_selected, secondary_selected)
+      
+      # Safety check - ensure we always have at least some parameters
+      if (length(combined_params) == 0) {
+        cat("[WARNING] No PK parameters selected - using defaults\n")
+        combined_params <- c("Cmax", "AUC0t", "AUC0inf")
+      }
+      
+      cat(sprintf("[DEBUG] Analysis Config - Primary params: %s\n", paste(primary_selected, collapse = ", ")))
+      cat(sprintf("[DEBUG] Analysis Config - Secondary params: %s\n", paste(secondary_selected, collapse = ", ")))
+      cat(sprintf("[DEBUG] Analysis Config - Combined params: %s\n", paste(combined_params, collapse = ", ")))
+      combined_params
+    },
     outlier_test = input$outlier_test %||% TRUE,
     # pAUC configuration - automatically enable if pAUC is in selected parameters
     calculate_pAUC = {
@@ -499,7 +543,8 @@ observeEvent(input$run_analysis, {
   # Show progress
   shinyjs::show("analysis_progress")
   
-  withProgress(message = 'Running bioequivalence analysis...', value = 0, {
+  tryCatch({
+    withProgress(message = 'Running bioequivalence analysis...', value = 0, {
     
     incProgress(0.1, detail = "Validating data and configuration...")
     Sys.sleep(0.5)
@@ -662,9 +707,21 @@ observeEvent(input$run_analysis, {
       pk_params_to_log <- c("AUC0t", "AUC0inf", "Cmax")
       for (param in pk_params_to_log) {
         if (param %in% names(nca_results) && !paste0("ln", param) %in% names(nca_results)) {
-          if (all(nca_results[[param]] > 0, na.rm = TRUE)) {
-            nca_results[[paste0("ln", param)]] <- log(nca_results[[param]])
+          # Check if the parameter is numeric
+          param_values <- nca_results[[param]]
+          if (is.numeric(param_values) && all(param_values > 0, na.rm = TRUE)) {
+            nca_results[[paste0("ln", param)]] <- log(param_values)
             cat(sprintf("📊 Added log-transformed parameter: ln%s\n", param))
+          } else {
+            # Check what type of data we have for debugging
+            if (!is.numeric(param_values)) {
+              cat(sprintf("⚠️ Skipping log transformation for %s: non-numeric data (type: %s)\n", param, class(param_values)[1]))
+              cat(sprintf("  First few values: %s\n", paste(head(param_values, 3), collapse = ", ")))
+            } else if (any(param_values <= 0, na.rm = TRUE)) {
+              cat(sprintf("⚠️ Skipping log transformation for %s: contains non-positive values\n", param))
+              negative_count <- sum(param_values <= 0, na.rm = TRUE)
+              cat(sprintf("  Found %d non-positive values out of %d total\n", negative_count, length(param_values)))
+            }
           }
         }
       }
@@ -723,6 +780,25 @@ observeEvent(input$run_analysis, {
       # Determine which parameters to analyze based on user selection and availability
       selected_params <- analysis_config$selected_pk_params
       
+      cat(sprintf("[DEBUG] Raw selected_pk_params from config: %s\n", paste(selected_params, collapse = ", ")))
+      cat(sprintf("[DEBUG] Available columns in nca_results: %s\n", paste(names(nca_results), collapse = ", ")))
+      
+      # Check if selected_params is empty
+      if (length(selected_params) == 0) {
+        cat("[ERROR] No parameters selected for analysis!\n")
+        anova_results <- list(
+          error = "No PK parameters were selected for ANOVA analysis. Please select at least one parameter in Step 2."
+        )
+        values$anova_results <- anova_results
+        
+        showNotification(
+          "No PK parameters selected for analysis. Please check Step 2 parameter selection.",
+          type = "error",
+          duration = 10
+        )
+        return()
+      }
+      
       # Expand selected parameters to include their log-transformed versions
       expanded_params <- c()
       for (param in selected_params) {
@@ -737,11 +813,32 @@ observeEvent(input$run_analysis, {
       expanded_params <- unique(expanded_params)
       available_selected_params <- intersect(expanded_params, names(nca_results))
       
+      # Filter to only include numeric parameters for ANOVA
+      numeric_params <- c()
+      for (param in available_selected_params) {
+        param_values <- nca_results[[param]]
+        if (is.numeric(param_values)) {
+          # Check if we have enough non-missing numeric values
+          non_missing_count <- sum(!is.na(param_values))
+          if (non_missing_count >= 4) {  # Need at least 4 observations for ANOVA
+            numeric_params <- c(numeric_params, param)
+          } else {
+            cat(sprintf("⚠️ Skipping %s: insufficient non-missing values (%d, need at least 4)\n", param, non_missing_count))
+          }
+        } else {
+          cat(sprintf("⚠️ Skipping %s: non-numeric data (type: %s)\n", param, class(param_values)[1]))
+          if (!is.null(param_values) && length(param_values) > 0) {
+            cat(sprintf("  First few values: %s\n", paste(head(param_values, 3), collapse = ", ")))
+          }
+        }
+      }
+      
       cat(sprintf("[DEBUG] User selected parameters: %s\n", paste(selected_params, collapse = ", ")))
       cat(sprintf("[DEBUG] Expanded parameters (including log versions): %s\n", paste(expanded_params, collapse = ", ")))
       cat(sprintf("[DEBUG] Available expanded parameters: %s\n", paste(available_selected_params, collapse = ", ")))
+      cat(sprintf("[DEBUG] Numeric parameters for ANOVA: %s\n", paste(numeric_params, collapse = ", ")))
       
-      if (length(available_selected_params) > 0) {
+      if (length(numeric_params) > 0) {
         
         tryCatch({
           cat("[DEBUG] Running simple ANOVA analysis...\n")
@@ -749,9 +846,12 @@ observeEvent(input$run_analysis, {
           # Use the ANOVA function with the selected model type and random effects
           simple_anova_results <- perform_simple_anova(
             nca_results, 
-            available_selected_params, 
+            numeric_params,  # Use validated numeric parameters
             analysis_config$anova_model,
-            analysis_config$random_effects
+            analysis_config$random_effects,
+            analysis_config$include_group_fixed,
+            analysis_config$include_group_random,
+            analysis_config$include_group_treatment_interaction
           )
           
           # Wrap results in expected structure for the UI
@@ -770,9 +870,24 @@ observeEvent(input$run_analysis, {
           )
         })
       } else {
-        cat("[DEBUG] No selected parameters found in data for ANOVA analysis\n")
+        # Provide specific error message about why no parameters are available
+        error_msg <- "No valid numeric parameters available for ANOVA analysis."
+        if (length(available_selected_params) == 0) {
+          error_msg <- paste(error_msg, "Selected parameters not found in data:", paste(selected_params, collapse = ", "))
+        } else {
+          error_msg <- paste(error_msg, "All selected parameters contain non-numeric data or insufficient observations.")
+        }
+        
+        cat(sprintf("[DEBUG] %s\n", error_msg))
         anova_results <- list(
-          error = paste("No selected PK parameters available in the data. Please check your parameter selection and ensure the data contains the selected parameters:", paste(selected_params, collapse = ", "))
+          error = error_msg
+        )
+        
+        # Show user-friendly notification
+        showNotification(
+          paste("Analysis Error:", error_msg, "Please verify your data contains numeric values for the selected PK parameters."),
+          type = "error",
+          duration = 10
         )
       }
     }
@@ -1074,6 +1189,33 @@ observeEvent(input$run_analysis, {
       )
     })
     
+  })
+  
+  }, error = function(e) {
+    # Handle any unexpected errors during analysis
+    cat(sprintf("❌ Unexpected error during analysis: %s\n", e$message))
+    
+    # Hide progress indicator
+    shinyjs::hide("analysis_progress")
+    
+    # Show error notification with specific guidance
+    error_message <- paste("Analysis failed:", e$message)
+    if (grepl("log.*non-numeric", e$message, ignore.case = TRUE)) {
+      error_message <- "Analysis failed: Unable to perform log transformation on non-numeric data. Please ensure your data contains only numeric values for PK parameters."
+    }
+    
+    showNotification(
+      error_message,
+      type = "error",
+      duration = 15
+    )
+    
+    # Store minimal error results
+    values$analysis_complete <- FALSE
+    values$anova_results <- list(error = error_message)
+    values$be_results <- list(error = error_message)
+    
+    return()
   })
   
   shinyjs::hide("analysis_progress")

@@ -230,8 +230,8 @@ plots_ui <- function(id) {
               id = ns("plots_tabs"),
               type = "tabs",
             
-              # Concentration-Time Tab
-              tabPanel(tags$span(icon("line-chart"), " Concentration-Time"),
+              # All Subject Profiles Tab
+              tabPanel(tags$span(icon("line-chart"), " All Subject Profiles"),
                 value = "concentration",
                 br(),
                 fluidRow(
@@ -243,8 +243,21 @@ plots_ui <- function(id) {
                 )
               ),
               
-              # Cumulative BE Tab
-              tabPanel(tags$span(icon("chart-line"), " Cumulative BE"),
+              # Individual Subject Profiles Tab
+              tabPanel(tags$span(icon("user"), " Individual Subject Profiles"),
+                value = "individual_subjects",
+                br(),
+                fluidRow(
+                  column(12,
+                    div(class = "plot-display-area",
+                      uiOutput(ns("individual_subjects_display"))
+                    )
+                  )
+                )
+              ),
+              
+              # Cummulative T/R Ratio Tab
+              tabPanel(tags$span(icon("chart-line"), " Cummulative T/R Ratio"),
                 value = "cumulative_pk",
                 br(),
                 fluidRow(
@@ -256,27 +269,14 @@ plots_ui <- function(id) {
                 )
               ),
               
-              # BE Assessment Tab
-              tabPanel(tags$span(icon("bullseye"), " BE Assessment"),
+              # Individual T/R Ratio Tab
+              tabPanel(tags$span(icon("bullseye"), " Individual T/R Ratio"),
                 value = "be_assessment",
                 br(),
                 fluidRow(
                   column(12,
                     div(class = "plot-display-area",
                       uiOutput(ns("be_ci_display"))
-                    )
-                  )
-                )
-              ),
-              
-              # Individual Subjects Tab
-              tabPanel(tags$span(icon("user"), " Individual Subjects"),
-                value = "individual_subjects",
-                br(),
-                fluidRow(
-                  column(12,
-                    div(class = "plot-display-area",
-                      uiOutput(ns("individual_subjects_display"))
                     )
                   )
                 )

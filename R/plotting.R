@@ -1397,8 +1397,10 @@ plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t",
     stop("No complete data pairs found for ratio calculation")
   }
   
-  # Order subjects according to specified order or default (Subject ID)
+  # Order subjects according to specified order or default (numerical Subject ID)
   if (is.null(subject_order)) {
+    # Ensure Subject is numeric for proper ordering
+    wide_data$Subject <- as.numeric(wide_data$Subject)
     wide_data <- wide_data[order(wide_data$Subject), ]
   } else {
     # Validate subject_order
@@ -1408,11 +1410,13 @@ plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t",
     }
     valid_order <- intersect(subject_order, wide_data$Subject)
     remaining_subjects <- setdiff(wide_data$Subject, valid_order)
-    final_order <- c(valid_order, sort(remaining_subjects))
+    # Sort remaining subjects numerically
+    remaining_subjects <- sort(as.numeric(remaining_subjects))
+    final_order <- c(valid_order, remaining_subjects)
     wide_data <- wide_data[match(final_order, wide_data$Subject), ]
   }
   
-  # Add analysis order
+  # Add analysis order (position in the ordered sequence)
   wide_data$Analysis_Order <- 1:nrow(wide_data)
   
   # Calculate cumulative T/R ratios (geometric means)
@@ -1476,12 +1480,12 @@ plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t",
         line = list(color = "#1F78B4", width = 2, dash = "dot"),
         name = "Individual T/R Ratios",
         hovertemplate = paste0(
-          "<b>Subject %{text}</b><br>",
-          "Analysis Order: %{x}<br>",
-          "T/R Ratio: %{y:.1f}%<br>",
+          "<b>Subject: %{text}</b><br>",
+          "T/R Ratio: %{customdata:.2f}%<br>",
           "<extra></extra>"
         ),
-        text = wide_data$Subject
+        text = wide_data$Subject,
+        customdata = wide_data$Ratio_Percent
       ) %>%
       # Add cumulative trend line
       plotly::add_trace(
@@ -1508,10 +1512,11 @@ plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t",
           font = list(size = 16)
         ),
         xaxis = list(
-          title = "Analysis Order (Subject Number)",
+          title = "Subject",
           tickmode = "array",
           tickvals = wide_data$Analysis_Order,
-          ticktext = wide_data$Subject
+          ticktext = as.character(wide_data$Subject),
+          type = "category"
         ),
         yaxis = list(
           title = "Test/Reference Ratio (%)",
@@ -1545,11 +1550,10 @@ plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t",
       geom_line(aes(y = Cumulative_Ratio), color = "#E31A1C", linewidth = 2) +
       # Styling
       labs(
-        x = "Analysis Order (Subject Number)", 
+        x = "Subject", 
         y = "Test/Reference Ratio (%)",
-        title = paste("Individual Subject T/R Ratios with Cumulative Trend"),
-        subtitle = paste0("Parameter: ", parameter, 
-                         " | Red dashed lines: BE limits (", be_lower, "-", be_upper, "%)",
+        title = paste("T/R Ratios for", parameter),
+        subtitle = paste0("Red dashed lines: BE limits (", be_lower, "-", be_upper, "%)",
                          " | Blue dots: Individual ratios | Red line: Cumulative ratio")
       ) +
       theme_minimal() +
@@ -1557,10 +1561,10 @@ plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t",
         axis.text.x = element_text(angle = 45, hjust = 1),
         panel.grid.minor = element_blank()
       ) +
-      # Custom x-axis labels showing subject numbers
+      # Custom x-axis labels showing subject numbers in correct order
       scale_x_continuous(
         breaks = wide_data$Analysis_Order,
-        labels = wide_data$Subject
+        labels = as.character(wide_data$Subject)
       ) +
       # Y-axis limits - dynamically adjusted to show all data
       coord_cartesian(ylim = c(y_limit_min, y_limit_max))
@@ -2277,4 +2281,147 @@ plot_anova_diagnostics_static <- function(be_results, parameters = NULL) {
   
   # Arrange all diagnostic plots in a grid
   gridExtra::grid.arrange(grobs = diagnostic_plots, ncol = 2)
+}
+
+#' Simple T/R ratio plot for individual subjects
+#'
+#' @param data Data frame with subject, treatment, and PK parameters
+#' @param parameter PK parameter to plot (e.g., "AUC0t", "Cmax")
+#' @param subject_order Vector of subject IDs in desired order
+#' @export
+create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
+  
+  # Debug: Print data structure
+  cat("Data columns:", paste(names(data), collapse = ", "), "\n")
+  cat("Data dimensions:", nrow(data), "x", ncol(data), "\n")
+  cat("Subject types and sample values:\n")
+  cat("  Type:", class(data$subject), "\n")
+  cat("  Sample values:", paste(head(unique(data$subject), 10), collapse = ", "), "\n")
+  cat("  Unique subjects count:", length(unique(data$subject)), "\n")
+  
+  # Find the actual parameter name (handle ln prefix)
+  param_name <- parameter
+  if (!parameter %in% names(data)) {
+    ln_param <- paste0("ln", parameter)
+    if (ln_param %in% names(data)) {
+      param_name <- ln_param
+      cat("Using log-transformed parameter:", ln_param, "\n")
+    } else {
+      cat("Available columns:", paste(names(data), collapse = ", "), "\n")
+      stop("Parameter not found: ", parameter, " or ", ln_param)
+    }
+  }
+  
+  # Use correct column names based on actual data structure
+  # The cumulative data uses: subject, treatment (not Subject, Formulation)
+  # First, get unique PK parameter values per subject-treatment (ignore concentration-time data)
+  pk_data <- data %>%
+    filter(!is.na(.data[[param_name]])) %>%
+    select(subject, treatment, all_of(param_name)) %>%
+    # Get unique combinations (removes duplicate rows from concentration-time data)
+    distinct(subject, treatment, .keep_all = TRUE)
+  
+  cat("PK data after selecting unique combinations:", nrow(pk_data), "rows\n")
+  
+  # Convert to wide format: one row per subject with Test and Reference columns
+  tr_data <- pk_data %>%
+    tidyr::pivot_wider(
+      names_from = treatment, 
+      values_from = all_of(param_name),
+      values_fn = first  # Take first value if duplicates still exist
+    ) %>%
+    filter(!is.na(Test), !is.na(Reference))
+  
+  cat("T/R data after reshaping:", nrow(tr_data), "subjects\n")
+  
+  # Handle log-transformed data
+  if (grepl("^ln", param_name)) {
+    tr_data <- tr_data %>%
+      mutate(
+        Test_orig = exp(Test),
+        Ref_orig = exp(Reference),
+        TR_Ratio = (Test_orig / Ref_orig) * 100
+      )
+    cat("Used log-transformed data, converted to original scale\n")
+  } else {
+    tr_data <- tr_data %>%
+      mutate(TR_Ratio = (Test / Reference) * 100)
+    cat("Used original scale data\n")
+  }
+  
+  # Debug: Print available subjects before filtering
+  cat("Available subjects in data:", paste(sort(unique(tr_data$subject)), collapse = ", "), "\n")
+  cat("Subject order requested:", paste(subject_order, collapse = ", "), "\n")
+  
+  # Apply subject ordering (preserve numerical ordering) - INCLUDE ALL SUBJECTS
+  tr_data <- tr_data %>%
+    mutate(subject_numeric = as.numeric(as.character(subject)))
+  
+  if (!is.null(subject_order)) {
+    # Convert subject_order to numeric for proper ordering
+    subject_order_numeric <- as.numeric(as.character(subject_order))
+    
+    # Order subjects: first those in subject_order, then remaining subjects numerically
+    subjects_in_order <- tr_data$subject_numeric[tr_data$subject_numeric %in% subject_order_numeric]
+    subjects_not_in_order <- sort(tr_data$subject_numeric[!tr_data$subject_numeric %in% subject_order_numeric])
+    
+    # Create final order
+    final_order <- c(
+      subject_order_numeric[subject_order_numeric %in% tr_data$subject_numeric],
+      subjects_not_in_order
+    )
+    
+    # Apply the ordering
+    tr_data <- tr_data %>%
+      arrange(match(subject_numeric, final_order))
+    
+    cat("Final subject order:", paste(final_order, collapse = ", "), "\n")
+    cat("Subjects after ordering:", paste(tr_data$subject_numeric, collapse = ", "), "\n")
+  } else {
+    # Default: order ALL subjects numerically
+    tr_data <- tr_data %>%
+      arrange(subject_numeric)
+    
+    cat("Subjects ordered numerically:", paste(tr_data$subject_numeric, collapse = ", "), "\n")
+  }
+  
+  # Add plotting position
+  tr_data$plot_position <- 1:nrow(tr_data)
+  
+  cat("Final plot data:", nrow(tr_data), "subjects\n")
+  
+  if (nrow(tr_data) == 0) {
+    stop("No data available for plotting after filtering")
+  }
+  
+  # Add hover text with proper formatting
+  tr_data$hover_text <- paste0("Subject: ", tr_data$subject_numeric, 
+                              "\nT/R Ratio: ", sprintf("%.2f", tr_data$TR_Ratio), "%")
+  
+  # Create simple ggplot with proper numerical subject ordering
+  p <- ggplot(tr_data, aes(x = plot_position, y = TR_Ratio, text = hover_text)) +
+    geom_line(aes(group = 1), color = "blue", alpha = 0.6, linewidth = 0.5) +  # Thin line
+    geom_point(size = 3, color = "blue") +
+    geom_hline(yintercept = 100, linetype = "solid", color = "black", alpha = 0.5) +
+    geom_hline(yintercept = 80, linetype = "dashed", color = "red", alpha = 0.7) +
+    geom_hline(yintercept = 125, linetype = "dashed", color = "red", alpha = 0.7) +
+    scale_x_continuous(
+      name = "Subject",
+      breaks = tr_data$plot_position,
+      labels = as.character(tr_data$subject_numeric),
+      expand = c(0.02, 0)
+    ) +
+    labs(
+      title = paste("T/R Ratios for", parameter),
+      x = "Subject",
+      y = "T/R Ratio (%)"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+      plot.title = element_text(hjust = 0.5)
+    )
+  
+  cat("Plot created successfully\n")
+  return(p)
 }

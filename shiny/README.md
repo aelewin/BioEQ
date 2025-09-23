@@ -85,11 +85,10 @@ shiny/
 - **BE Analysis**: Average BE, Reference Scaled ABE, Average BE with Expanding Limits
 
 ### Results Dashboard
-- **Interactive Tables**: Sortable, searchable results
-- **Visualizations**: Concentration-time plots, confidence intervals
+- **Interactive Tables**: Sortable, customizable tables
+- **Visualizations**: Concentration-time plots, cumulative T/R ratio, individual T/R ratio
 - **Statistics**: ANOVA tables, confidence intervals
 - **Assessment**: Bioequivalence conclusions
-- **Summary**: Executive summary with key findings
 
 ### Export & Reports
 - **Data Export**: CSV, Excel formats
@@ -147,7 +146,7 @@ app_config <- list(
 
 ## 📊 Data Requirements
 
-### Input Format
+### Recommended Input Format
 ```csv
 Subject,Treatment,Period,Sequence,Time,Concentration
 1,R,1,RT,0,0
