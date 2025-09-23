@@ -37,6 +37,7 @@ validate_bioeq_data_enhanced <- function(data) {
   
   # Additional optional columns
   optional_mappings <- list(
+    group = c("group", "grp", "cohort", "site", "batch", "study_group", "dose_group"),
     dose = c("dose", "dosage", "dose_amount"),
     weight = c("weight", "bw", "body_weight"),
     age = c("age", "subject_age"),
@@ -125,6 +126,63 @@ create_data_summary_enhanced <- function(data) {
     treatments <- sort(unique(data$treatment))
     total_obs <- nrow(data)
     
+    # Group information
+    group_info <- NULL
+    if ("group" %in% names(data)) {
+      unique_groups <- unique(data$group[!is.na(data$group)])
+      if (length(unique_groups) > 1) {
+        group_summary <- data %>%
+          group_by(group) %>%
+          summarise(
+            n_subjects = n_distinct(subject),
+            n_observations = n(),
+            .groups = "drop"
+          )
+        
+        group_info <- list(
+          has_groups = TRUE,
+          n_groups = length(unique_groups),
+          groups = unique_groups,
+          group_summary = group_summary
+        )
+      } else {
+        group_info <- list(
+          has_groups = FALSE,
+          n_groups = 1,
+          groups = unique_groups,
+          group_summary = NULL
+        )
+      }
+    } else {
+      group_info <- list(
+        has_groups = FALSE,
+        n_groups = 1,
+        groups = NULL,
+        group_summary = NULL
+      )
+    }
+    
+    # Group information (if present)
+    group_info <- list()
+    if ("group" %in% names(data)) {
+      group_info$has_groups <- TRUE
+      group_info$n_groups <- length(unique(data$group))
+      group_info$groups <- sort(unique(data$group))
+      
+      # Subjects per group
+      group_info$subjects_per_group <- tryCatch({
+        data %>%
+          group_by(group) %>%
+          summarise(n_subjects = length(unique(subject)), .groups = "drop")
+      }, error = function(e) {
+        data.frame(group = unique(data$group), n_subjects = 1)
+      })
+    } else {
+      group_info$has_groups <- FALSE
+      group_info$n_groups <- 1
+      group_info$groups <- "Single Group"
+    }
+    
     # Check if this is concentration-time data or PK parameters data
     has_time <- "time" %in% names(data)
     has_concentration <- "concentration" %in% names(data)
@@ -187,14 +245,19 @@ create_data_summary_enhanced <- function(data) {
         missing_percentage = missing_pct,
         concentration_range = conc_range,
         time_range = time_range,
-        data_type = "concentration"
+        data_type = "concentration",
+        group_info = group_info
       ))
       
     } else {
       # PK parameters data
       # Get numeric columns (potential PK parameters)
+      # Exclude design variables and demographic columns from PK parameter detection
+      excluded_cols <- c("subject", "sequence", "period", "dose", "weight", "age", "height", "bmi", 
+                        "group", "grp", "site", "cohort", "batch", "study_group")
+      
       numeric_cols <- sapply(data, is.numeric)
-      pk_cols <- names(data)[numeric_cols & !names(data) %in% c("subject", "sequence", "period", "dose", "weight", "age")]
+      pk_cols <- names(data)[numeric_cols & !names(data) %in% excluded_cols]
       
       # Design analysis with error handling
       treatments_per_subject <- tryCatch({
@@ -235,7 +298,8 @@ create_data_summary_enhanced <- function(data) {
         design_type = design_type,
         missing_pk_values = missing_pk,
         missing_percentage = missing_pct,
-        data_type = "pk_parameters"
+        data_type = "pk_parameters",
+        group_info = group_info
       ))
     }
   }, error = function(e) {
@@ -331,7 +395,40 @@ observeEvent(input$data_file, {
       
       # Store processed data if validation passed
       if (validation_result$valid) {
-        values$uploaded_data <- validation_result$processed_data
+        processed_data <- validation_result$processed_data
+        
+        # Additional safety: Force conversion of any remaining character PK parameters to numeric
+        if (input$data_type == "pk_parameters") {
+          # Common PK parameter names that should be numeric
+          pk_param_patterns <- c("AUC", "Cmax", "Tmax", "half", "clearance", "volume", "lambda", "MRT")
+          
+          for (col_name in names(processed_data)) {
+            # Check if this column name suggests it's a PK parameter
+            is_pk_param <- any(sapply(pk_param_patterns, function(pattern) {
+              grepl(pattern, col_name, ignore.case = TRUE)
+            }))
+            
+            if (is_pk_param && !is.numeric(processed_data[[col_name]])) {
+              # Try to convert to numeric
+              numeric_values <- suppressWarnings(as.numeric(processed_data[[col_name]]))
+              
+              # Check if conversion was successful (not all NA)
+              if (!all(is.na(numeric_values))) {
+                cat(sprintf("[DEBUG] Force converting %s to numeric (was %s)\n", col_name, class(processed_data[[col_name]])[1]))
+                processed_data[[col_name]] <- numeric_values
+                
+                # Add warning about successful conversion
+                if (!"warnings" %in% names(validation_result)) validation_result$warnings <- c()
+                validation_result$warnings <- c(validation_result$warnings, 
+                  paste0("Converted column '", col_name, "' from character to numeric"))
+              } else {
+                cat(sprintf("[DEBUG] Could not convert %s to numeric - contains non-numeric data\n", col_name))
+              }
+            }
+          }
+        }
+        
+        values$uploaded_data <- processed_data
         values$data_summary <- validation_result
         values$data_type <- input$data_type
         # Don't set columns_mapped to true here - require explicit mapping confirmation
@@ -531,8 +628,7 @@ output$column_mappings_display <- renderText({
   validation <- values$validation_result
   
   # Create the mappings display
-  mappings_text <- "🔗 COLUMN MAPPINGS\n"
-  mappings_text <- paste0(mappings_text, paste(rep("─", 39), collapse = ""), "\n")
+  mappings_text <- ""
   
   if (data_type == "concentration") {
     # Standard concentration-time mappings
@@ -666,8 +762,6 @@ output$data_summary <- renderText({
   if (data_type == "concentration") {
     # Concentration-Time data summary (mappings now in separate column)
     paste0(
-      "📊 DATA SUMMARY\n",
-      "═══════════════════════════════════════\n",
       "Data Type: Concentration-Time\n",
       "Study Design: ", summary$design_type, "\n",
       "Subjects: ", summary$n_subjects, "\n",
@@ -685,13 +779,22 @@ output$data_summary <- renderText({
     )
   } else {
     # PK Parameters data summary (mappings now in separate column)
-    paste0(
-      "📊 DATA SUMMARY\n",
-      "═══════════════════════════════════════\n",
+    base_text <- paste0(
       "Data Type: PK Parameters\n",
       "Study Design: ", summary$design_type, "\n",
       "Subjects: ", summary$n_subjects, "\n",
-      "Treatments: ", paste(summary$treatments, collapse = ", "), " (", summary$n_treatments, " total)\n",
+      "Treatments: ", paste(summary$treatments, collapse = ", "), " (", summary$n_treatments, " total)\n"
+    )
+    
+    # Add group information if available
+    if (!is.null(summary$group_info) && isTRUE(summary$group_info$has_groups) && summary$group_info$n_groups > 1) {
+      groups_text <- paste0("Groups: ", summary$group_info$n_groups, "\n")
+      base_text <- paste0(base_text, groups_text)
+    }
+    
+    # Continue with PK parameters and other info
+    paste0(
+      base_text,
       "PK Parameters: ", summary$n_pk_parameters, "\n",
       if(isTRUE(length(summary$pk_parameters) > 0)) paste0("Parameters: ", paste(summary$pk_parameters, collapse = ", "), "\n") else "",
       "Total Observations: ", summary$total_observations, "\n",
@@ -1131,6 +1234,7 @@ output$concentration_column_mapper <- renderUI({
       
       # Additional optional columns
       optional_mappings <- list(
+        group = c("group", "grp", "cohort", "site", "batch", "study_group", "dose_group"),
         dose = c("dose", "dosage", "dose_amount"),
         weight = c("weight", "bw", "body_weight"),
         age = c("age", "subject_age"),
@@ -1214,6 +1318,7 @@ output$concentration_column_mapper <- renderUI({
                             "Concentration" = "concentration",
                             "Sequence" = "sequence",
                             "Period" = "period",
+                            "Group" = "group",
                             "Dose" = "dose",
                             "Weight" = "weight",
                             "Age" = "age",
@@ -1488,6 +1593,26 @@ observeEvent(input$confirm_concentration_mapping, {
   values$validation_result <- validation_result
   values$columns_mapped <- TRUE
   
+  # Additional safety: Force conversion of any remaining character PK parameters to numeric
+  if ("data_type" %in% names(values) && values$data_type == "pk_parameters") {
+    pk_param_patterns <- c("AUC", "Cmax", "Tmax", "half", "clearance", "volume", "lambda", "MRT")
+    
+    for (col_name in names(processed_data)) {
+      is_pk_param <- any(sapply(pk_param_patterns, function(pattern) {
+        grepl(pattern, col_name, ignore.case = TRUE)
+      }))
+      
+      if (is_pk_param && !is.numeric(processed_data[[col_name]])) {
+        numeric_values <- suppressWarnings(as.numeric(processed_data[[col_name]]))
+        if (!all(is.na(numeric_values))) {
+          cat(sprintf("[DEBUG] Column mapping: Force converting %s to numeric\n", col_name))
+          processed_data[[col_name]] <- numeric_values
+          values$uploaded_data <- processed_data
+        }
+      }
+    }
+  }
+  
   # Recreate data summary with mapped data
   values$data_summary <- create_data_summary_enhanced(processed_data)
   values$data_summary$column_mappings_confirmed <- TRUE
@@ -1521,6 +1646,7 @@ output$pk_parameter_selector <- renderUI({
         treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
         period = c("period", "per", "phase", "visit"),
         sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+        group = c("group", "grp", "cohort", "site", "batch", "study_group", "dose_group"),
         dose = c("dose", "dosage", "dose_amount"),
         weight = c("weight", "bw", "body_weight"),
         age = c("age", "subject_age"),
@@ -1620,6 +1746,7 @@ output$pk_parameter_selector <- renderUI({
                               "Treatment/Formulation" = "treatment",
                               "Sequence" = "sequence",
                               "Period" = "period",
+                              "Group" = "group",
                               "Dose" = "dose",
                               "Weight" = "weight",
                               "Age" = "age",
@@ -2145,6 +2272,23 @@ observeEvent(input$confirm_pk_mapping, {
   validation_result$user_specified <- TRUE
   validation_result$valid <- TRUE
   validation_result$errors <- character(0)
+  
+  # Additional safety: Force conversion of PK parameters to numeric before storing
+  pk_param_patterns <- c("AUC", "Cmax", "Tmax", "half", "clearance", "volume", "lambda", "MRT")
+  
+  for (col_name in names(processed_data)) {
+    is_pk_param <- any(sapply(pk_param_patterns, function(pattern) {
+      grepl(pattern, col_name, ignore.case = TRUE)
+    }))
+    
+    if (is_pk_param && !is.numeric(processed_data[[col_name]])) {
+      numeric_values <- suppressWarnings(as.numeric(processed_data[[col_name]]))
+      if (!all(is.na(numeric_values))) {
+        cat(sprintf("[DEBUG] PK mapping: Force converting %s to numeric\n", col_name))
+        processed_data[[col_name]] <- numeric_values
+      }
+    }
+  }
   
   values$uploaded_data <- processed_data
   values$validation_result <- validation_result

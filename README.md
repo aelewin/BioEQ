@@ -9,18 +9,34 @@
 
 BioEQ is a comprehensive R package and Shiny application for bioequivalence analysis, providing regulatory-compliant statistical analysis for pharmaceutical studies. BioEQ offers both programmatic R functions and an intuitive web interface.
 
-![DataUploadDemo](docs/images/Data-Upload.gif)
+**Data Upload**
+Upload complete data sets for complete NCA analysis (concentration-time) or data sets with pre-calculated PK parameters for each subject.
+
+![DataUploadDemo](docs/images/Data_Upload.gif)
+
+**Analysis Setup**
+Specify parameters for NCA, ANOVA, and BE analysis.
+
+![DataUploadDemo](docs/images/Analysis_Setup.gif)
+
+**Results**
+Summary tab displays results of BE assessment of primary parameters and carryover assessmnet (if performed). Individual T and R data are dislpayed in the PK comparison tab along with T/R ratios and means. Results of the NCA analysis for each subject are displayed in the Subject Data tab. ANOVA results are also displayed in the final tab. 
+
+![DataUploadDemo](docs/images/Results.gif)
+
+**Plots**
+Study data, including time-concentration and T/R ratios, are displayed in various plots with interactive functionality.
+
+![DataUploadDemo](docs/images/Plots.gif)
 
 ## ✨ Planned Features
 
-- **Regulatory Compliance**: FDA, EMA, and ICH M13A guideline adherence
-- **Comprehensive Analysis**: NCA, ANOVA, and bioequivalence assessment
-- **Study Designs**: 2×2×2 crossover, parallel, replicate designs
-- **Web Interface**: Professional Shiny application with drag-and-drop data upload
+- **Sample Size Calculation**: Include additional module to calculate sample size
+- **Comprehensive Analysis**: Expand NCA, ANOVA, and bioequivalence assessment functionality
+- **Study Designs**: Add replicate design functionality
 - **Report Generation**: Automated regulatory-compliant reports in multiple formats
-- **Validation**: Cross-validated with industry-standard software (WinNonlin, SAS)
-
-![ResultsDemo](docs/images/Results.gif)
+- **Validation**: Cross-validation with industry-standard software (WinNonlin, SAS)
+- **Fraud Detection**: Regulators only module with data-fraud detection functionality
 
 ## 🚀 Quick Start
 

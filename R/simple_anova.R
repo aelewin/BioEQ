@@ -46,7 +46,9 @@ detect_anova_design <- function(nca_data) {
 }
 
 #'
-perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", random_effects = "(1|subject)") {
+perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", random_effects = "(1|subject)",
+                                include_group_fixed = FALSE, include_group_random = FALSE, 
+                                include_group_treatment_interaction = FALSE) {
   
   cat("\n=== ANOVA Analysis ===\n")
   
@@ -141,6 +143,30 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
     cat("  ⚠️  Factor levels will be set alphabetically - verify T/R ratio interpretation\n")
   }
   
+  # Check for group effects and prepare group factor
+  has_groups <- FALSE
+  if ("group" %in% names(nca_data) && (include_group_fixed || include_group_random)) {
+    unique_groups <- unique(nca_data$group[!is.na(nca_data$group)])
+    if (length(unique_groups) > 1) {
+      has_groups <- TRUE
+      nca_data$grp <- as.factor(nca_data$group)
+      cat(sprintf("  ✓ Group factor detected with %d levels: %s\n", 
+                  length(unique_groups), paste(unique_groups, collapse = ", ")))
+      
+      if (include_group_fixed) {
+        cat("  📊 Including Group as fixed effect\n")
+      }
+      if (include_group_random) {
+        cat("  📊 Including Group as random effect\n")
+      }
+      if (include_group_treatment_interaction) {
+        cat("  📊 Including Group × Treatment interaction\n")
+      }
+    } else {
+      cat("  ℹ️  Group column found but only one group detected - ignoring group effects\n")
+    }
+  }
+  
   # Initialize results list
   anova_results <- list()
   
@@ -206,15 +232,39 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           # Fixed Effects Model using lm (all effects fixed)
           cat(sprintf("  🔧 Using Fixed Effects Model for %s...\n", param))
           
-          # Choose formula based on study design
+          # Choose formula based on study design and group effects
           if (study_design == "parallel") {
-            # For parallel design: Parameter ~ treatment
-            formula_str <- sprintf("%s ~ drug", param)
+            # For parallel design: Parameter ~ treatment [+ group effects]
+            formula_parts <- c("drug")
+            
+            if (has_groups && include_group_fixed) {
+              formula_parts <- c(formula_parts, "grp")
+              if (include_group_treatment_interaction) {
+                formula_parts <- c(formula_parts, "grp:drug")
+              }
+            }
+            
+            formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
             cat(sprintf("  📋 Parallel design model: %s\n", formula_str))
+            
           } else {
-            # For crossover design: Parameter ~ sequence + subject %in% sequence + period + treatment
-            formula_str <- sprintf("%s ~ seq + subj:seq + prd + drug", param)
-            cat(sprintf("  📋 Crossover design model: %s\n", formula_str))
+            # For crossover design: Parameter ~ sequence + subject %in% sequence + period + treatment [+ group effects]
+            if (has_groups && include_group_fixed) {
+              # For crossover with groups: subjects are nested within groups
+              # Model: Parameter ~ group + sequence %in% group + subject %in% (group:sequence) + period + treatment
+              formula_parts <- c("grp", "seq:grp", "subj:(grp:seq)", "prd", "drug")
+              
+              if (include_group_treatment_interaction) {
+                formula_parts <- c(formula_parts, "grp:drug")
+              }
+              
+              formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
+              cat(sprintf("  📋 Crossover design with groups model: %s\n", formula_str))
+            } else {
+              # Standard crossover without groups
+              formula_str <- sprintf("%s ~ seq + subj:seq + prd + drug", param)
+              cat(sprintf("  📋 Crossover design model: %s\n", formula_str))
+            }
           }
           
           model_formula <- as.formula(formula_str)
@@ -288,15 +338,28 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           cat(sprintf("  [DEBUG] Parsing random effects: %s\n", random_effects))
           
           # For nlme, we need to create the proper random effects formula
-          # Default for 2x2x2 crossover: random intercept by subject
-          if (random_effects == "(1|subject)") {
-            # Standard random intercept model
-            random_formula <- ~ 1 | subj
-            grouping_var <- "subj"
+          # Handle group effects in random effects specification
+          if (has_groups && include_group_random) {
+            # Modify random effects to include groups
+            if (random_effects == "(1|subject)") {
+              # Add group nesting: (1|group/subject) or (1|subject) with group in fixed effects
+              random_formula <- ~ 1 | grp/subj
+              grouping_var <- "grp"
+              cat("  📊 Modified random effects to include groups: ~ 1 | grp/subj\n")
+            } else {
+              # Try to parse user-specified random effects and add group
+              random_formula <- as.formula(paste("~", gsub("^\\(|\\)$", "", random_effects)))
+              grouping_var <- all.vars(random_formula)[length(all.vars(random_formula))]
+            }
           } else {
-            # Try to parse user-specified random effects
-            random_formula <- as.formula(paste("~", gsub("^\\(|\\)$", "", random_effects)))
-            grouping_var <- all.vars(random_formula)[length(all.vars(random_formula))]
+            # Standard random effects without groups
+            if (random_effects == "(1|subject)") {
+              random_formula <- ~ 1 | subj
+              grouping_var <- "subj"
+            } else {
+              random_formula <- as.formula(paste("~", gsub("^\\(|\\)$", "", random_effects)))
+              grouping_var <- all.vars(random_formula)[length(all.vars(random_formula))]
+            }
           }
           
           cat(sprintf("  [DEBUG] Random formula: %s, grouping var: %s\n", deparse(random_formula), grouping_var))
@@ -307,14 +370,33 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
                         grouping_var, paste(names(complete_data), collapse=", ")))
           }
           
-          # Choose formula based on study design
+          # Choose formula based on study design and group effects
           if (study_design == "parallel") {
-            # For parallel design: Parameter ~ treatment (no period effect)
-            formula_str <- sprintf("%s ~ drug", param)
+            # For parallel design: Parameter ~ treatment [+ group effects]
+            formula_parts <- c("drug")
+            
+            if (has_groups && include_group_fixed) {
+              formula_parts <- c(formula_parts, "grp")
+              if (include_group_treatment_interaction) {
+                formula_parts <- c(formula_parts, "grp:drug")
+              }
+            }
+            
+            formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
             cat(sprintf("  📋 Parallel design model: %s\n", formula_str))
+            
           } else {
-            # For crossover design: Parameter ~ sequence + period + treatment (fixed effects)
-            formula_str <- sprintf("%s ~ seq + prd + drug", param)
+            # For crossover design: Parameter ~ sequence + period + treatment [+ group effects]
+            formula_parts <- c("seq", "prd", "drug")
+            
+            if (has_groups && include_group_fixed) {
+              formula_parts <- c("grp", formula_parts)
+              if (include_group_treatment_interaction) {
+                formula_parts <- c(formula_parts, "grp:drug")
+              }
+            }
+            
+            formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
             cat(sprintf("  📋 Crossover design model: %s\n", formula_str))
           }
           model_formula <- as.formula(formula_str)

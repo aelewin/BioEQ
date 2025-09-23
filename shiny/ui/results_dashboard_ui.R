@@ -171,6 +171,89 @@ results_dashboard_ui <- function(id) {
           color: var(--navy-primary);
           transform: translateY(-1px);
         }
+        
+        /* PK Comparison Layout Styles */
+        .pk-comparison-left-panel, .pk-comparison-right-panel {
+          padding: 0 10px;
+        }
+        
+        .pk-comparison-left-panel .panel,
+        .pk-comparison-right-panel .panel {
+          border: 1px solid var(--neutral-200);
+          border-radius: 12px;
+          box-shadow: 0 4px 15px rgba(30, 58, 95, 0.1);
+          margin-bottom: 0;
+        }
+        
+        .pk-comparison-left-panel .panel-heading,
+        .pk-comparison-right-panel .panel-heading {
+          background: linear-gradient(135deg, var(--navy-primary) 0%, var(--navy-secondary) 100%);
+          color: var(--white);
+          border-radius: 12px 12px 0 0;
+          padding: 15px 20px;
+          border: none;
+        }
+        
+        .pk-comparison-left-panel .panel-body,
+        .pk-comparison-right-panel .panel-body {
+          padding: 20px;
+          background: var(--white);
+          border-radius: 0 0 12px 12px;
+        }
+        
+        .pk-comparison-left-panel .panel-title,
+        .pk-comparison-right-panel .panel-title {
+          font-size: 16px;
+          font-weight: 600;
+          margin: 0;
+        }
+        
+        .pk-comparison-section h5,
+        .stats-subsection h6 {
+          color: var(--navy-primary);
+          font-weight: 600;
+          margin-bottom: 15px;
+          border-bottom: 2px solid var(--neutral-200);
+          padding-bottom: 8px;
+        }
+        
+        .stats-subsection {
+          margin-bottom: 20px;
+        }
+        
+        .stats-subsection:last-child {
+          margin-bottom: 0;
+        }
+        
+        /* DataTable container styling for PK comparison */
+        .pk-comparison-right-panel .dataTables_wrapper {
+          overflow: visible;
+          margin: 0;
+          width: 100%;
+        }
+        
+        .pk-comparison-right-panel .dataTable {
+          width: 100% !important;
+          margin: 0 !important;
+          table-layout: fixed !important;
+        }
+        
+        .pk-comparison-right-panel .dataTable th,
+        .pk-comparison-right-panel .dataTable td {
+          padding: 8px 4px !important;
+          font-size: 13px !important;
+          border-right: 1px solid #dee2e6 !important;
+        }
+        
+        .pk-comparison-right-panel .dataTable th:last-child,
+        .pk-comparison-right-panel .dataTable td:last-child {
+          border-right: none !important;
+        }
+        
+        .pk-comparison-right-panel .dataTables_scrollHead,
+        .pk-comparison-right-panel .dataTables_scrollBody {
+          overflow: visible;
+        }
       "))
     ),
     
@@ -247,26 +330,50 @@ results_dashboard_ui <- function(id) {
             br(),
             fluidRow(
               column(12,
-                h4("PK Parameter Comparison - Test vs Reference"),
-                p("Individual subject T/R comparisons with comprehensive summary statistics"),
+                h4("Test vs Reference Comparison"),
+                p("Individual subject T/R ratios with summary statistics for each PK parameter analyzed"),
                 br(),
                 
-                # Parameter selection dropdown
+                # Parameter selection - single line layout
                 fluidRow(
-                  column(4,
+                  column(12,
                     wellPanel(
-                      h5("Select PK Parameter"),
-                      uiOutput(ns("pk_comparison_parameter_select_ui")),
-                      br(),
-                      actionButton(ns("refresh_pk_comparison"), 
-                                 icon = icon("refresh"), 
-                                 "Refresh Display",
-                                 class = "btn-sm btn-primary")
+                      style = "padding: 15px; margin-bottom: 20px;",
+                      fluidRow(
+                        column(3,
+                          tags$label("Select PK Parameter:", 
+                                   style = "font-weight: 600; margin-top: 8px; display: inline-block;")
+                        ),
+                        column(6,
+                          uiOutput(ns("pk_comparison_parameter_select_ui"))
+                        ),
+                        column(3,
+                          actionButton(ns("refresh_pk_comparison"), 
+                                     icon = icon("refresh"), 
+                                     "Refresh Display",
+                                     class = "btn-sm btn-primary",
+                                     style = "margin-top: 0px;")
+                        )
+                      )
+                    )
+                  )
+                ),
+                
+                # Two-column layout for results
+                fluidRow(
+                  column(6,
+                    # Left column: Individual subject data table
+                    div(
+                      class = "pk-comparison-left-panel",
+                      uiOutput(ns("pk_comparison_table_display"))
                     )
                   ),
-                  column(8,
-                    # Display area for the comparison results
-                    uiOutput(ns("pk_comparison_display"))
+                  column(6,
+                    # Right column: Summary statistics
+                    div(
+                      class = "pk-comparison-right-panel", 
+                      uiOutput(ns("pk_comparison_stats_display"))
+                    )
                   )
                 )
               )
