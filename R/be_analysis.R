@@ -168,14 +168,34 @@ perform_rsabe_placeholder <- function(data, design = "auto", params = list()) {
 #' @export
 perform_abel_placeholder <- function(data, design = "auto", params = list()) {
   
-  # Get ABEL method selection (A or B)
-  abel_method <- params$abel_method %||% "A"
-  if (!abel_method %in% c("A", "B")) {
-    cat("⚠️  Invalid ABEL method '", abel_method, "', defaulting to Method A\n")
-    abel_method <- "A"
+  # Derive replicateBE method from ANOVA model selection
+  # Fixed Effects → Method A (linear model)
+  # Mixed Effects (nlme/Satterthwaite/Kenward-Roger) → Method B with appropriate DF
+  anova_model <- params$anova_model %||% "fixed"
+  
+  # Determine method and DF approximation
+  if (anova_model == "fixed") {
+    use_method_a <- TRUE
+    method_label <- "Method A (ANOVA/Linear Model)"
+    df_method <- NULL  # Not used for Method A
+  } else {
+    use_method_a <- FALSE
+    # Extract DF method from anova_model string
+    if (grepl("satterthwaite", anova_model, ignore.case = TRUE)) {
+      df_method <- "satterthwaite"
+      method_label <- "Method B (Satterthwaite DF)"
+    } else if (grepl("kenward", anova_model, ignore.case = TRUE)) {
+      df_method <- "kenward-roger"
+      method_label <- "Method B (Kenward-Roger DF)"
+    } else {
+      # Default for "nlme" or other mixed models
+      df_method <- "sas"
+      method_label <- "Method B (SAS default DF)"
+    }
   }
   
-  cat(sprintf("🔬 Performing ABEL analysis using replicateBE::method.%s...\n", abel_method))
+  cat(sprintf("🔬 Performing ABEL analysis using replicateBE::%s...\n", method_label))
+  cat(sprintf("   ANOVA Model: %s\n", anova_model))
   
   # Extract parameters
   alpha <- params$alpha_level %||% 0.05
@@ -199,18 +219,83 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
   all_results <- list()
   ci_list <- list()
   conclusion_list <- list()
+  processed_params <- c()  # Track which base parameters we've already processed
   
   for (param in parameters) {
-    # Skip log-transformed parameters - replicateBE does log transformation internally
-    if (grepl("^ln", param)) {
-      cat(sprintf("⚠️  Skipping %s - replicateBE performs log transformation internally\n", param))
+    
+    # Determine whether to use non-log or log-transformed data
+    # Priority: Non-log data > Log-transformed data
+    # Detection: Check if parameter starts with "ln" or "log"
+    
+    is_log_param <- grepl("^(ln|log)", param, ignore.case = TRUE)
+    
+    # Extract base parameter name for tracking duplicates
+    if (is_log_param) {
+      base_param_name <- sub("^(ln|log)", "", param, ignore.case = TRUE)
+    } else {
+      base_param_name <- param
+    }
+    
+    # Check if we've already processed this base parameter
+    if (base_param_name %in% processed_params) {
+      cat(sprintf("⏭️  Skipping '%s' - already processed as '%s'\n", param, base_param_name))
       next
     }
     
-    if (!param %in% names(data)) {
-      cat("⚠️  Parameter", param, "not found in data, skipping...\n")
+    # If this is a log parameter, check if non-log version exists
+    if (is_log_param) {
+      # Extract base parameter name (e.g., "Cmax" from "lnCmax")
+      base_param <- sub("^(ln|log)", "", param, ignore.case = TRUE)
+      
+      if (base_param %in% names(data)) {
+        # Non-log version exists - use that instead
+        cat(sprintf("ℹ️  Found non-log version '%s' for '%s' - using non-log data (replicateBE will log-transform)\n", 
+                    base_param, param))
+        param_to_use <- base_param
+        data_is_logged <- FALSE
+      } else {
+        # Only log version available - use it
+        cat(sprintf("ℹ️  Only log-transformed '%s' available - using pre-logged data\n", param))
+        param_to_use <- param
+        data_is_logged <- TRUE
+      }
+    } else {
+      # This is a non-log parameter
+      # Check if log version exists and warn if both present
+      log_versions <- c(paste0("ln", param), paste0("log", param), paste0("Log", param))
+      found_log <- log_versions[log_versions %in% names(data)]
+      
+      if (length(found_log) > 0 && param %in% names(data)) {
+        # Both exist - prefer non-log
+        cat(sprintf("ℹ️  Using non-log '%s' (ignoring log version: %s)\n", 
+                    param, paste(found_log, collapse = ", ")))
+        param_to_use <- param
+        data_is_logged <- FALSE
+      } else if (length(found_log) > 0) {
+        # Only log version exists
+        cat(sprintf("ℹ️  Non-log '%s' not found, using log-transformed version '%s'\n", 
+                    param, found_log[1]))
+        param_to_use <- found_log[1]
+        data_is_logged <- TRUE
+      } else if (param %in% names(data)) {
+        # Only non-log exists
+        param_to_use <- param
+        data_is_logged <- FALSE
+      } else {
+        # Neither exists
+        cat("⚠️  Parameter", param, "not found in data, skipping...\n")
+        next
+      }
+    }
+    
+    # Check if the parameter exists in data
+    if (!param_to_use %in% names(data)) {
+      cat("⚠️  Parameter", param_to_use, "not found in data, skipping...\n")
       next
     }
+    
+    # Mark this base parameter as processed
+    processed_params <- c(processed_params, base_param_name)
     
     tryCatch({
       # Prepare data for replicateBE (expects lowercase: subject, period, sequence, treatment, PK)
@@ -219,7 +304,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         period = as.factor(data$Period),
         sequence = as.factor(data$Sequence),
         treatment = as.factor(data$Formulation),
-        PK = as.numeric(data[[param]]),
+        PK = as.numeric(data[[param_to_use]]),
         stringsAsFactors = FALSE
       )
       
@@ -227,7 +312,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       replicate_data <- replicate_data[!is.na(replicate_data$PK), ]
       
       if (nrow(replicate_data) == 0) {
-        stop("No valid data for parameter ", param)
+        stop("No valid data for parameter ", param_to_use)
       }
       
       # Call replicateBE method (A or B) for ABEL (EMA method)
@@ -239,27 +324,51 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       write.csv(replicate_data, paste0(temp_file, ".csv"), row.names = FALSE, quote = FALSE)
       
       cat(sprintf("  - Wrote temp file: %s.csv\n", temp_file))
+      cat(sprintf("  - Using %s data (logtrans = %s)\n", 
+                  ifelse(data_is_logged, "pre-logged", "non-log"), 
+                  ifelse(data_is_logged, "FALSE", "TRUE")))
       
-      # Select method function
-      method_function <- if (abel_method == "A") replicateBE::method.A else replicateBE::method.B
-      
-      abel_result <- tryCatch({
-        method_function(
-          path.in = temp_dir,
-          file = basename(temp_file),
-          ext = "csv",
-          print = FALSE,
-          details = TRUE,
-          alpha = alpha,
-          regulator = "EMA",  # EMA for ABEL
-          logtrans = TRUE  # Let replicateBE do the log transformation
-        )
-      }, error = function(e) {
-        cat(sprintf("[ERROR] replicateBE::method.%s() failed for %s: %s\n", abel_method, param, e$message))
-        cat("[DEBUG] Traceback:\n")
-        print(traceback())
-        stop(e)
-      })
+      # Call appropriate replicateBE method based on ANOVA model selection
+      if (use_method_a) {
+        # Method A: Linear model (ANOVA-based)
+        abel_result <- tryCatch({
+          replicateBE::method.A(
+            path.in = temp_dir,
+            file = basename(temp_file),
+            ext = "csv",
+            print = FALSE,
+            details = TRUE,
+            alpha = alpha,
+            regulator = "EMA",  # EMA for ABEL
+            logtrans = !data_is_logged  # Only log-transform if data is NOT already logged
+          )
+        }, error = function(e) {
+          cat(sprintf("[ERROR] replicateBE::method.A() failed for %s: %s\n", param, e$message))
+          cat("[DEBUG] Traceback:\n")
+          print(traceback())
+          stop(e)
+        })
+      } else {
+        # Method B: Mixed effects model with specified DF approximation
+        abel_result <- tryCatch({
+          replicateBE::method.B(
+            path.in = temp_dir,
+            file = basename(temp_file),
+            ext = "csv",
+            print = FALSE,
+            details = TRUE,
+            alpha = alpha,
+            regulator = "EMA",  # EMA for ABEL
+            logtrans = !data_is_logged,  # Only log-transform if data is NOT already logged
+            ola = df_method  # DF approximation: "sas", "satterthwaite", "kenward-roger"
+          )
+        }, error = function(e) {
+          cat(sprintf("[ERROR] replicateBE::method.B(ola='%s') failed for %s: %s\n", df_method, param, e$message))
+          cat("[DEBUG] Traceback:\n")
+          print(traceback())
+          stop(e)
+        })
+      }
       
       # Clean up temp file
       unlink(paste0(temp_file, ".csv"))
@@ -289,6 +398,17 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       # BE conclusion
       be_pass <- abel_result[1, "BE"] == "pass"
       
+      # Extract ANOVA-related information from replicateBE output
+      # These will be used to populate ANOVA results display
+      anova_df <- abel_result[1, "DF"]  # Degrees of freedom
+      cv_wt <- abel_result[1, "CVwT(%)"]  # CV% for test
+      n_total <- abel_result[1, "n"]  # Total subjects
+      n_tt <- abel_result[1, "nTT"]  # Subjects with both test treatments
+      n_rr <- abel_result[1, "nRR"]  # Subjects with both reference treatments
+      sw_t <- abel_result[1, "swT"]  # Within-subject SD for test
+      sw_r <- abel_result[1, "swR"]  # Within-subject SD for reference
+      sw_ratio <- abel_result[1, "sw.ratio"]  # Ratio of within-subject SDs
+      
       # Convert percentages back to ratios for display consistency
       gmr <- pe / 100
       ci_lo <- ci_lower / 100
@@ -298,9 +418,10 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       
       # Store confidence interval as LIST (matching ABE format)
       # Must match structure from extract_be_from_anova for compatibility with results display
-      method_label <- sprintf("ABEL Method %s (EMA)", abel_method)
-      ci_list[[param]] <- list(
-        parameter = param,
+      # Use method_label from ANOVA model determination above
+      # Store under BASE parameter name to avoid duplicates (e.g., "Cmax" not "lnCmax")
+      ci_list[[base_param_name]] <- list(
+        parameter = base_param_name,  # Use base name for display
         point_estimate = pe,  # Already as percentage from replicateBE
         ci_lower = ci_lower,  # Already as percentage
         ci_upper = ci_upper,  # Already as percentage
@@ -312,13 +433,44 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         scaled_lower_limit = scaled_lower,  # Scaled lower limit (%)
         scaled_upper_limit = scaled_upper,  # Scaled upper limit (%)
         method = method_label,
-        regulator = "EMA"
+        regulator = "EMA",
+        # ANOVA-related fields from replicateBE
+        degrees_freedom = anova_df,
+        cv_wt = cv_wt,  # CV for test
+        n_subjects = n_total,
+        sw_test = sw_t,
+        sw_reference = sw_r,
+        sw_ratio = sw_ratio
       )
       
-      conclusion_list[[param]] <- be_pass
+      # Store ANOVA-like results for this parameter
+      # Create structure similar to standard ANOVA output for results display
+      # Store under BASE parameter name to avoid duplicates
+      all_results[[base_param_name]] <- list(
+        model = NULL,  # replicateBE doesn't return model object
+        anova = data.frame(
+          Source = c("Treatment", "Subject", "Period", "Residual"),
+          DF = c(1, n_total - 1, design_info$n_periods - 1, anova_df),
+          MS = c(NA, NA, NA, sw_r^2),  # Only residual MS available from sw_r
+          stringsAsFactors = FALSE
+        ),
+        treatment_coef = log(gmr),  # Log of GMR
+        treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha/2, anova_df),  # Back-calculate SE
+        residual_mse = sw_r^2,
+        residual_df = anova_df,
+        n_observations = n_total * design_info$n_periods,
+        anova_method = if(use_method_a) "lm" else "nlme",
+        df_method = if(use_method_a) NA else df_method,
+        cv_wr_percent = cv_wr,
+        cv_wt_percent = cv_wt,
+        replicatebe_output = abel_result[1, ],  # Store full replicateBE output row
+        data_was_logged = data_is_logged  # Track whether we used pre-logged data
+      )
+      
+      conclusion_list[[base_param_name]] <- be_pass
       
       cat(sprintf("  ✓ %s: GMR=%.4f, 90%% CI [%.4f, %.4f], CV_WR=%.2f%%, BE=%s\n",
-                  param, gmr, ci_lo, ci_hi, cv_wr, ifelse(be_pass, "Pass", "Fail")))
+                  base_param_name, gmr, ci_lo, ci_hi, cv_wr, ifelse(be_pass, "Pass", "Fail")))
       
     }, error = function(e) {
       cat("❌ Error analyzing", param, ":", e$message, "\n")
@@ -338,13 +490,26 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
   # Combine into results structure matching BioEQ format
   # NOTE: Keep confidence_intervals as a LIST (not data frame) to match ABE/standard format
   # Each element should be: confidence_intervals[[param]] = list(parameter, point_estimate, ci_lower, ci_upper, ...)
+  # IMPORTANT: Wrap ANOVA results in nested structure to match simple ANOVA format
+  # Display expects: be_res$anova_results$anova_results[[param]]
   results <- list(
     confidence_intervals = ci_list,  # Keep as list, NOT data frame
     be_conclusions = be_conclusions_formatted,
+    anova_results = list(
+      anova_results = all_results,  # Nested structure for display compatibility
+      design = design_info$design_type,
+      parameters = names(all_results),
+      note = sprintf("ANOVA performed by replicateBE %s", method_label)
+    ),
     design_type = design_info$design_type,
     n_subjects = length(unique(data$Subject)),
     n_periods = design_info$n_periods,
-    analysis_method = sprintf("ABEL Method %s (EMA)", abel_method),
+    analysis_type = "ABEL",  # CRITICAL: Required for UI to recognize ABEL analysis
+    analysis_method = sprintf("ABEL %s (EMA)", method_label),
+    be_method = sprintf("Average Bioequivalence with Expanding Limits (ABEL) - %s", method_label),
+    anova_model = anova_model,
+    replicatebe_method = if(use_method_a) "A" else "B",
+    df_approximation = if(use_method_a) NA else df_method,
     alpha_level = alpha,
     limits_justification = "Average Bioequivalence with Expanding Limits"
   )

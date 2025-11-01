@@ -279,6 +279,79 @@ calculate_pk_comparison <- function(nca_data, param_name) {
   ))
 }
 
+# Format replicateBE ANOVA results for display
+format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
+  
+  # Extract replicateBE output
+  rbe_output <- param_result$replicatebe_output
+  
+  # Create summary card
+  summary_card <- div(class = "card mb-3",
+    div(class = "card-header bg-info text-white",
+      h5(class = "card-title mb-0", 
+        icon("flask"), 
+        sprintf(" replicateBE ANOVA Results for %s", param_name)
+      )
+    ),
+    div(class = "card-body",
+      div(class = "row",
+        div(class = "col-md-4",
+          h6("Study Design:"),
+          tags$ul(
+            tags$li(sprintf("Design: %s", rbe_output$Design)),
+            tags$li(sprintf("Method: %s", rbe_output$Method)),
+            tags$li(sprintf("Total Subjects: %d", rbe_output$n)),
+            tags$li(sprintf("Test Subjects: %d", rbe_output$nTT)),
+            tags$li(sprintf("Reference Subjects: %d", rbe_output$nRR)),
+            tags$li(sprintf("Degrees of Freedom: %d", rbe_output$DF))
+          )
+        ),
+        div(class = "col-md-4",
+          h6("Variability:"),
+          tags$ul(
+            tags$li(sprintf("CV Within-Subject (Test): %.2f%%", rbe_output$`CVwT(%)`)),
+            tags$li(sprintf("CV Within-Subject (Reference): %.2f%%", rbe_output$`CVwR(%)`)),
+            tags$li(sprintf("Within-Subject SD (Test): %.4f", rbe_output$swT)),
+            tags$li(sprintf("Within-Subject SD (Reference): %.4f", rbe_output$swR)),
+            tags$li(sprintf("SD Ratio (T/R): %.4f", rbe_output$sw.ratio))
+          )
+        ),
+        div(class = "col-md-4",
+          h6("BE Assessment:"),
+          tags$ul(
+            tags$li(sprintf("Point Estimate: %.2f%%", rbe_output$`PE(%)`)),
+            tags$li(sprintf("90%% CI Lower: %.2f%%", rbe_output$`CL.lo(%)`)),
+            tags$li(sprintf("90%% CI Upper: %.2f%%", rbe_output$`CL.hi(%)`)),
+            tags$li(sprintf("Scaled Lower Limit: %.2f%%", rbe_output$`L(%)`)),
+            tags$li(sprintf("Scaled Upper Limit: %.2f%%", rbe_output$`U(%)`)),
+            tags$li(
+              class = if(rbe_output$BE == "pass") "text-success font-weight-bold" else "text-danger font-weight-bold",
+              sprintf("BE Result: %s", toupper(rbe_output$BE))
+            )
+          )
+        )
+      )
+    )
+  )
+  
+  # Create informational note
+  info_note <- div(class = "alert alert-info",
+    h6(icon("info-circle"), " About replicateBE Analysis"),
+    p(paste0(
+      "This analysis was performed using the replicateBE package (EMA ABEL). ",
+      "The package implements ", 
+      if(rbe_output$Method == "A") "Method A (Linear Model/ANOVA)" else sprintf("Method B (Mixed Model with %s DF approximation)", be_res$df_approximation %||% "default"),
+      ". Results include within-subject variability estimates and scaled bioequivalence limits."
+    ))
+  )
+  
+  # Combine all elements
+  return(tagList(
+    summary_card,
+    info_note
+  ))
+}
+
 # Format simple ANOVA results for display
 format_simple_anova_results <- function(param_result, param_name) {
   
@@ -1370,11 +1443,19 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         analysis_header <- tagList(
           div(class = "well", style = "background-color: #f8f9fa; border: 1px solid #dee2e6;",
             h4(icon("chart-line"), paste("Analysis Type:", be_method), style = "color: #495057; margin-bottom: 10px;"),
-            if (analysis_type %in% c("RSABE", "ABEL")) {
+            if (analysis_type == "RSABE") {
+              # RSABE is not implemented - show placeholder
               div(class = "alert alert-info", style = "margin-bottom: 0;",
                 icon("info-circle"), " ",
-                strong("Note: "), paste(analysis_type, "analysis requested but currently using ABE methodology."),
-                br(), "Full", analysis_type, "implementation coming soon."
+                strong("Note: "), "RSABE analysis requested but currently using ABE methodology.",
+                br(), "Full RSABE implementation coming soon."
+              )
+            } else if (analysis_type == "ABEL") {
+              # ABEL is implemented - show info about EMA method
+              div(class = "alert alert-success", style = "margin-bottom: 0;",
+                icon("check-circle"), " ",
+                strong("ABEL Analysis: "), "Average Bioequivalence with Expanding Limits (EMA) using replicateBE package.",
+                br(), "Results include scaled acceptance limits based on within-subject variability."
               )
             } else {
               p("Standard bioequivalence analysis with fixed limits", style = "margin-bottom: 0; color: #6c757d;")
@@ -1887,8 +1968,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           ))
         }
         
-        # Format simple ANOVA results for display
-        return(format_simple_anova_results(param_result, param))
+        # Check if this is replicateBE result (has replicatebe_output field)
+        if (!is.null(param_result$replicatebe_output)) {
+          # Format replicateBE ANOVA results
+          return(format_replicatebe_anova_results(param_result, param, be_res))
+        } else {
+          # Format simple ANOVA results for display
+          return(format_simple_anova_results(param_result, param))
+        }
         
       }, error = function(e) {
         div(class = "alert alert-danger",

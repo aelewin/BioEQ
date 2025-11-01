@@ -563,31 +563,22 @@ tagList(
                 )
               ),
               
-              # Conditional panel for ABEL method selection
+              # Info panel for ABEL (explaining that ANOVA model selection determines the method)
               conditionalPanel(
                 condition = "input.be_analysis_type == 'ABEL'",
-                h5("ABEL Method (EMA)",
-                   help_icon("abel_method", "Select statistical method for ABEL analysis", 
-                            "ABEL Method Selection", 
-                            "<p><strong>Method A (ANOVA-based):</strong> Traditional ANOVA approach for analyzing replicate designs. This is the default method specified in EMA guidelines.</p>
-                             <p><strong>Method B (Mixed Model):</strong> Uses a mixed-effects model that accounts for subjects as random effects. This method is also acceptable under EMA guidelines and may be more appropriate when subject variability is a concern.</p>
-                             <p>Both methods are scientifically valid for ABEL analysis. Method A is more commonly used in regulatory submissions.</p>")
-                ),
-                div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
-                  radioButtons(
-                    "abel_method",
-                    label = NULL,
-                    choices = list(
-                      "Method A - ANOVA (default)" = "A",
-                      "Method B - Mixed Model" = "B"
-                    ),
-                    selected = "A",
-                    inline = FALSE
+                div(style = "margin-top: 15px; padding: 15px; background-color: #e7f3ff; border-left: 4px solid #2196F3; border-radius: 5px;",
+                  h6(tags$strong(tags$i(class="fa fa-info-circle"), " ABEL Method Selection"), 
+                     style = "color: #1976D2; margin-bottom: 10px;"
                   ),
-                  div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
-                    "• Method A: ANOVA-based approach (most common)",
-                    tags$br(),
-                    "• Method B: Mixed-effects model with random subject effects"
+                  div(style = "color: #555; font-size: 0.9em;",
+                    p(style = "margin-bottom: 8px;", 
+                      tags$strong("The ANOVA Model selection above determines which replicateBE method will be used:")),
+                    tags$ul(style = "margin-bottom: 0; padding-left: 20px;",
+                      tags$li(tags$strong("Fixed Effects"), " → Method A (Linear Model)"),
+                      tags$li(tags$strong("Mixed Effects - nlme"), " → Method B (SAS default DF)"),
+                      tags$li(tags$strong("Mixed Effects - Satterthwaite"), " → Method B (Satterthwaite DF)"),
+                      tags$li(tags$strong("Mixed Effects - Kenward-Roger"), " → Method B (Kenward-Roger DF)")
+                    )
                   )
                 )
               ),

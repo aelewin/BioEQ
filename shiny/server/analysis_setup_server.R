@@ -494,7 +494,6 @@ observeEvent(input$run_analysis, {
   analysis_config <- list(
     study_design = input$study_design %||% "auto",
     be_analysis_type = input$be_analysis_type %||% "ABE",  # NEW: BE analysis type
-    abel_method = input$abel_method %||% "A",  # NEW: ABEL method selection (A or B)
     auc_method = input$auc_method %||% "mixed",
     lambda_z_method = input$lambda_z_method %||% "aic",
     lambda_z_points = input$lambda_z_points %||% 3,
@@ -850,7 +849,41 @@ observeEvent(input$run_analysis, {
       cat(sprintf("[DEBUG] Available expanded parameters: %s\n", paste(available_selected_params, collapse = ", ")))
       cat(sprintf("[DEBUG] Numeric parameters for ANOVA: %s\n", paste(numeric_params, collapse = ", ")))
       
-      if (length(numeric_params) > 0) {
+      # Check if this is a replicate design with ABEL selected
+      # If so, skip separate ANOVA and let replicateBE handle it
+      # Detect design from data or use configured design
+      detected_study_design <- analysis_config$detected_design %||% analysis_config$study_design
+      
+      # Also try to detect from data if still "auto"
+      if (is.null(detected_study_design) || detected_study_design == "auto") {
+        tryCatch({
+          replicate_check <- detect_replicate_design(nca_results)
+          if (replicate_check$is_replicate) {
+            detected_study_design <- replicate_check$design_type
+          }
+        }, error = function(e) {
+          detected_study_design <- "2x2x2"  # Default fallback
+        })
+      }
+      
+      is_replicate_design <- detected_study_design %in% c("2x2x3", "2x2x4", "replicate") || 
+                            grepl("replicate", detected_study_design, ignore.case = TRUE)
+      is_abel_analysis <- analysis_config$be_analysis_type == "ABEL"
+      
+      if (is_replicate_design && is_abel_analysis) {
+        cat("[INFO] ⏭️  Skipping separate ANOVA for replicate design with ABEL\n")
+        cat(sprintf("[INFO]    Design: %s, BE Type: %s\n", detected_study_design, analysis_config$be_analysis_type))
+        cat("[INFO]    replicateBE will perform integrated ANOVA + BE analysis\n")
+        
+        # Create placeholder ANOVA results structure
+        anova_results <- list(
+          anova_results = list(),  # Empty - will be populated by replicateBE
+          design = detected_study_design,
+          parameters = available_selected_params,
+          note = "ANOVA performed by replicateBE during ABEL analysis"
+        )
+        
+      } else if (length(numeric_params) > 0) {
         
         tryCatch({
           cat("[DEBUG] Running simple ANOVA analysis...\n")
@@ -904,8 +937,13 @@ observeEvent(input$run_analysis, {
       }
     }
     
-    # Store ANOVA results
-    values$anova_results <- anova_results
+    # Store ANOVA results (but NOT if we're doing ABEL - it will be populated later from replicateBE)
+    if (!(is_replicate_design && is_abel_analysis)) {
+      values$anova_results <- anova_results
+      cat("[DEBUG] Stored ANOVA results (non-ABEL path)\n")
+    } else {
+      cat("[DEBUG] Skipping ANOVA results storage - will be populated by replicateBE\n")
+    }
     
     Sys.sleep(1.5)
     
@@ -1165,9 +1203,36 @@ observeEvent(input$run_analysis, {
         )
       )
       
-      # Store the real BE analysis results and add ANOVA results
+      # Store the real BE analysis results and merge ANOVA results
       values$be_results <- be_analysis_result
-      values$be_results$anova_results <- anova_results  # Add ANOVA results to BE results
+      
+      # Debug: Check what we got from BE analysis
+      cat("[DEBUG] BE analysis complete. Checking ANOVA results...\n")
+      cat(sprintf("[DEBUG] BE analysis type: %s\n", analysis_config$be_analysis_type))
+      cat(sprintf("[DEBUG] BE result has anova_results: %s\n", !is.null(be_analysis_result$anova_results)))
+      if (!is.null(be_analysis_result$anova_results)) {
+        cat(sprintf("[DEBUG] anova_results length: %d\n", length(be_analysis_result$anova_results)))
+        cat(sprintf("[DEBUG] anova_results names: %s\n", paste(names(be_analysis_result$anova_results), collapse = ", ")))
+      }
+      
+      # For ABEL with replicate designs, ANOVA results come from replicateBE
+      # For other designs, use the separate ANOVA results
+      if (analysis_config$be_analysis_type == "ABEL" && !is.null(be_analysis_result$anova_results) && length(be_analysis_result$anova_results) > 0) {
+        # replicateBE provides ANOVA results - already in proper nested structure
+        # Do NOT re-wrap - just use directly
+        values$anova_results <- be_analysis_result$anova_results
+        cat(sprintf("[INFO] ✅ Using ANOVA results from replicateBE (%d parameters)\n", 
+                    length(be_analysis_result$anova_results$anova_results)))
+      } else {
+        # For ABE or when ABEL has no ANOVA results, use the separate ANOVA results
+        if (!is.null(anova_results) && !is.null(anova_results$anova_results)) {
+          values$anova_results <- anova_results
+          values$be_results$anova_results <- anova_results
+          cat("[INFO] ✅ Using separate ANOVA results\n")
+        } else {
+          cat("[WARNING] ⚠️  No ANOVA results available from either source\n")
+        }
+      }
       
       cat("✅ Bioequivalence Analysis Completed Successfully!\n")
       
