@@ -40,10 +40,10 @@ output$is_parallel_design <- reactive({
     tryCatch({
       data <- values$uploaded_data
       # Use capitalized column names
-      n_treatments <- length(unique(data$Formulation))
+      n_treatments <- length(unique(data$Treatment))
       treatments_per_subject <- data %>%
         group_by(Subject) %>%
-        summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
+        summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
       is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
       return(!is_crossover)  # Return TRUE if NOT crossover (i.e., parallel)
     }, error = function(e) {
@@ -85,22 +85,22 @@ output$detected_design <- renderUI({
     data <- values$uploaded_data
     
     # Verify required columns exist
-    if (!all(c("Subject", "Formulation") %in% names(data))) {
+    if (!all(c("Subject", "Treatment") %in% names(data))) {
       return(p("Unable to detect design - missing required columns", 
                style = "color: #dc3545;"))
     }
     
     # Use capitalized column names
-    n_treatments <- length(unique(data$Formulation))
+    n_treatments <- length(unique(data$Treatment))
     
     # Safely calculate treatments per subject
     treatments_per_subject <- tryCatch({
       data %>%
         group_by(Subject) %>%
-        summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
+        summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
     }, error = function(e) {
       # Fallback if dplyr fails
-      aggregate(Formulation ~ Subject, data = data, 
+      aggregate(Treatment ~ Subject, data = data, 
                 FUN = function(x) length(unique(x)))
     })
     
@@ -108,7 +108,7 @@ output$detected_design <- renderUI({
     
     # Detect replicate design using the BE analysis function
     replicate_result <- NULL
-    if (isTRUE(is_crossover) && all(c("Subject", "Period", "Formulation") %in% names(data))) {
+    if (isTRUE(is_crossover) && all(c("Subject", "Period", "Treatment") %in% names(data))) {
       replicate_result <- tryCatch({
         detect_replicate_design(data)
       }, error = function(e) {
@@ -158,10 +158,10 @@ output$detected_design_type <- reactive({
     data <- values$uploaded_data
     
     # Use capitalized column names
-    n_treatments <- length(unique(data$Formulation))
+    n_treatments <- length(unique(data$Treatment))
     treatments_per_subject <- data %>%
       group_by(Subject) %>%
-      summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
+      summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
     is_crossover <- isTRUE(all(treatments_per_subject$n_treatments == n_treatments))
     
     if (is_crossover) {
@@ -247,8 +247,8 @@ observe({
     if (input$study_design == "auto" && !is.null(values$uploaded_data)) {
       tryCatch({
         data <- values$uploaded_data
-        n_treatments <- length(unique(data$Formulation))
-        treatments_per_subject <- tapply(data$Formulation, data$Subject, function(x) length(unique(x)))
+        n_treatments <- length(unique(data$Treatment))
+        treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
         is_crossover <- all(treatments_per_subject == n_treatments)
         is_parallel <- !is_crossover  # TRUE if NOT crossover (i.e., parallel)
       }, error = function(e) {
@@ -324,8 +324,8 @@ output$settings_summary <- renderUI({
   detected_design <- if (study_design == "auto" && !is.null(values$uploaded_data)) {
     tryCatch({
       data <- values$uploaded_data
-      n_treatments <- length(unique(data$Formulation))
-      treatments_per_subject <- tapply(data$Formulation, data$Subject, function(x) length(unique(x)))
+      n_treatments <- length(unique(data$Treatment))
+      treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
       is_crossover <- all(treatments_per_subject == n_treatments)
       
       if (is_crossover && n_treatments == 2) "2×2×2" else 
@@ -583,11 +583,11 @@ observeEvent(input$run_analysis, {
       # Auto-detect design logic here
       data <- values$uploaded_data
       
-      # Use capitalized column names (Subject, Formulation) as per standardization
-      n_treatments <- length(unique(data$Formulation))
+      # Use capitalized column names (Subject, Treatment) as per standardization
+      n_treatments <- length(unique(data$Treatment))
       
       # Count treatments per subject without dplyr
-      treatments_per_subject <- tapply(data$Formulation, data$Subject, function(x) length(unique(x)))
+      treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
       is_crossover <- all(treatments_per_subject == n_treatments)
       
       detected_design <- if (is_crossover && n_treatments == 2) {
@@ -703,11 +703,11 @@ observeEvent(input$run_analysis, {
         cat("[DEBUG] Adding missing design variables to NCA results for ANOVA...\n")
         
         # Create unique identifier for merging - use CAPITALIZED column names
-        analysis_data$merge_id <- paste(analysis_data$Subject, analysis_data$Formulation, sep = "_")
-        nca_results$merge_id <- paste(nca_results$Subject, nca_results$Formulation, sep = "_")
+        analysis_data$merge_id <- paste(analysis_data$Subject, analysis_data$Treatment, sep = "_")
+        nca_results$merge_id <- paste(nca_results$Subject, nca_results$Treatment, sep = "_")
         
         # Get design variables from original data
-        design_vars <- analysis_data[!duplicated(analysis_data$merge_id), c("merge_id", "Subject", "Sequence", "Period", "Formulation")]
+        design_vars <- analysis_data[!duplicated(analysis_data$merge_id), c("merge_id", "Subject", "Sequence", "Period", "Treatment")]
         
         # Merge design variables with NCA results
         nca_results <- merge(nca_results, design_vars, by = "merge_id", all.x = TRUE, suffixes = c("", ".design"))
@@ -1014,7 +1014,7 @@ observeEvent(input$run_analysis, {
       # For PK parameter data, uploaded_data already contains everything we need
       # For concentration-time data, we need to merge NCA results
       if (values$data_type == "pk_parameters") {
-        # PK parameter data: use uploaded data directly (already has Subject, Formulation, Period, Sequence, PK params)
+        # PK parameter data: use uploaded data directly (already has Subject, Treatment, Period, Sequence, PK params)
         be_data <- values$uploaded_data
         cat("📋 Using PK parameter data directly for BE analysis\n")
       } else {
@@ -1024,12 +1024,12 @@ observeEvent(input$run_analysis, {
       }
       
       # Ensure proper column names for BE analysis functions
-      # BE analysis functions expect: Subject, Formulation, Period, Sequence
+      # BE analysis functions expect: Subject, Treatment, Period, Sequence
       if ("subject" %in% names(be_data)) {
         names(be_data)[names(be_data) == "subject"] <- "Subject"
       }
       if ("treatment" %in% names(be_data)) {
-        names(be_data)[names(be_data) == "treatment"] <- "Formulation"
+        names(be_data)[names(be_data) == "treatment"] <- "Treatment"
       }
       if ("period" %in% names(be_data)) {
         names(be_data)[names(be_data) == "period"] <- "Period"
@@ -1056,28 +1056,28 @@ observeEvent(input$run_analysis, {
           names(nca_merge)[names(nca_merge) == "subject"] <- "Subject"
         }
         if ("treatment" %in% names(nca_merge)) {
-          names(nca_merge)[names(nca_merge) == "treatment"] <- "Formulation"
+          names(nca_merge)[names(nca_merge) == "treatment"] <- "Treatment"
         }
         
         # Create a subject-treatment summary from BE data for merging
         be_summary <- be_data %>%
-          select(Subject, Formulation) %>%
+          select(Subject, Treatment) %>%
           distinct()
         
         cat(sprintf("📋 BE summary for merging: %d unique subject-treatment combinations\n", nrow(be_summary)))
         
-        # Merge NCA results with BE data by Subject and Formulation
+        # Merge NCA results with BE data by Subject and Treatment
         for (param in analysis_config$pk_parameters) {
           if (param %in% names(nca_results)) {
             # Create parameter lookup table
             param_lookup <- nca_merge %>%
-              select(Subject, Formulation, !!sym(param)) %>%
+              select(Subject, Treatment, !!sym(param)) %>%
               filter(!is.na(!!sym(param)))
             
             if (nrow(param_lookup) > 0) {
               # Merge parameter values into BE data
               be_data <- be_data %>%
-                left_join(param_lookup, by = c("Subject", "Formulation"), suffix = c("", paste0("_", param)))
+                left_join(param_lookup, by = c("Subject", "Treatment"), suffix = c("", paste0("_", param)))
               
               cat(sprintf("✅ Merged %s parameter: %d values added\n", param, nrow(param_lookup)))
             } else {

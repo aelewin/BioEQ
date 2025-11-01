@@ -55,8 +55,8 @@ calculate_pk_comparison <- function(nca_data, param_name) {
     return(NULL)
   }
   
-  # Expected columns from mapped data: Subject, Formulation, Period, Sequence
-  required_cols <- c("Subject", "Formulation", param_name)
+  # Expected columns from mapped data: Subject, Treatment, Period, Sequence
+  required_cols <- c("Subject", "Treatment", param_name)
   if (!all(required_cols %in% names(subject_data))) {
     available <- names(subject_data)
     return(list(
@@ -76,7 +76,7 @@ calculate_pk_comparison <- function(nca_data, param_name) {
   
   # Extract parameter data
   param_data <- subject_data %>%
-    select(Subject, Formulation, Period, all_of(param_name)) %>%
+    select(Subject, Treatment, Period, all_of(param_name)) %>%
     rename(Value = !!param_name) %>%
     filter(!is.na(Value))
   
@@ -88,8 +88,8 @@ calculate_pk_comparison <- function(nca_data, param_name) {
     # REPLICATE DESIGN: Calculate T1/R1, T2/R2, and Tavg/Ravg
     
     # Separate Test and Reference data
-    test_data <- param_data %>% filter(Formulation == "T")
-    ref_data <- param_data %>% filter(Formulation == "R")
+    test_data <- param_data %>% filter(Treatment == "T")
+    ref_data <- param_data %>% filter(Treatment == "R")
     
     # For each subject, get all Test and Reference values by period
     test_by_subject <- test_data %>%
@@ -163,8 +163,8 @@ calculate_pk_comparison <- function(nca_data, param_name) {
   } else {
     # 2x2x2 CROSSOVER DESIGN: Simple T/R ratio per subject
     
-    test_data <- param_data %>% filter(Formulation == "T")
-    ref_data <- param_data %>% filter(Formulation == "R")
+    test_data <- param_data %>% filter(Treatment == "T")
+    ref_data <- param_data %>% filter(Treatment == "R")
     
     comparison_data <- full_join(
       test_data %>% select(Subject, Value) %>% rename(Test = Value),

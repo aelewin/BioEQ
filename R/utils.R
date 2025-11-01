@@ -224,13 +224,13 @@ load_example_data <- function(dataset_name = "crossover_2x2x2") {
     # Convert to standard format and return structured result
     validated_data <- validate_be_data(data)
     
-    # Transform to plotting format (Subject, Time, Concentration, Formulation)
+    # Transform to plotting format (Subject, Time, Concentration, Treatment)
     conc_data <- validated_data %>%
       select(
         Subject = subj,
         Time = time,
         Concentration = conc,
-        Formulation = treatment,
+        Treatment = treatment,
         Period = prd,
         Sequence = sequence
       ) %>%
@@ -248,11 +248,11 @@ load_example_data <- function(dataset_name = "crossover_2x2x2") {
       conc_col = "conc"
     )
     
-    # Transform PK data to expected format (Subject, Formulation, PK parameters)
+    # Transform PK data to expected format (Subject, Treatment, PK parameters)
     pk_data <- pk_params %>%
       mutate(
         Subject = subj,
-        Formulation = factor(tmt, levels = c(1, 2), labels = c("Reference", "Test"))
+        Treatment = factor(tmt, levels = c(1, 2), labels = c("Reference", "Test"))
       ) %>%
       select(-subj, -tmt)
     
@@ -355,8 +355,8 @@ validate_pk_data <- function(data) {
   if ("Period" %in% names(data)) {
     data$Period <- as.factor(data$Period)
   }
-  if ("Formulation" %in% names(data)) {
-    data$Formulation <- as.factor(data$Formulation)
+  if ("Treatment" %in% names(data)) {
+    data$Treatment <- as.factor(data$Treatment)
   }
   
   return(data)

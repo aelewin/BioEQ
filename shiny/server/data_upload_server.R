@@ -116,7 +116,7 @@ validate_bioeq_data_enhanced <- function(data) {
 }
 
 # Enhanced data summary function
-# EXPECTS: Data with capitalized standard column names (Subject, Formulation, Period, Sequence)
+# EXPECTS: Data with capitalized standard column names (Subject, Treatment, Period, Sequence)
 # This function is called AFTER column mapping/standardization
 # pk_param_info: Optional list with PK parameter metadata (is_log_transformed, etc.)
 create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
@@ -125,8 +125,8 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
   tryCatch({
     # Basic counts - use capitalized column names
     n_subjects <- if("Subject" %in% names(data)) length(unique(data$Subject)) else 0
-    n_treatments <- if("Formulation" %in% names(data)) length(unique(data$Formulation)) else 0
-    treatments <- if("Formulation" %in% names(data)) sort(unique(data$Formulation)) else character(0)
+    n_treatments <- if("Treatment" %in% names(data)) length(unique(data$Treatment)) else 0
+    treatments <- if("Treatment" %in% names(data)) sort(unique(data$Treatment)) else character(0)
     total_obs <- nrow(data)
     
     # Group information
@@ -200,7 +200,7 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
       treatments_per_subject <- tryCatch({
         data %>%
           group_by(Subject) %>%
-          summarise(n_treatments = length(unique(Formulation[!is.na(Formulation)])), .groups = "drop")
+          summarise(n_treatments = length(unique(Treatment[!is.na(Treatment)])), .groups = "drop")
       }, error = function(e) {
         data.frame(Subject = unique(data$Subject[!is.na(data$Subject)]), n_treatments = 1)
       })
@@ -259,7 +259,7 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
       # Get numeric columns (potential PK parameters)
       # Exclude design variables and demographic columns from PK parameter detection
       # Use capitalized column names
-      excluded_cols <- c("Subject", "Sequence", "Period", "Formulation", "dose", "weight", "age", "height", "bmi", 
+      excluded_cols <- c("Subject", "Sequence", "Period", "Treatment", "dose", "weight", "age", "height", "bmi", 
                         "group", "grp", "site", "cohort", "batch", "study_group")
       
       # If pk_param_info is provided (from user mappings), use it
@@ -298,7 +298,7 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
       treatments_per_subject <- tryCatch({
         data %>%
           group_by(Subject) %>%
-          summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
+          summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
       }, error = function(e) {
         data.frame(Subject = unique(data$Subject), n_treatments = 1)
       })
@@ -312,7 +312,7 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
       if (is_crossover) {
         # Check if it's a replicate design
         replicate_info <- NULL
-        if (all(c("Subject", "Period", "Formulation") %in% names(data))) {
+        if (all(c("Subject", "Period", "Treatment") %in% names(data))) {
           tryCatch({
             replicate_info <- detect_replicate_design(data)
           }, error = function(e) NULL)
@@ -359,8 +359,8 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
     # Use capitalized column names with safe fallbacks
     return(list(
       n_subjects = if("Subject" %in% names(data)) length(unique(data$Subject)) else 0,
-      n_treatments = if("Formulation" %in% names(data)) length(unique(data$Formulation)) else 0,
-      treatments = if("Formulation" %in% names(data)) unique(data$Formulation) else character(0),
+      n_treatments = if("Treatment" %in% names(data)) length(unique(data$Treatment)) else 0,
+      treatments = if("Treatment" %in% names(data)) unique(data$Treatment) else character(0),
       total_observations = nrow(data),
       design_type = "Unknown",
       data_type = "unknown",
@@ -970,7 +970,7 @@ output$download_pk_template <- downloadHandler(
       pk_template_data <- data.frame(
         Subject = rep(1:6, each = 2),
         Period = rep(1:2, times = 6),
-        Formulation = rep(c("Reference", "Test"), times = 6),
+        Treatment = rep(c("Reference", "Test"), times = 6),
         AUC0t = c(245.6, 235.8, 251.4, 248.2, 239.7, 228.5, 
                   256.3, 251.8, 242.1, 237.4, 248.9, 244.3),
         AUC0inf = c(251.2, 241.5, 257.8, 254.1, 245.3, 234.2,
@@ -1046,7 +1046,7 @@ validate_pk_data_enhanced <- function(data) {
   # COLUMN MAPPING - Skip if data already has capitalized standard names
   # =============================================================================
   
-  required_columns_capitalized <- c("Subject", "Formulation")
+  required_columns_capitalized <- c("Subject", "Treatment")
   has_manual_mapping <- all(required_columns_capitalized %in% names(processed_data))
   
   mapped_columns <- list()
@@ -1060,12 +1060,12 @@ validate_pk_data_enhanced <- function(data) {
     
     # Record the standard columns
     if ("Subject" %in% names(processed_data)) mapped_columns[["Subject"]] <- "Subject"
-    if ("Formulation" %in% names(processed_data)) mapped_columns[["Formulation"]] <- "Formulation"
+    if ("Treatment" %in% names(processed_data)) mapped_columns[["Treatment"]] <- "Treatment"
     if ("Period" %in% names(processed_data)) mapped_columns[["Period"]] <- "Period"
     if ("Sequence" %in% names(processed_data)) mapped_columns[["Sequence"]] <- "Sequence"
     
     # Identify PK parameter columns (non-standard columns that aren't the core columns)
-    core_columns <- c("Subject", "Formulation", "Period", "Sequence", "Time", "Concentration")
+    core_columns <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration")
     potential_pk_columns <- setdiff(names(processed_data), core_columns)
     for (col in potential_pk_columns) {
       mapped_pk_parameters[[col]] <- col
@@ -1111,9 +1111,9 @@ validate_pk_data_enhanced <- function(data) {
   # =============================================================================
   
   # Check if we successfully mapped the required columns
-  # For manual mapping: check for "Subject" and "Formulation"
+  # For manual mapping: check for "Subject" and "Treatment"
   # For auto mapping: check for "subject" and "treatment"
-  has_required_capitalized <- ("Subject" %in% names(mapped_columns)) && ("Formulation" %in% names(mapped_columns))
+  has_required_capitalized <- ("Subject" %in% names(mapped_columns)) && ("Treatment" %in% names(mapped_columns))
   has_required_lowercase <- ("subject" %in% names(mapped_columns)) && ("treatment" %in% names(mapped_columns))
   
   if (!has_required_capitalized && !has_required_lowercase) {
@@ -1166,14 +1166,14 @@ validate_pk_data_enhanced <- function(data) {
       }
     }
     
-    # Validate Formulation column - use capitalized column name (renamed from treatment)
-    if ("Formulation" %in% names(processed_data)) {
-      if (any(is.na(processed_data$Formulation))) {
-        errors <- c(errors, "Formulation column contains missing values")
+    # Validate Treatment column - use capitalized column name (renamed from treatment)
+    if ("Treatment" %in% names(processed_data)) {
+      if (any(is.na(processed_data$Treatment))) {
+        errors <- c(errors, "Treatment column contains missing values")
       }
       
       # Check formulation values
-      unique_treatments <- unique(processed_data$Formulation)
+      unique_treatments <- unique(processed_data$Treatment)
       valid_treatments <- c("R", "T", "Reference", "Test", "r", "t", "reference", "test")
       
       invalid_treatments <- setdiff(unique_treatments, valid_treatments)
@@ -1395,7 +1395,7 @@ output$concentration_column_mapper <- renderUI({
                   label = "Map to Data Type:",
                   choices = c("Select data type..." = "none",
                             "Subject ID" = "subject",
-                            "Treatment/Formulation" = "treatment",
+                            "Treatment/Treatment" = "treatment",
                             "Time" = "time",
                             "Concentration" = "concentration",
                             "Sequence" = "sequence",
@@ -1665,7 +1665,7 @@ observeEvent(input$confirm_concentration_mapping, {
     # Map to CAPITALIZED standard names
     standard_name <- switch(data_type,
       "subject" = "Subject",
-      "treatment" = "Formulation",
+      "treatment" = "Treatment",
       "period" = "Period",
       "sequence" = "Sequence",
       "time" = "Time",
@@ -1678,7 +1678,7 @@ observeEvent(input$confirm_concentration_mapping, {
     names(processed_data)[names(processed_data) == original_col] <- standard_name
     
     # Track PK parameters (anything not in the standard design columns)
-    if (!standard_name %in% c("Subject", "Formulation", "Period", "Sequence", "Time", "Concentration",
+    if (!standard_name %in% c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration",
                                "dose", "weight", "age", "height", "bmi", "group", "grp", "site", "cohort")) {
       # Check if this is marked as log-transformed in units_settings
       is_logged <- FALSE
@@ -1696,7 +1696,7 @@ observeEvent(input$confirm_concentration_mapping, {
   
   # Remove columns that were NOT mapped AND columns mapped to "other/ignore"
   # Build list of columns to keep (already renamed to standard names)
-  columns_to_keep <- c("Subject", "Formulation", "Period", "Sequence", "Time", "Concentration")
+  columns_to_keep <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration")
   
   # Add PK parameter names (these are the RENAMED standard names)
   if (length(pk_parameter_info) > 0) {
@@ -1734,7 +1734,7 @@ observeEvent(input$confirm_concentration_mapping, {
   # Apply treatment designations to remap treatment values
   if (!is.null(values$treatment_designations)) {
     treatment_designations <- values$treatment_designations
-    treatment_col_name <- "Formulation"  # Column is now renamed to "Formulation" (capitalized)
+    treatment_col_name <- "Treatment"  # Column is now renamed to "Treatment" (capitalized)
     
     if (treatment_col_name %in% names(processed_data)) {
       # Remap treatment values based on user designations
@@ -1883,7 +1883,7 @@ output$pk_parameter_selector <- renderUI({
           icon("info-circle", style = "color: #856404;"), 
           strong(" Required Columns:", style = "color: #856404;"), 
           br(),
-          span("• Subject ID and Treatment/Formulation are required for PK analysis", 
+          span("• Subject ID and Treatment/Treatment are required for PK analysis", 
                style = "color: #856404; font-size: 13px;"),
           br(),
           span("• Columns identified as 'PK Parameter' will be configured in Section B below", 
@@ -1922,7 +1922,7 @@ output$pk_parameter_selector <- renderUI({
                     label = "Map to Data Type:",
                     choices = c("Select data type..." = "none",
                               "Subject ID" = "subject",
-                              "Treatment/Formulation" = "treatment",
+                              "Treatment/Treatment" = "treatment",
                               "Sequence" = "sequence",
                               "Period" = "period",
                               "Group" = "group",
@@ -2427,7 +2427,7 @@ observeEvent(input$confirm_pk_mapping, {
     # Map to CAPITALIZED standard names
     standard_name <- switch(data_type,
       "subject" = "Subject",
-      "treatment" = "Formulation",  # ⭐ KEY CHANGE: treatment -> Formulation
+      "treatment" = "Treatment",
       "period" = "Period",
       "sequence" = "Sequence",
       data_type  # Keep others as-is
@@ -2464,13 +2464,13 @@ observeEvent(input$confirm_pk_mapping, {
   
   # Remove columns that were NOT mapped (only keep mapped columns)
   # Build list of columns to keep
-  columns_to_keep <- c("Subject", "Formulation", "Period", "Sequence")
+  columns_to_keep <- c("Subject", "Treatment", "Period", "Sequence")
   
   # Add general mapped columns
   for (std_name in names(general_mappings)) {
     capitalized_name <- switch(std_name,
       "subject" = "Subject",
-      "treatment" = "Formulation",
+      "treatment" = "Treatment",
       "period" = "Period",
       "sequence" = "Sequence",
       std_name
@@ -2515,7 +2515,7 @@ observeEvent(input$confirm_pk_mapping, {
   # Apply treatment designations to remap treatment values for PK data
   if (!is.null(values$treatment_designations)) {
     treatment_designations <- values$treatment_designations
-    treatment_col_name <- "Formulation"  # Column is now renamed to "Formulation" (capitalized)
+    treatment_col_name <- "Treatment"  # Column is now renamed to "Treatment" (capitalized)
     
     if (treatment_col_name %in% names(processed_data)) {
       # Remap treatment values based on user designations

@@ -161,7 +161,7 @@ perform_rsabe_placeholder <- function(data, design = "auto", params = list()) {
 #' EMA Average Bioequivalence with Expanding Limits using replicateBE package
 #' Supports both Method A (ANOVA) and Method B (mixed model)
 #' 
-#' @param data Data frame with PK parameters (expects capitalized columns: Subject, Formulation, Period, Sequence)
+#' @param data Data frame with PK parameters (expects capitalized columns: Subject, Treatment, Period, Sequence)
 #' @param design Study design  
 #' @param params Analysis parameters (including abel_method: "A" or "B")
 #' @return ABEL analysis results
@@ -209,7 +209,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
   }
   
   # Verify required columns exist (capitalized)
-  required_cols <- c("Subject", "Period", "Sequence", "Formulation")
+  required_cols <- c("Subject", "Period", "Sequence", "Treatment")
   missing_cols <- setdiff(required_cols, names(data))
   if (length(missing_cols) > 0) {
     stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
@@ -303,7 +303,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         subject = as.factor(data$Subject),
         period = as.factor(data$Period),
         sequence = as.factor(data$Sequence),
-        treatment = as.factor(data$Formulation),
+        treatment = as.factor(data$Treatment),
         PK = as.numeric(data[[param_to_use]]),
         stringsAsFactors = FALSE
       )
@@ -1142,7 +1142,7 @@ analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction 
   treatment_col <- NULL
   
   # Check all possible treatment column names in order of preference
-  possible_cols <- c("Formulation", "Treatment", "treatment", "Treat")
+  possible_cols <- c("Treatment", "Treatment", "treatment", "Treat")
   for (col in possible_cols) {
     if (col %in% names(param_data)) {
       treatment_col <- col
@@ -1306,7 +1306,7 @@ perform_replicate_mixed_effects <- function(param_data, parameter) {
   # Ensure proper factor levels
   param_data$Subject <- as.factor(param_data$Subject)
   param_data$Period <- as.factor(param_data$Period)
-  param_data$Formulation <- as.factor(param_data$Formulation)
+  param_data$Treatment <- as.factor(param_data$Treatment)
   
   # Add sequence information if not present
   if (!"Sequence" %in% names(param_data)) {
@@ -1316,7 +1316,7 @@ perform_replicate_mixed_effects <- function(param_data, parameter) {
   
   # Fit mixed-effects model
   model <- nlme::lme(
-    log_param ~ Formulation + Period + Sequence,
+    log_param ~ Treatment + Period + Sequence,
     random = ~ 1 | Subject,
     data = param_data,
     method = "REML"
@@ -1443,7 +1443,7 @@ prepare_parameter_data <- function(data, parameter) {
   
   # Ensure proper factor levels
   param_data$Subject <- as.factor(param_data$Subject)
-  param_data$Formulation <- as.factor(param_data$Formulation)
+  param_data$Treatment <- as.factor(param_data$Treatment)
   
   if ("Period" %in% names(param_data)) {
     param_data$Period <- as.factor(param_data$Period)
@@ -1475,7 +1475,7 @@ prepare_log_parameter_data <- function(data, parameter) {
   
   # Ensure proper factor levels
   param_data$Subject <- as.factor(param_data$Subject)
-  param_data$Formulation <- as.factor(param_data$Formulation)
+  param_data$Treatment <- as.factor(param_data$Treatment)
   
   if ("Period" %in% names(param_data)) {
     param_data$Period <- as.factor(param_data$Period)
@@ -1827,32 +1827,32 @@ analyze_crossover_parameter_legacy <- function(data, parameter, alpha, be_limits
     param_data$log_param <- log(param_data[[parameter]])
     
     # Simple ANOVA model (crossover design)
-    formula_str <- "log_param ~ Formulation + Subject + Period"
+    formula_str <- "log_param ~ Treatment + Subject + Period"
     
     # Check if we have required variables
-    if (all(c("Formulation", "Subject", "Period") %in% names(param_data))) {
+    if (all(c("Treatment", "Subject", "Period") %in% names(param_data))) {
       
       # Convert to factors
-      param_data$Formulation <- as.factor(param_data$Formulation)
+      param_data$Treatment <- as.factor(param_data$Treatment)
       param_data$Subject <- as.factor(param_data$Subject)
       param_data$Period <- as.factor(param_data$Period)
       
       # Fit model
-      model <- lm(log_param ~ Formulation + Subject + Period, data = param_data)
+      model <- lm(log_param ~ Treatment + Subject + Period, data = param_data)
       
       # Extract treatment effect (Test vs Reference)
-      formulation_coef <- coef(model)["FormulationTest"]
+      formulation_coef <- coef(model)["TreatmentTest"]
       if (is.na(formulation_coef)) {
         # Try the other way around
-        formulation_coef <- -coef(model)["FormulationReference"]
+        formulation_coef <- -coef(model)["TreatmentReference"]
       }
       
       if (!is.na(formulation_coef)) {
         # Get standard error
         model_summary <- summary(model)
-        se <- model_summary$coefficients["FormulationTest", "Std. Error"]
+        se <- model_summary$coefficients["TreatmentTest", "Std. Error"]
         if (is.na(se)) {
-          se <- model_summary$coefficients["FormulationReference", "Std. Error"]
+          se <- model_summary$coefficients["TreatmentReference", "Std. Error"]
         }
         
         # Calculate confidence interval
@@ -1890,7 +1890,7 @@ analyze_crossover_parameter_legacy <- function(data, parameter, alpha, be_limits
 # SECTION 7: HELPER FUNCTIONS FOR STATISTICAL COMPUTATIONS
 # =============================================================================
 
-#' Extract Formulation Effect from Model
+#' Extract Treatment Effect from Model
 #'
 #' @param model Linear model object
 #' @return List with formulation effect value and name
@@ -1898,7 +1898,7 @@ extract_formulation_effect <- function(model) {
   coefs <- coef(model)
   
   # Try different formulation coefficient names
-  formulation_names <- c("FormulationTest", "FormulationT", "FormulationReference", "FormulationR")
+  formulation_names <- c("TreatmentTest", "TreatmentT", "TreatmentReference", "TreatmentR")
   
   for (name in formulation_names) {
     if (name %in% names(coefs) && !is.na(coefs[name])) {
@@ -1949,7 +1949,7 @@ validate_subject_consistency <- function(data, design) {
     
     if (design_info$is_partial_replicate) {
       # For partial replicate, check reference formulation replication
-      formulations <- unique(data$Formulation)
+      formulations <- unique(data$Treatment)
       ref_formulation <- if ("Reference" %in% formulations) {
         "Reference"
       } else if ("R" %in% formulations) {
@@ -1959,7 +1959,7 @@ validate_subject_consistency <- function(data, design) {
       }
       
       # Count reference observations per subject without dplyr
-      ref_data <- data[data$Formulation == ref_formulation, ]
+      ref_data <- data[data$Treatment == ref_formulation, ]
       ref_counts <- tapply(rep(1, nrow(ref_data)), ref_data$Subject, sum)
       
       subjects_with_ref_replicates <- sum(ref_counts >= 2, na.rm = TRUE)
@@ -1976,10 +1976,10 @@ validate_subject_consistency <- function(data, design) {
 #' Get Required Columns by Design
 get_required_columns <- function(design) {
   switch(design,
-    "2x2x2" = c("Subject", "Period", "Formulation"),
-    "parallel" = c("Subject", "Formulation"),
-    "replicate" = c("Subject", "Period", "Formulation"),
-    "auto" = c("Subject", "Formulation")  # Minimum for auto-detection
+    "2x2x2" = c("Subject", "Period", "Treatment"),
+    "parallel" = c("Subject", "Treatment"),
+    "replicate" = c("Subject", "Period", "Treatment"),
+    "auto" = c("Subject", "Treatment")  # Minimum for auto-detection
   )
 }
 
@@ -1992,7 +1992,7 @@ standardize_column_names <- function(data) {
   name_mappings <- list(
     Subject = c("SUBJECT", "ID", "USUBJID", "subj"),
     Period = c("PERIOD", "PER", "period"),
-    Formulation = c("FORMULATION", "TRT", "TREATMENT", "tmt", "Treatment"),
+    Treatment = c("FORMULATION", "TRT", "TREATMENT", "tmt", "Treatment"),
     Sequence = c("SEQUENCE", "SEQ", "seq")
   )
   
@@ -2015,7 +2015,7 @@ standardize_column_names <- function(data) {
 #' @return Data with validated numeric parameters
 validate_numeric_parameters <- function(data) {
   # Identify potential PK parameters (numeric columns excluding ID variables)
-  id_cols <- c("Subject", "Period", "Formulation", "Sequence")
+  id_cols <- c("Subject", "Period", "Treatment", "Sequence")
   numeric_cols <- names(data)[sapply(data, is.numeric)]
   pk_cols <- setdiff(numeric_cols, id_cols)
   
@@ -2029,21 +2029,21 @@ validate_numeric_parameters <- function(data) {
   return(data)
 }
 
-#' Validate Formulation Coding
+#' Validate Treatment Coding
 #'
 #' @param data Study data
 #' @return Data with validated formulation coding
 validate_formulation_coding <- function(data) {
   # Standardize formulation levels
-  if ("Formulation" %in% names(data)) {
+  if ("Treatment" %in% names(data)) {
     # Map common formulation codes
-    data$Formulation <- as.character(data$Formulation)
-    data$Formulation[data$Formulation %in% c("T", "Test", "1")] <- "Test"
-    data$Formulation[data$Formulation %in% c("R", "Reference", "2")] <- "Reference"
-    data$Formulation <- as.factor(data$Formulation)
+    data$Treatment <- as.character(data$Treatment)
+    data$Treatment[data$Treatment %in% c("T", "Test", "1")] <- "Test"
+    data$Treatment[data$Treatment %in% c("R", "Reference", "2")] <- "Reference"
+    data$Treatment <- as.factor(data$Treatment)
     
     # Check that we have both levels
-    levels_present <- levels(data$Formulation)
+    levels_present <- levels(data$Treatment)
     if (!"Test" %in% levels_present || !"Reference" %in% levels_present) {
       warning("Missing Test or Reference formulation in data")
     }
@@ -2058,12 +2058,12 @@ validate_formulation_coding <- function(data) {
 
 #' Detect Replicate Design Type and Structure
 #'
-#' @param data Study data with Subject, Period, Formulation columns
+#' @param data Study data with Subject, Period, Treatment columns
 #' @return List with design information
 detect_replicate_design <- function(data) {
   
   # Data should already have standardized capitalized column names from Shiny upload
-  # PREFER Sequence column if available (most accurate), otherwise infer from Period/Formulation
+  # PREFER Sequence column if available (most accurate), otherwise infer from Period/Treatment
   
   # Check minimum required columns
   if (!"Subject" %in% colnames(data)) {
@@ -2145,16 +2145,16 @@ detect_replicate_design <- function(data) {
     return(design_info)
   }
   
-  # FALLBACK METHOD: Infer from Period and Formulation columns
-  cat("ℹ️  Sequence column not found - inferring design from Period and Formulation\n")
+  # FALLBACK METHOD: Infer from Period and Treatment columns
+  cat("ℹ️  Sequence column not found - inferring design from Period and Treatment\n")
   
-  required_cols <- c("Period", "Formulation")
+  required_cols <- c("Period", "Treatment")
   if (!all(required_cols %in% colnames(data))) {
-    stop("Data must contain Period and Formulation columns (or Sequence column). Found: ", 
+    stop("Data must contain Period and Treatment columns (or Sequence column). Found: ", 
          paste(colnames(data), collapse = ", "))
   }
   
-  # Prefer Sequence column if available, otherwise use Formulation
+  # Prefer Sequence column if available, otherwise use Treatment
   use_sequence <- "Sequence" %in% colnames(data)
   
   if (use_sequence) {
@@ -2191,12 +2191,12 @@ detect_replicate_design <- function(data) {
     }
     
   } else {
-    # Fallback: use Formulation column to build pattern
-    if (!"Formulation" %in% colnames(data)) {
-      stop("Data must contain either Sequence or Formulation column for design detection")
+    # Fallback: use Treatment column to build pattern
+    if (!"Treatment" %in% colnames(data)) {
+      stop("Data must contain either Sequence or Treatment column for design detection")
     }
     
-    cat("ℹ️  Using Formulation column to infer design (Sequence column preferred)\n")
+    cat("ℹ️  Using Treatment column to infer design (Sequence column preferred)\n")
     
     subjects <- unique(data$Subject)
     subject_patterns <- data.frame(
@@ -2216,7 +2216,7 @@ detect_replicate_design <- function(data) {
       actual_periods <- subj_data$Period
       has_missing <- !all(expected_periods %in% actual_periods)
       
-      pattern <- paste(subj_data$Formulation, collapse = "")
+      pattern <- paste(subj_data$Treatment, collapse = "")
       n_periods <- nrow(subj_data)
       
       subject_patterns <- rbind(subject_patterns, data.frame(

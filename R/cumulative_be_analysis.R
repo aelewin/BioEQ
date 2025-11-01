@@ -117,7 +117,7 @@ prepare_cumulative_data <- function(data) {
   # Map common column name variations to standard names
   col_mappings <- list(
     "subject" = c("subject", "Subject", "SUBJECT", "subj", "Subj", "ID", "id"),
-    "treatment" = c("treatment", "Treatment", "TREATMENT", "Formulation", "formulation", "trt", "Trt"),
+    "treatment" = c("treatment", "Treatment", "TREATMENT", "Treatment", "formulation", "trt", "Trt"),
     "period" = c("period", "Period", "PERIOD"),
     "sequence" = c("sequence", "Sequence", "SEQUENCE", "seq", "Seq")
   )

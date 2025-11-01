@@ -137,7 +137,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             "Time" = c("time", "Time", "TIME"),
             "Concentration" = c("concentration", "Concentration", "CONCENTRATION", "conc", "Conc"),
             "Subject" = c("subject", "Subject", "SUBJECT", "subj", "Subj", "ID", "id"),
-            "Formulation" = c("treatment", "Treatment", "TREATMENT", "formulation", "Formulation", "FORMULATION", "trt", "Trt")
+            "Treatment" = c("treatment", "Treatment", "TREATMENT", "formulation", "Treatment", "FORMULATION", "trt", "Trt")
           )
           
           # Standardize column names
@@ -153,14 +153,14 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           }
           
           # Map treatment values: T -> Test, R -> Reference for proper coloring
-          if ("Formulation" %in% names(standardized_data)) {
-            cat("Original formulation values:", paste(unique(standardized_data$Formulation), collapse = ", "), "\n")
-            standardized_data$Formulation <- ifelse(
-              standardized_data$Formulation == "T", "Test",
-              ifelse(standardized_data$Formulation == "R", "Reference", 
-                     standardized_data$Formulation)
+          if ("Treatment" %in% names(standardized_data)) {
+            cat("Original formulation values:", paste(unique(standardized_data$Treatment), collapse = ", "), "\n")
+            standardized_data$Treatment <- ifelse(
+              standardized_data$Treatment == "T", "Test",
+              ifelse(standardized_data$Treatment == "R", "Reference", 
+                     standardized_data$Treatment)
             )
-            cat("Mapped formulation values:", paste(unique(standardized_data$Formulation), collapse = ", "), "\n")
+            cat("Mapped formulation values:", paste(unique(standardized_data$Treatment), collapse = ", "), "\n")
           }
           
           cat("Standardized columns:", paste(names(standardized_data), collapse = ", "), "\n")
@@ -227,12 +227,12 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           pk_data <- pk_data %>%
             dplyr::select(subject, treatment, period, sequence, Cmax, AUC0t, AUC0inf) %>%
             dplyr::distinct() %>%
-            dplyr::rename(Formulation = treatment)
+            dplyr::rename(Treatment = treatment)
         } else {
           pk_data <- nca_results()
           # Add formulation column if missing
-          if (!"Formulation" %in% names(pk_data) && "treatment" %in% names(pk_data)) {
-            pk_data <- pk_data %>% dplyr::rename(Formulation = treatment)
+          if (!"Treatment" %in% names(pk_data) && "treatment" %in% names(pk_data)) {
+            pk_data <- pk_data %>% dplyr::rename(Treatment = treatment)
           }
         }
         
@@ -647,8 +647,8 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       
       # Get subject choices from the data
       conc_data <- plot_data$data
-      test_subjects <- sort(unique(conc_data$Subject[conc_data$Formulation == "Test"]))
-      ref_subjects <- sort(unique(conc_data$Subject[conc_data$Formulation == "Reference"]))
+      test_subjects <- sort(unique(conc_data$Subject[conc_data$Treatment == "Test"]))
+      ref_subjects <- sort(unique(conc_data$Subject[conc_data$Treatment == "Reference"]))
       
       div(class = "plot-card",
         div(class = "plot-card-header",
@@ -664,7 +664,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           div(class = "subject-selection-controls", style = "margin-bottom: 20px;",
             fluidRow(
               column(6,
-                h6("Test Formulation Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+                h6("Test Treatment Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
                 selectInput(ns("test_subjects_select"), 
                            label = NULL,
                            choices = test_subjects,
@@ -674,7 +674,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
                 checkboxInput(ns("select_all_test"), "Select All Test", value = FALSE)
               ),
               column(6,
-                h6("Reference Formulation Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+                h6("Reference Treatment Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
                 selectInput(ns("ref_subjects_select"), 
                            label = NULL,
                            choices = ref_subjects,
@@ -950,7 +950,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       }
       
       conc_data <- individual_data$data
-      test_subjects <- unique(conc_data$Subject[conc_data$Formulation == "Test"])
+      test_subjects <- unique(conc_data$Subject[conc_data$Treatment == "Test"])
       
       if (input$select_all_test) {
         updateSelectInput(session, "test_subjects_select", selected = test_subjects)
@@ -970,7 +970,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       }
       
       conc_data <- individual_data$data
-      ref_subjects <- unique(conc_data$Subject[conc_data$Formulation == "Reference"])
+      ref_subjects <- unique(conc_data$Subject[conc_data$Treatment == "Reference"])
       
       if (input$select_all_ref) {
         updateSelectInput(session, "ref_subjects_select", selected = ref_subjects)
@@ -1207,13 +1207,13 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         
         # Add test formulation data for selected test subjects
         if (length(selected_test) > 0) {
-          test_data <- conc_data[conc_data$Subject %in% selected_test & conc_data$Formulation == "Test", ]
+          test_data <- conc_data[conc_data$Subject %in% selected_test & conc_data$Treatment == "Test", ]
           plot_data <- rbind(plot_data, test_data)
         }
         
         # Add reference formulation data for selected reference subjects  
         if (length(selected_ref) > 0) {
-          ref_data <- conc_data[conc_data$Subject %in% selected_ref & conc_data$Formulation == "Reference", ]
+          ref_data <- conc_data[conc_data$Subject %in% selected_ref & conc_data$Treatment == "Reference", ]
           plot_data <- rbind(plot_data, ref_data)
         }
         
