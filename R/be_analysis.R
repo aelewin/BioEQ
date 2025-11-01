@@ -1021,8 +1021,8 @@ validate_be_data <- function(data, design) {
     stop("Data must be a non-empty data frame")
   }
   
-  # Standardize column names
-  data <- standardize_column_names(data)
+  # Data should already have standardized column names from Shiny upload process
+  # No need to call standardize_column_names() - removed to avoid redundancy
   
   # Check required columns
   required_cols <- get_required_columns(design)
@@ -1030,7 +1030,8 @@ validate_be_data <- function(data, design) {
   
   if (length(missing_cols) > 0) {
     stop("Missing required columns for ", design, " design: ", 
-         paste(missing_cols, collapse = ", "))
+         paste(missing_cols, collapse = ", "),
+         "\nAvailable columns: ", paste(names(data), collapse = ", "))
   }
   
   # Validate data quality
@@ -1737,9 +1738,14 @@ validate_formulation_coding <- function(data) {
 #' @return List with design information
 detect_replicate_design <- function(data) {
   
+  # Data should already have standardized capitalized column names from Shiny upload
+  # Expected columns: Subject, Period, Formulation
+  
   # Check if we have required columns
-  if (!all(c("Subject", "Period", "Formulation") %in% names(data))) {
-    stop("Data must contain Subject, Period, and Formulation columns")
+  required_cols <- c("Subject", "Period", "Formulation")
+  if (!all(required_cols %in% colnames(data))) {
+    stop("Data must contain Subject, Period, and Formulation columns. Found: ", 
+         paste(colnames(data), collapse = ", "))
   }
   
   # Analyze the structure without dplyr dependency
@@ -1749,6 +1755,7 @@ detect_replicate_design <- function(data) {
     pattern = character(),
     n_periods = numeric(),
     formulations = character(),
+    has_missing_periods = logical(),
     stringsAsFactors = FALSE
   )
   
@@ -1756,6 +1763,11 @@ detect_replicate_design <- function(data) {
   for (subj in subjects) {
     subj_data <- data[data$Subject == subj, ]
     subj_data <- subj_data[order(subj_data$Period), ]
+    
+    # Check for missing periods
+    expected_periods <- 1:max(subj_data$Period)
+    actual_periods <- subj_data$Period
+    has_missing <- !all(expected_periods %in% actual_periods)
     
     pattern <- paste(subj_data$Formulation, collapse = "")
     n_periods <- nrow(subj_data)
@@ -1766,29 +1778,42 @@ detect_replicate_design <- function(data) {
       pattern = pattern,
       n_periods = n_periods,
       formulations = formulations,
+      has_missing_periods = has_missing,
       stringsAsFactors = FALSE
     ))
   }
   
-  # Get unique patterns
-  unique_patterns <- unique(subject_patterns$pattern)
-  n_periods <- max(subject_patterns$n_periods)
+  # Identify subjects with missing periods
+  subjects_with_missing <- subject_patterns$Subject[subject_patterns$has_missing_periods]
   
-  # Determine design type
+  # Filter to complete subjects only for design detection
+  complete_patterns <- subject_patterns[!subject_patterns$has_missing_periods, ]
+  
+  # Get unique patterns from complete subjects
+  unique_patterns <- unique(complete_patterns$pattern)
+  n_periods <- max(complete_patterns$n_periods)
+  
+  # Determine design type based on complete subjects only
   design_info <- list()
   
   if (n_periods == 3) {
     # Check for 2x2x3 designs (TRR, RTT, etc.)
     if (any(grepl("TRR|RTT", unique_patterns))) {
       design_info$design_name <- "2x2x3 (Partial Replicate)"
+      design_info$design_type <- "2x2x3 Partial Replicate"
+      design_info$is_replicate <- TRUE
       design_info$is_partial_replicate <- TRUE
       design_info$sequences <- unique_patterns
     } else if (any(grepl("TRT|RTR", unique_patterns))) {
       design_info$design_name <- "2x3x3 (Full Replicate)"
+      design_info$design_type <- "2x3x3 Full Replicate"
+      design_info$is_replicate <- TRUE
       design_info$is_partial_replicate <- FALSE
       design_info$sequences <- unique_patterns
     } else {
       design_info$design_name <- "3-Period Crossover"
+      design_info$design_type <- "3-Period Crossover"
+      design_info$is_replicate <- FALSE
       design_info$is_partial_replicate <- FALSE
       design_info$sequences <- unique_patterns
     }
@@ -1796,24 +1821,112 @@ detect_replicate_design <- function(data) {
     # Check for 2x2x4 designs
     if (any(grepl("TRTR|RTRT", unique_patterns))) {
       design_info$design_name <- "2x2x4 (Full Replicate)"
+      design_info$design_type <- "2x2x4 Full Replicate"
+      design_info$is_replicate <- TRUE
       design_info$is_partial_replicate <- FALSE
       design_info$sequences <- unique_patterns
     } else {
       design_info$design_name <- "4-Period Crossover"
+      design_info$design_type <- "4-Period Crossover"
+      design_info$is_replicate <- FALSE
       design_info$is_partial_replicate <- FALSE
       design_info$sequences <- unique_patterns
     }
+  } else if (n_periods == 2) {
+    # Standard 2x2x2 crossover
+    design_info$design_name <- "2x2x2 Crossover"
+    design_info$design_type <- "2x2x2 Crossover"
+    design_info$is_replicate <- FALSE
+    design_info$is_partial_replicate <- FALSE
+    design_info$sequences <- unique_patterns
   } else {
     design_info$design_name <- paste0(n_periods, "-Period Crossover")
+    design_info$design_type <- paste0(n_periods, "-Period Crossover")
+    design_info$is_replicate <- FALSE
     design_info$is_partial_replicate <- FALSE
     design_info$sequences <- unique_patterns
   }
   
   design_info$n_periods <- n_periods
-  design_info$n_subjects <- nrow(subject_patterns)
-  design_info$sequence_distribution <- table(subject_patterns$pattern)
+  design_info$n_subjects_complete <- nrow(complete_patterns)
+  design_info$n_subjects_total <- nrow(subject_patterns)
+  design_info$sequence_distribution <- table(complete_patterns$pattern)
+  design_info$subjects_with_missing_periods <- subjects_with_missing
+  design_info$n_subjects_incomplete <- length(subjects_with_missing)
+  
+  # Add warnings if there are subjects with missing data
+  if (length(subjects_with_missing) > 0) {
+    design_info$warnings <- paste0(
+      "WARNING: ", length(subjects_with_missing), 
+      " subject(s) have missing periods and were excluded from design detection: ",
+      paste(head(subjects_with_missing, 10), collapse = ", "),
+      if (length(subjects_with_missing) > 10) " ..." else ""
+    )
+  }
   
   return(design_info)
+}
+
+#' Add Dose Instance Tracking for Replicate Designs
+#'
+#' Identifies first and second (and potentially third) administrations of T and R
+#' in replicate study designs. For example, in RTRT design:
+#' Period 1 (R) -> R_dose_1, Period 2 (T) -> T_dose_1, 
+#' Period 3 (R) -> R_dose_2, Period 4 (T) -> T_dose_2
+#'
+#' @param data Study data with Subject, Period, and Formulation columns (capitalized)
+#' @return Data with additional columns: dose_instance (R_1, T_1, R_2, T_2, etc.)
+#'         and dose_number (1, 2, 3, etc. for each formulation)
+#' @export
+add_dose_instance_tracking <- function(data) {
+  
+  # Data should already have standardized capitalized column names from Shiny upload
+  # Expected columns: Subject, Period, Formulation
+  
+  # Check required columns
+  required_cols <- c("Subject", "Period", "Formulation")
+  if (!all(required_cols %in% colnames(data))) {
+    stop("Data must contain Subject, Period, and Formulation columns. Found: ",
+         paste(colnames(data), collapse = ", "))
+  }
+  
+  # Sort by Subject and Period
+  data <- data[order(data$Subject, data$Period), ]
+  
+  # Initialize columns
+  data$dose_instance <- NA_character_
+  data$dose_number <- NA_integer_
+  
+  # Process each subject
+  for (subj in unique(data$Subject)) {
+    subj_idx <- which(data$Subject == subj)
+    subj_data <- data[subj_idx, ]
+    
+    # Count doses for each formulation
+    T_count <- 0
+    R_count <- 0
+    
+    for (i in seq_along(subj_idx)) {
+      formulation <- subj_data$Formulation[i]
+      
+      if (toupper(formulation) == "T") {
+        T_count <- T_count + 1
+        data$dose_instance[subj_idx[i]] <- paste0("T_", T_count)
+        data$dose_number[subj_idx[i]] <- T_count
+      } else if (toupper(formulation) == "R") {
+        R_count <- R_count + 1
+        data$dose_instance[subj_idx[i]] <- paste0("R_", R_count)
+        data$dose_number[subj_idx[i]] <- R_count
+      } else {
+        warning(sprintf("Unknown formulation '%s' for subject %s, period %d", 
+                       formulation, subj, subj_data$Period[i]))
+        data$dose_instance[subj_idx[i]] <- paste0(formulation, "_UNK")
+        data$dose_number[subj_idx[i]] <- NA
+      }
+    }
+  }
+  
+  return(data)
 }
 
 #' Add Sequence Information for Replicate Design

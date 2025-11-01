@@ -39,10 +39,11 @@ output$is_parallel_design <- reactive({
   if (input$study_design == "auto" && !is.null(values$uploaded_data)) {
     tryCatch({
       data <- values$uploaded_data
-      n_treatments <- length(unique(data$treatment))
+      # Use capitalized column names
+      n_treatments <- length(unique(data$Formulation))
       treatments_per_subject <- data %>%
-        group_by(subject) %>%
-        summarise(n_treatments = length(unique(treatment)), .groups = "drop")
+        group_by(Subject) %>%
+        summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
       is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
       return(!is_crossover)  # Return TRUE if NOT crossover (i.e., parallel)
     }, error = function(e) {
@@ -105,14 +106,28 @@ output$detected_design <- renderUI({
   tryCatch({
     data <- values$uploaded_data
     
-    # Detect study design
-    n_treatments <- length(unique(data$treatment))
+    # Use capitalized column names
+    n_treatments <- length(unique(data$Formulation))
     treatments_per_subject <- data %>%
-      group_by(subject) %>%
-      summarise(n_treatments = length(unique(treatment)), .groups = "drop")
-    is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
+      group_by(Subject) %>%
+      summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
+    is_crossover <- isTRUE(all(treatments_per_subject$n_treatments == n_treatments))
     
-    detected_design <- if (is_crossover && n_treatments == 2) {
+    # Detect replicate design using the BE analysis function
+    replicate_result <- NULL
+    if (isTRUE(is_crossover) && all(c("Subject", "Period", "Formulation") %in% names(data))) {
+      tryCatch({
+        replicate_result <- detect_replicate_design(data)
+      }, error = function(e) {
+        cat("[DEBUG] Replicate detection error:", e$message, "\n")
+        NULL
+      })
+    }
+    
+    # Determine detected design
+    detected_design <- if (!is.null(replicate_result) && isTRUE(replicate_result$is_replicate)) {
+      paste0(replicate_result$design_type, " (", replicate_result$n_periods, " periods)")
+    } else if (is_crossover && n_treatments == 2) {
       "2×2×2 Crossover Design"
     } else if (is_crossover) {
       paste0(n_treatments, "×", n_treatments, " Crossover Design")
@@ -120,7 +135,7 @@ output$detected_design <- renderUI({
       "Parallel Group Design"
     }
     
-    n_subjects <- length(unique(data$subject))
+    n_subjects <- length(unique(data$Subject))
     n_observations <- nrow(data)
     
     div(
@@ -128,11 +143,11 @@ output$detected_design <- renderUI({
       p(strong("Treatments: "), n_treatments, style = "margin: 8px 0;"),
       p(strong("Subjects: "), n_subjects, style = "margin: 8px 0;"),
       p(strong("Observations: "), n_observations, style = "margin: 8px 0;"),
-      if ("period" %in% names(data)) {
-        p(strong("Periods: "), length(unique(data$period)), style = "margin: 8px 0;")
+      if ("Period" %in% names(data)) {
+        p(strong("Periods: "), length(unique(data$Period)), style = "margin: 8px 0;")
       },
-      if ("sequence" %in% names(data)) {
-        p(strong("Sequences: "), paste(unique(data$sequence), collapse = ", "), style = "margin: 8px 0;")
+      if ("Sequence" %in% names(data)) {
+        p(strong("Sequences: "), paste(unique(data$Sequence), collapse = ", "), style = "margin: 8px 0;")
       }
     )
   }, error = function(e) {
@@ -150,12 +165,12 @@ output$detected_design_type <- reactive({
   tryCatch({
     data <- values$uploaded_data
     
-    # Detect study design
-    n_treatments <- length(unique(data$treatment))
+    # Use capitalized column names
+    n_treatments <- length(unique(data$Formulation))
     treatments_per_subject <- data %>%
-      group_by(subject) %>%
-      summarise(n_treatments = length(unique(treatment)), .groups = "drop")
-    is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
+      group_by(Subject) %>%
+      summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
+    is_crossover <- isTRUE(all(treatments_per_subject$n_treatments == n_treatments))
     
     if (is_crossover) {
       return("crossover")
@@ -173,9 +188,9 @@ output$available_pk_parameters_ui <- renderUI({
   req(values$uploaded_data, values$data_type == "pk_parameters")
   
   data <- values$uploaded_data
-  # Get numeric columns that could be PK parameters
+  # Get numeric columns that could be PK parameters - use capitalized column names
   numeric_cols <- sapply(data, is.numeric)
-  pk_cols <- names(data)[numeric_cols & !names(data) %in% c("subject", "sequence", "period", "dose", "weight", "age")]
+  pk_cols <- names(data)[numeric_cols & !names(data) %in% c("Subject", "Sequence", "Period", "dose", "weight", "age")]
   
   if (length(pk_cols) > 0) {
     div(
