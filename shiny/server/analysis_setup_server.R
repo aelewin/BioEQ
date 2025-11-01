@@ -175,6 +175,14 @@ output$detected_design_type <- reactive({
 })
 outputOptions(output, "detected_design_type", suspendWhenHidden = FALSE)
 
+# Dynamic alpha display text based on BE analysis type
+output$alpha_display_text <- renderText({
+  req(input$alpha_level)
+  alpha <- input$alpha_level
+  ci <- (1 - 2 * alpha) * 100
+  sprintf("%.0f%% CI (α = %.2f one-sided for TOST)", ci, alpha)
+})
+
 # Available PK parameters UI for pk_parameters data type
 output$available_pk_parameters_ui <- renderUI({
   req(values$uploaded_data, values$data_type == "pk_parameters")
@@ -216,8 +224,12 @@ create_help_modal(session, input, "missing_data", help_texts$missing_data$title,
 create_help_modal(session, input, "carryover_effect", help_texts$carryover_effect$title, help_texts$carryover_effect$content)
 create_help_modal(session, input, "analysis_model", help_texts$analysis_model$title, help_texts$analysis_model$content)
 create_help_modal(session, input, "confidence_level", help_texts$confidence_level$title, help_texts$confidence_level$content)
+create_help_modal(session, input, "alpha_level_abe", help_texts$alpha_level_abe$title, help_texts$alpha_level_abe$content)
+create_help_modal(session, input, "alpha_level_sabe", help_texts$alpha_level_sabe$title, help_texts$alpha_level_sabe$content)
 create_help_modal(session, input, "be_limits", help_texts$be_limits$title, help_texts$be_limits$content)
 create_help_modal(session, input, "reference_scaling", help_texts$reference_scaling$title, help_texts$reference_scaling$content)
+create_help_modal(session, input, "abel_method", help_texts$abel_method$title, help_texts$abel_method$content)
+create_help_modal(session, input, "abel_upper_cap", help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content)
 
 # Observer to disable carryover assessment for parallel designs and PK parameter datasets
 observe({
@@ -993,7 +1005,10 @@ observeEvent(input$run_analysis, {
       
       # Get BE limits
       be_limits <- c(analysis_config$be_lower / 100, analysis_config$be_upper / 100)
-      alpha <- (100 - analysis_config$confidence_level) / 100
+      # Alpha for two-sided confidence interval
+      # For 90% CI, alpha = 0.05 (5% in each tail)
+      # For 95% CI, alpha = 0.025 (2.5% in each tail)
+      alpha <- (100 - analysis_config$confidence_level) / 200
       
       # Prepare data for BE analysis 
       # For PK parameter data, uploaded_data already contains everything we need
@@ -1199,7 +1214,12 @@ observeEvent(input$run_analysis, {
           confidence_level = analysis_config$confidence_level,
           anova_model = analysis_config$anova_model,
           welch_correction = analysis_config$welch_correction,
-          anova_results = anova_results$anova_results  # Pass the ANOVA results
+          anova_results = anova_results$anova_results,  # Pass the ANOVA results
+          # ABEL-specific parameters
+          abel_upper_cap = if (!is.null(input$abel_upper_cap)) input$abel_upper_cap else "50",
+          abel_adjust_tie = if (!is.null(input$abel_adjust_tie)) input$abel_adjust_tie else FALSE,
+          abel_outlier_analysis = if (!is.null(input$abel_outlier_analysis)) input$abel_outlier_analysis else FALSE,
+          abel_outlier_fence = if (!is.null(input$abel_outlier_fence)) input$abel_outlier_fence else 2
         )
       )
       

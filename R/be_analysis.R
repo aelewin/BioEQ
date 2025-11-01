@@ -315,18 +315,43 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         stop("No valid data for parameter ", param_to_use)
       }
       
+      # DEBUG: Check data structure before writing
+      cat(sprintf("  - Replicate data: %d rows\n", nrow(replicate_data)))
+      cat(sprintf("  - Subject levels: %s\n", paste(levels(replicate_data$subject)[1:min(5, length(levels(replicate_data$subject)))], collapse=", ")))
+      cat(sprintf("  - Period levels: %s\n", paste(levels(replicate_data$period), collapse=", ")))
+      cat(sprintf("  - Sequence levels: %s\n", paste(levels(replicate_data$sequence), collapse=", ")))
+      cat(sprintf("  - Treatment levels: %s\n", paste(levels(replicate_data$treatment), collapse=", ")))
+      cat(sprintf("  - PK range: [%.2f, %.2f]\n", min(replicate_data$PK, na.rm=TRUE), max(replicate_data$PK, na.rm=TRUE)))
+      
       # Call replicateBE method (A or B) for ABEL (EMA method)
       # Method A: ANOVA-based approach (default)
       # Method B: Mixed model approach with subjects as random effect
       # NOTE: Write to temp CSV and read from file (required for file-based params)
       temp_dir <- tempdir()
-      temp_file <- file.path(temp_dir, paste0("abel_temp_", param))
+      temp_file <- file.path(temp_dir, paste0("abel_temp_", param_to_use))
       write.csv(replicate_data, paste0(temp_file, ".csv"), row.names = FALSE, quote = FALSE)
       
       cat(sprintf("  - Wrote temp file: %s.csv\n", temp_file))
+      cat(sprintf("  - Data structure: %d rows, PK range: [%.2f, %.2f]\n", 
+                  nrow(replicate_data), min(replicate_data$PK, na.rm=TRUE), max(replicate_data$PK, na.rm=TRUE)))
+      cat(sprintf("  - Column types: subject=%s, period=%s, sequence=%s, treatment=%s, PK=%s\n",
+                  class(replicate_data$subject)[1], class(replicate_data$period)[1], 
+                  class(replicate_data$sequence)[1], class(replicate_data$treatment)[1], 
+                  class(replicate_data$PK)[1]))
       cat(sprintf("  - Using %s data (logtrans = %s)\n", 
                   ifelse(data_is_logged, "pre-logged", "non-log"), 
                   ifelse(data_is_logged, "FALSE", "TRUE")))
+      
+      # Get ABEL-specific parameters from params (with defaults)
+      # Regulator is now passed directly from UI
+      abel_regulator <- if (!is.null(params$abel_upper_cap)) params$abel_upper_cap else "EMA"
+      
+      abel_adjust <- if (!is.null(params$abel_adjust_tie)) params$abel_adjust_tie else FALSE
+      abel_ola <- if (!is.null(params$abel_outlier_analysis)) params$abel_outlier_analysis else FALSE
+      abel_fence <- if (!is.null(params$abel_outlier_fence)) params$abel_outlier_fence else 2
+      
+      cat(sprintf("  - ABEL Settings: Regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
+                  abel_regulator, abel_adjust, abel_ola, abel_fence))
       
       # Call appropriate replicateBE method based on ANOVA model selection
       if (use_method_a) {
@@ -339,8 +364,11 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
             print = FALSE,
             details = TRUE,
             alpha = alpha,
-            regulator = "EMA",  # EMA for ABEL
-            logtrans = !data_is_logged  # Only log-transform if data is NOT already logged
+            regulator = abel_regulator,  # User-selected regulator
+            logtrans = !data_is_logged,  # Only log-transform if data is NOT already logged
+            adjust = abel_adjust,        # TIE adjustment
+            ola = abel_ola,              # Outlier analysis
+            fence = abel_fence           # Outlier detection fence
           )
         }, error = function(e) {
           cat(sprintf("[ERROR] replicateBE::method.A() failed for %s: %s\n", param, e$message))
@@ -358,9 +386,11 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
             print = FALSE,
             details = TRUE,
             alpha = alpha,
-            regulator = "EMA",  # EMA for ABEL
+            regulator = abel_regulator,  # User-selected regulator
             logtrans = !data_is_logged,  # Only log-transform if data is NOT already logged
-            ola = df_method  # DF approximation: "sas", "satterthwaite", "kenward-roger"
+            ola = df_method,             # DF approximation: "sas", "satterthwaite", "kenward-roger"
+            adjust = abel_adjust,        # TIE adjustment
+            fence = abel_fence           # Outlier detection fence (note: outlier detection in method.B uses ola for DF method)
           )
         }, error = function(e) {
           cat(sprintf("[ERROR] replicateBE::method.B(ola='%s') failed for %s: %s\n", df_method, param, e$message))

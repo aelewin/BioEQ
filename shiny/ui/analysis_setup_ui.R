@@ -520,6 +520,20 @@ tagList(
                 ),
                 selected = "ABE",
                 inline = FALSE
+              ),
+              
+              # ABEL method info - shown when ABEL selected
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'ABEL'",
+                div(style = "margin-top: 10px; padding: 10px; background-color: #e7f3ff; border-left: 3px solid #2196F3; border-radius: 4px;",
+                  div(style = "font-size: 0.85em; color: #555;",
+                    tags$strong(icon("info-circle"), " ABEL Method"), 
+                    help_icon("abel_method", "Click for details", "ABEL Method Selection", help_texts$abel_method$content),
+                    tags$div(style = "margin-top: 5px;",
+                      "Method determined by ANOVA selection above"
+                    )
+                  )
+                )
               )
             ),
             
@@ -538,7 +552,7 @@ tagList(
                 step = 0.01
               ),
               div(id = "confidence_display", style = "margin-bottom: 15px; color: #6c757d;",
-                "95% CI corresponds to α = 0.05 for two one-sided tests"
+                uiOutput("alpha_display_text")
               ),
               
               # Conditional panel for ABE limits (moved here)
@@ -563,23 +577,21 @@ tagList(
                 )
               ),
               
-              # Info panel for ABEL (explaining that ANOVA model selection determines the method)
+              # ABEL Upper Cap Selection
               conditionalPanel(
                 condition = "input.be_analysis_type == 'ABEL'",
-                div(style = "margin-top: 15px; padding: 15px; background-color: #e7f3ff; border-left: 4px solid #2196F3; border-radius: 5px;",
-                  h6(tags$strong(tags$i(class="fa fa-info-circle"), " ABEL Method Selection"), 
-                     style = "color: #1976D2; margin-bottom: 10px;"
+                h5("ABEL Regulatory Approach",
+                   help_icon("abel_upper_cap", help_texts$abel_upper_cap$tooltip, 
+                            help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content)
+                ),
+                selectInput(
+                  "abel_upper_cap",
+                  label = NULL,
+                  choices = list(
+                    "EMA - Scaling with 50% cap (limits: 69.84% - 143.19%)" = "EMA",
+                    "GCC - Fixed widened limits (75.00% - 133.33%)" = "GCC"
                   ),
-                  div(style = "color: #555; font-size: 0.9em;",
-                    p(style = "margin-bottom: 8px;", 
-                      tags$strong("The ANOVA Model selection above determines which replicateBE method will be used:")),
-                    tags$ul(style = "margin-bottom: 0; padding-left: 20px;",
-                      tags$li(tags$strong("Fixed Effects"), " → Method A (Linear Model)"),
-                      tags$li(tags$strong("Mixed Effects - nlme"), " → Method B (SAS default DF)"),
-                      tags$li(tags$strong("Mixed Effects - Satterthwaite"), " → Method B (Satterthwaite DF)"),
-                      tags$li(tags$strong("Mixed Effects - Kenward-Roger"), " → Method B (Kenward-Roger DF)")
-                    )
-                  )
+                  selected = "EMA"
                 )
               ),
               
@@ -609,7 +621,7 @@ tagList(
           )
         ),
         
-        # Advanced Options Section (previously reference scaling)
+        # Advanced Options Section
         conditionalPanel(
           condition = "input.be_analysis_type == 'ABE'",
           div(
@@ -645,6 +657,63 @@ tagList(
               )
             )
           )
+        ),
+        
+        # ABEL Advanced Options
+        conditionalPanel(
+          condition = "input.be_analysis_type == 'ABEL'",
+          div(
+            style = "border: 1px solid #dee2e6; border-radius: 5px; padding: 15px; margin-top: 15px; background: #f8f9fa;",
+            h5("Advanced ABEL Options"),
+            checkboxInput(
+              "abel_show_advanced",
+              "Show advanced options",
+              value = FALSE
+            ),
+            conditionalPanel(
+              condition = "input.abel_show_advanced",
+              div(style = "padding: 15px; background-color: #fff8e1; border: 1px solid #ffd54f; border-radius: 5px; margin-top: 10px;",
+                h6(tags$strong(tags$i(class="fa fa-exclamation-triangle"), " Advanced Options"), 
+                   style = "color: #f57f17; margin-bottom: 10px;"),
+                p(style = "font-size: 0.85em; color: #666; margin-bottom: 12px;",
+                  "These options allow customization of ABEL parameters. Use only if required by specific regulatory guidance."),
+                
+                # TIE adjustment
+                checkboxInput(
+                  "abel_adjust_tie",
+                  "Adjust alpha to control Type I Error inflation",
+                  value = FALSE
+                ),
+                conditionalPanel(
+                  condition = "input.abel_adjust_tie",
+                  div(style = "margin-left: 20px; margin-top: 8px; padding: 10px; background-color: #fff; border-radius: 4px;",
+                    helpText("Iteratively adjusts alpha to control TIE inflation at the nominal level (Labes & Schütz 2016).")
+                  )
+                ),
+                
+                # Outlier analysis
+                checkboxInput(
+                  "abel_outlier_analysis",
+                  "Enable outlier detection (studentized residuals)",
+                  value = FALSE
+                ),
+                conditionalPanel(
+                  condition = "input.abel_outlier_analysis",
+                  div(style = "margin-left: 20px; margin-top: 8px; padding: 10px; background-color: #fff; border-radius: 4px;",
+                    numericInput(
+                      "abel_outlier_fence",
+                      "Outlier detection fence (IQR multiplier):",
+                      value = 2,
+                      min = 1.5,
+                      max = 3,
+                      step = 0.5
+                    ),
+                    helpText("Multiplier of the interquartile range. Higher values = fewer outliers detected. Default: 2 (Tukey's rule).")
+                  )
+                )
+              )
+            )
+          )
         )
       ), # Close Analysis Parameters box
       
@@ -667,9 +736,18 @@ tagList(
       // Function to update confidence interval display
       function updateConfidenceInterval() {
         var alpha = $('#alpha_level').val();
+        var beType = $('input[name=\"be_analysis_type\"]:checked').val();
+        
         if (alpha && !isNaN(alpha)) {
-          var ci = (1 - parseFloat(alpha)) * 100;
-          var ciText = ci.toFixed(0) + '% CI corresponds to α = ' + alpha + ' for two one-sided tests';
+          var ci = (1 - 2 * parseFloat(alpha)) * 100;
+          var ciText = '';
+          
+          if (beType === 'ABEL' || beType === 'RSABE') {
+            ciText = ci.toFixed(0) + '% CI (α = ' + alpha + ' one-sided for TOST)';
+          } else {
+            ciText = ci.toFixed(0) + '% CI (α = ' + alpha + ' one-sided for TOST)';
+          }
+          
           $('#confidence_display').text(ciText);
         }
       }
@@ -679,6 +757,11 @@ tagList(
       
       // Update when alpha level changes
       $('#alpha_level').on('input change', function() {
+        updateConfidenceInterval();
+      });
+      
+      // Update when BE analysis type changes
+      $('input[name=\"be_analysis_type\"]').on('change', function() {
         updateConfidenceInterval();
       });
     });

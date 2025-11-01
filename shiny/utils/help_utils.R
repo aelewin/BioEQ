@@ -233,6 +233,116 @@ help_texts <- list(
     )
   ),
   
+  alpha_level_abe = list(
+    tooltip = "One-sided significance level for the TOST procedure",
+    title = "Alpha Level (α) for ABE",
+    content = div(
+      p("Alpha (α) is the", tags$strong("one-sided"), "significance level used in the Two One-Sided Tests (TOST) procedure for bioequivalence:"),
+      tags$ul(
+        tags$li(tags$strong("α = 0.05"), " → 90% confidence interval (regulatory standard)"),
+        tags$li(tags$strong("α = 0.025"), " → 95% confidence interval (more conservative)"),
+        tags$li(tags$strong("Formula:"), " CI% = 100 × (1 - 2α)")
+      ),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("TOST Procedure:"), br(),
+        "The TOST procedure uses", tags$strong("two"), "one-sided tests:", br(),
+        "• H₁: μT/μR > lower limit", br(),
+        "• H₂: μT/μR < upper limit", br(),
+        "Each test is performed at significance level α (one-sided).", br(),
+        "Together they create a (1-2α) confidence interval."
+      )
+    )
+  ),
+  
+  alpha_level_sabe = list(
+    tooltip = "One-sided significance level for replicate BE analysis",
+    title = "Alpha Level (α) for Scaled BE",
+    content = div(
+      p("For replicate BE studies (ABEL/RSABE), alpha (α) represents the", tags$strong("one-sided"), 
+        "Type I Error probability:"),
+      tags$ul(
+        tags$li(tags$strong("α = 0.05"), " → 90% confidence interval (regulatory standard)"),
+        tags$li(tags$strong("α = 0.025"), " → 95% confidence interval"),
+        tags$li(tags$strong("Formula:"), " CI% = 100 × (1 - 2α)")
+      ),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #fff3cd; border-left: 3px solid #ffc107; border-radius: 4px;",
+        tags$strong(icon("info-circle"), " Important for Replicate Studies:"), br(),
+        "In ABEL/RSABE, the confidence interval is based on the within-subject variability of the reference (s", 
+        tags$sub("wR"), "). The one-sided alpha remains 0.05 for a 90% CI, but the ", 
+        tags$strong("acceptance limits expand"), " based on CV", tags$sub("wR"), "."
+      ),
+      div(
+        style = "margin-top: 10px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("replicateBE Package:"), br(),
+        "The replicateBE package uses α as the one-sided significance level. ",
+        "Setting α = 0.05 will produce a 90% CI using the formula 100(1-2α) = 90%."
+      )
+    )
+  ),
+  
+  abel_method = list(
+    tooltip = "Information about ABEL method selection",
+    title = "ABEL Method Selection",
+    content = div(
+      p("The ANOVA Model selection above determines which replicateBE method will be used for ABEL analysis:"),
+      tags$ul(
+        tags$li(tags$strong("Fixed Effects"), " → Method A (Linear Model/ANOVA)"),
+        tags$li(tags$strong("Mixed Effects - nlme"), " → Method B (SAS default DF approximation)"),
+        tags$li(tags$strong("Mixed Effects - Satterthwaite"), " → Method B (Satterthwaite DF)"),
+        tags$li(tags$strong("Mixed Effects - Kenward-Roger"), " → Method B (Kenward-Roger DF)")
+      ),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("Method A vs Method B:"), br(),
+        tags$strong("Method A:"), " Linear model (lm), faster, suitable for balanced designs", br(),
+        tags$strong("Method B:"), " Mixed-effects model (lme), handles unbalanced designs, allows different DF approximations"
+      )
+    )
+  ),
+  
+  abel_upper_cap = list(
+    tooltip = "Select the regulatory approach for ABEL",
+    title = "ABEL Regulatory Approaches",
+    content = div(
+      p("Different regulatory agencies use different approaches for Average Bioequivalence with Expanding Limits. Only the following are currently supported by the replicateBE package:"),
+      
+      tags$h6(tags$strong("EMA (European Medicines Agency)"), style = "margin-top: 15px;"),
+      tags$ul(
+        tags$li(tags$strong("Scaling with 50% cap")),
+        tags$li("Limits expand based on reference variability (CV", tags$sub("wR"), ")"),
+        tags$li("Maximum expanded limits: 69.84% - 143.19%"),
+        tags$li("Cap reached when CV", tags$sub("wR"), " ≈ 50%"),
+        tags$li("Limits rounded to 2 decimal places"),
+        tags$li("Point estimate must remain within 80.00% - 125.00%")
+      ),
+      
+      div(
+        style = "margin-top: 10px; padding: 10px; background-color: #e7f3ff; border-left: 4px solid #2196F3; border-radius: 4px;",
+        tags$strong(icon("calculator"), " EMA Scaling Formula:"), br(),
+        "Expanded limits = 100 × exp(±k × s", tags$sub("wR"), ")", br(),
+        "where s", tags$sub("wR"), " = √(ln(CV", tags$sub("wR"), tags$sup("2"), " + 1))", br(),
+        "and k = 0.76 (regulatory constant)"
+      ),
+      
+      tags$h6(tags$strong("GCC (Gulf Cooperation Council, pre-2022)"), style = "margin-top: 15px;"),
+      tags$ul(
+        tags$li(tags$strong("Fixed widened limits: 75.00% - 133.33%")),
+        tags$li("Limits do NOT scale with CV", tags$sub("wR")),
+        tags$li("Applied when CV", tags$sub("wR"), " > 30%"),
+        tags$li("If CV", tags$sub("wR"), " ≤ 30%, standard 80-125% limits apply"),
+        tags$li("Point estimate must remain within 80.00% - 125.00%")
+      ),
+      
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;",
+        tags$strong(icon("info-circle"), " Note:"), br(),
+        "Health Canada's approach (57.4% cap, limits 66.7%-150.0%) is not currently supported by the replicateBE package."
+      )
+    )
+  ),
+  
   be_analysis_type = list(
     tooltip = "Select the type of bioequivalence analysis approach",
     title = "BE Analysis Types",
