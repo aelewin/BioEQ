@@ -310,6 +310,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         cat("Setting up cumulative bioequivalence analysis...\n")
         be_data <- be_results()
         config <- analysis_config()
+        nca_data <- nca_results()
         
         # Get the selected ANOVA method and PK parameters
         anova_method <- if (!is.null(config) && !is.null(config$anova_method)) {
@@ -335,12 +336,26 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         cat("Selected parameters:", paste(selected_params, collapse = ", "), "\n")
         cat("Study design:", study_design, "\n")
         
-        # Check what data is available in BE results
-        if (!is.null(be_data)) {
+        # Try different data sources for cumulative analysis
+        pk_data <- NULL
+        
+        # For ABEL analysis, use NCA results directly (they contain Subject, Treatment, Period, PK params)
+        if (!is.null(nca_data)) {
+          if ("subject_data" %in% names(nca_data)) {
+            pk_data <- nca_data$subject_data
+            cat("Using subject_data from NCA results\n")
+          } else if ("nca_results" %in% names(nca_data)) {
+            pk_data <- nca_data$nca_results
+            cat("Using nca_results from NCA results\n")
+          } else if (is.data.frame(nca_data)) {
+            pk_data <- nca_data
+            cat("Using NCA results data frame directly\n")
+          }
+        }
+        
+        # Fallback: try BE results (for older analysis types)
+        if (is.null(pk_data) && !is.null(be_data)) {
           cat("BE results structure:", paste(names(be_data), collapse = ", "), "\n")
-          
-          # Try different data sources in order of preference
-          pk_data <- NULL
           
           if ("merged_data" %in% names(be_data)) {
             pk_data <- be_data$merged_data
@@ -351,45 +366,35 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           } else if ("data" %in% names(be_data)) {
             pk_data <- be_data$data
             cat("Using data from BE results\n")
-          } else {
-            # Try using NCA results directly
-            nca_data <- nca_results()
-            if (!is.null(nca_data) && "nca_results" %in% names(nca_data)) {
-              pk_data <- nca_data$nca_results
-              cat("Using NCA results data for cumulative analysis\n")
-            }
+          }
+        }
+        
+        if (!is.null(pk_data) && nrow(pk_data) > 0) {
+          cat("Found PK data with", nrow(pk_data), "rows and", ncol(pk_data), "columns\n")
+          cat("Available columns:", paste(names(pk_data), collapse = ", "), "\n")
+          
+          # Debug: Check subjects in pk_data (uses capitalized Subject)
+          if ("Subject" %in% names(pk_data)) {
+            pk_subjects <- sort(unique(pk_data$Subject))
+            cat("Subjects in PK data:", paste(pk_subjects, collapse = ", "), "\n")
+            cat("Subject 113 in PK data:", "113" %in% as.character(pk_data$Subject), "\n")
           }
           
-          if (!is.null(pk_data) && nrow(pk_data) > 0) {
-            cat("Found PK data with", nrow(pk_data), "rows and", ncol(pk_data), "columns\n")
-            cat("Available columns:", paste(names(pk_data), collapse = ", "), "\n")
-            
-            # Debug: Check subjects in pk_data (uses capitalized Subject)
-            if ("Subject" %in% names(pk_data)) {
-              pk_subjects <- sort(unique(pk_data$Subject))
-              cat("Subjects in PK data:", paste(pk_subjects, collapse = ", "), "\n")
-              cat("Subject 113 in PK data:", "113" %in% as.character(pk_data$Subject), "\n")
-            }
-            
-            # Setup cumulative analysis data using the new approach
-            cumulative_setup <- generate_cumulative_be_plots(
-              data = pk_data,
-              parameters = selected_params,
-              anova_method = anova_method,
-              be_limits = c(0.8, 1.25),
-              interactive = TRUE,
-              study_design = study_design
-            )
-            
-            plot_objects$cumulative_be <- cumulative_setup
-            cat("✓ Cumulative bioequivalence analysis setup complete\n")
-          } else {
-            cat("No suitable PK data found for cumulative analysis\n")
-            plot_objects$cumulative_be <- list(error = "No PK data available for cumulative analysis")
-          }
+          # Setup cumulative analysis data using the new approach
+          cumulative_setup <- generate_cumulative_be_plots(
+            data = pk_data,
+            parameters = selected_params,
+            anova_method = anova_method,
+            be_limits = c(0.8, 1.25),
+            interactive = TRUE,
+            study_design = study_design
+          )
+          
+          plot_objects$cumulative_be <- cumulative_setup
+          cat("✓ Cumulative bioequivalence analysis setup complete\n")
         } else {
-          cat("No BE results available for cumulative analysis\n")
-          plot_objects$cumulative_be <- list(error = "No BE results available")
+          cat("No suitable PK data found for cumulative analysis\n")
+          plot_objects$cumulative_be <- list(error = "No PK data available for cumulative analysis")
         }
         
       }, error = function(e) {
@@ -406,6 +411,17 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     
     # Concentration-Time Plot Tab
     output$concentration_plot_display <- renderUI({
+      # Check if PK parameters data was uploaded (not concentration-time data)
+      if (!is.null(validation_result()) && !is.null(validation_result()$data_type)) {
+        if (validation_result()$data_type == "pk_parameters") {
+          return(div(class = "alert alert-warning text-center",
+            icon("exclamation-triangle"), 
+            strong(" Concentration-Time Data Not Available"), br(),
+            "Only PK parameters were uploaded. Concentration-time profiles require raw concentration-time data."
+          ))
+        }
+      }
+      
       req(plot_values$plot_objects)
       plot_data <- plot_values$plot_objects[["concentration"]]
       
@@ -534,6 +550,17 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     
     # Individual Subjects Plot Tab
     output$individual_subjects_display <- renderUI({
+      # Check if PK parameters data was uploaded (not concentration-time data)
+      if (!is.null(validation_result()) && !is.null(validation_result()$data_type)) {
+        if (validation_result()$data_type == "pk_parameters") {
+          return(div(class = "alert alert-warning text-center",
+            icon("exclamation-triangle"), 
+            strong(" Concentration-Time Data Not Available"), br(),
+            "Only PK parameters were uploaded. Individual subject profiles require raw concentration-time data."
+          ))
+        }
+      }
+      
       req(plot_values$plot_objects)
       plot_data <- plot_values$plot_objects[["individual_subjects"]]
       
