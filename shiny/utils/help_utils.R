@@ -247,7 +247,7 @@ help_texts <- list(
       ),
       
       h4("Reference-Scaled Average BE (RSABE)", style = "margin-top: 20px;"),
-      p("FDA approach for highly variable drugs (HVDs) with CV ≥ 30%. Features:"),
+      p("Approach for highly variable drugs (HVDs) with CV ≥ 30%. Features:"),
       tags$ul(
         tags$li("BE limits scale with reference formulation variability"),
         tags$li("Point estimate constraint (80-125%) still required"),
@@ -261,7 +261,7 @@ help_texts <- list(
       ),
       
       h4("Average BE with Expanding Limits (ABEL)", style = "margin-top: 20px;"),
-      p("EMA approach for HVDs per EMA guidelines. Features:"),
+      p("Alternative approach for HVDs with expanding acceptance limits. Features:"),
       tags$ul(
         tags$li("Widened limits based on CV (up to 69.84%-143.19%)"),
         tags$li("Geometric mean ratio (GMR) constraint (80-125%)"),

@@ -364,11 +364,11 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             cat("Found PK data with", nrow(pk_data), "rows and", ncol(pk_data), "columns\n")
             cat("Available columns:", paste(names(pk_data), collapse = ", "), "\n")
             
-            # Debug: Check subjects in pk_data
-            if ("subject" %in% names(pk_data)) {
-              pk_subjects <- sort(unique(pk_data$subject))
+            # Debug: Check subjects in pk_data (uses capitalized Subject)
+            if ("Subject" %in% names(pk_data)) {
+              pk_subjects <- sort(unique(pk_data$Subject))
               cat("Subjects in PK data:", paste(pk_subjects, collapse = ", "), "\n")
-              cat("Subject 113 in PK data:", "113" %in% as.character(pk_data$subject), "\n")
+              cat("Subject 113 in PK data:", "113" %in% as.character(pk_data$Subject), "\n")
             }
             
             # Setup cumulative analysis data using the new approach

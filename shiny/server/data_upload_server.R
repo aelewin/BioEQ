@@ -2343,8 +2343,23 @@ observeEvent(input$confirm_pk_mapping, {
     original_col <- pk_mappings[[pk_param]]
     
     if (original_col %in% names(processed_data)) {
+      # Check if this would create a duplicate column name
+      if (pk_param %in% names(processed_data) && pk_param != original_col) {
+        cat(sprintf("[WARNING] Skipping mapping '%s' -> '%s': would create duplicate column\n", original_col, pk_param))
+        next
+      }
       names(processed_data)[names(processed_data) == original_col] <- pk_param
+      cat(sprintf("[DEBUG] Mapped PK column: '%s' -> '%s'\n", original_col, pk_param))
     }
+  }
+  
+  # Remove any duplicate columns that might have been created
+  if (any(duplicated(names(processed_data)))) {
+    dup_cols <- names(processed_data)[duplicated(names(processed_data))]
+    cat(sprintf("[WARNING] Found duplicate columns after mapping: %s\n", paste(unique(dup_cols), collapse = ", ")))
+    cat("[WARNING] Removing duplicate columns (keeping first occurrence)\n")
+    processed_data <- processed_data[, !duplicated(names(processed_data)), drop = FALSE]
+    cat(sprintf("[DEBUG] Columns after deduplication: %s\n", paste(names(processed_data), collapse = ", ")))
   }
   
   # Apply treatment designations to remap treatment values for PK data
@@ -2393,10 +2408,11 @@ observeEvent(input$confirm_pk_mapping, {
   values$validation_result <- validation_result
   values$columns_mapped <- TRUE
   
-  # Update data summary
+  # Update data summary AND data_type
   values$data_summary <- create_data_summary_enhanced(processed_data)
   values$data_summary$pk_mappings_confirmed <- TRUE
   values$data_summary$data_type <- "pk_parameters"
+  values$data_type <- "pk_parameters"  # CRITICAL: Update the main data_type variable
   
   showNotification("Column mapping confirmed!", type = "message", duration = 3)
 })

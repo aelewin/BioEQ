@@ -1261,9 +1261,9 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         # Get subjects that are in NCA results
         nca_res <- nca_results()
         if (is.data.frame(nca_res)) {
-          analyzed_subjects <- unique(nca_res$subject)
+          analyzed_subjects <- unique(nca_res$Subject)
         } else if (!is.null(nca_res$subject_data)) {
-          analyzed_subjects <- unique(nca_res$subject_data$subject)
+          analyzed_subjects <- unique(nca_res$subject_data$Subject)
         } else {
           analyzed_subjects <- character(0)
         }

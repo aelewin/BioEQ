@@ -520,37 +520,6 @@ tagList(
                 ),
                 selected = "ABE",
                 inline = FALSE
-              ),
-              
-              # Placeholder panels for RSABE and ABEL
-              conditionalPanel(
-                condition = "input.be_analysis_type == 'RSABE'",
-                div(class = "alert alert-info",
-                  h5(icon("info-circle"), " Reference-Scaled Average BE"),
-                  p("RSABE analysis for highly variable drugs (CV > 30%)"),
-                  p("Configuration options coming soon:"),
-                  tags$ul(
-                    tags$li("Regulatory constant (default: 0.893)"),
-                    tags$li("CV threshold for scaling (default: 30%)"),
-                    tags$li("Upper cap for scaling")
-                  ),
-                  helpText("Currently using ABE methodology. Full RSABE implementation pending.")
-                )
-              ),
-              
-              conditionalPanel(
-                condition = "input.be_analysis_type == 'ABEL'",
-                div(class = "alert alert-info",
-                  h5(icon("info-circle"), " Average BE with Expanding Limits"),
-                  p("ABEL analysis per EMA guidelines for HVDs"),
-                  p("Configuration options coming soon:"),
-                  tags$ul(
-                    tags$li("CV threshold (default: 30%)"),
-                    tags$li("Maximum expansion factor"),
-                    tags$li("Widening approach selection")
-                  ),
-                  helpText("Currently using ABE methodology. Full ABEL implementation pending.")
-                )
               )
             ),
             
@@ -590,6 +559,35 @@ tagList(
                   ),
                   div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
                     "• Standard: 80.00% - 125.00% for most drugs"
+                  )
+                )
+              ),
+              
+              # Conditional panel for ABEL method selection
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'ABEL'",
+                h5("ABEL Method (EMA)",
+                   help_icon("abel_method", "Select statistical method for ABEL analysis", 
+                            "ABEL Method Selection", 
+                            "<p><strong>Method A (ANOVA-based):</strong> Traditional ANOVA approach for analyzing replicate designs. This is the default method specified in EMA guidelines.</p>
+                             <p><strong>Method B (Mixed Model):</strong> Uses a mixed-effects model that accounts for subjects as random effects. This method is also acceptable under EMA guidelines and may be more appropriate when subject variability is a concern.</p>
+                             <p>Both methods are scientifically valid for ABEL analysis. Method A is more commonly used in regulatory submissions.</p>")
+                ),
+                div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
+                  radioButtons(
+                    "abel_method",
+                    label = NULL,
+                    choices = list(
+                      "Method A - ANOVA (default)" = "A",
+                      "Method B - Mixed Model" = "B"
+                    ),
+                    selected = "A",
+                    inline = FALSE
+                  ),
+                  div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
+                    "• Method A: ANOVA-based approach (most common)",
+                    tags$br(),
+                    "• Method B: Mixed-effects model with random subject effects"
                   )
                 )
               ),

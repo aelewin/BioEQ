@@ -77,28 +77,6 @@ output$groups_detected <- reactive({
 outputOptions(output, "groups_detected", suspendWhenHidden = FALSE)
 
 # Observer for BE analysis type selection - show notifications for RSABE/ABEL
-observe({
-  req(input$be_analysis_type)
-  
-  be_type <- input$be_analysis_type
-  
-  if (be_type == "RSABE") {
-    showNotification(
-      "RSABE analysis selected. Currently using standard ABE methodology. 
-       Full RSABE implementation with reference scaling coming soon.",
-      type = "info",
-      duration = 5
-    )
-  } else if (be_type == "ABEL") {
-    showNotification(
-      "ABEL analysis selected. Currently using standard ABE methodology. 
-       Full ABEL implementation with expanding limits coming soon.",
-      type = "info", 
-      duration = 5
-    )
-  }
-})
-
 # Detected design output
 output$detected_design <- renderUI({
   req(values$uploaded_data)
@@ -106,18 +84,33 @@ output$detected_design <- renderUI({
   tryCatch({
     data <- values$uploaded_data
     
+    # Verify required columns exist
+    if (!all(c("Subject", "Formulation") %in% names(data))) {
+      return(p("Unable to detect design - missing required columns", 
+               style = "color: #dc3545;"))
+    }
+    
     # Use capitalized column names
     n_treatments <- length(unique(data$Formulation))
-    treatments_per_subject <- data %>%
-      group_by(Subject) %>%
-      summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
+    
+    # Safely calculate treatments per subject
+    treatments_per_subject <- tryCatch({
+      data %>%
+        group_by(Subject) %>%
+        summarise(n_treatments = length(unique(Formulation)), .groups = "drop")
+    }, error = function(e) {
+      # Fallback if dplyr fails
+      aggregate(Formulation ~ Subject, data = data, 
+                FUN = function(x) length(unique(x)))
+    })
+    
     is_crossover <- isTRUE(all(treatments_per_subject$n_treatments == n_treatments))
     
     # Detect replicate design using the BE analysis function
     replicate_result <- NULL
     if (isTRUE(is_crossover) && all(c("Subject", "Period", "Formulation") %in% names(data))) {
-      tryCatch({
-        replicate_result <- detect_replicate_design(data)
+      replicate_result <- tryCatch({
+        detect_replicate_design(data)
       }, error = function(e) {
         cat("[DEBUG] Replicate detection error:", e$message, "\n")
         NULL
@@ -143,18 +136,17 @@ output$detected_design <- renderUI({
       p(strong("Treatments: "), n_treatments, style = "margin: 8px 0;"),
       p(strong("Subjects: "), n_subjects, style = "margin: 8px 0;"),
       p(strong("Observations: "), n_observations, style = "margin: 8px 0;"),
-      if ("Period" %in% names(data)) {
-        p(strong("Periods: "), length(unique(data$Period)), style = "margin: 8px 0;")
-      },
-      if ("Sequence" %in% names(data)) {
-        p(strong("Sequences: "), paste(unique(data$Sequence), collapse = ", "), style = "margin: 8px 0;")
+      if (!is.null(replicate_result) && isTRUE(replicate_result$is_replicate)) {
+        tagList(
+          p(strong("Periods: "), replicate_result$n_periods, style = "margin: 8px 0;"),
+          p(strong("Sequences: "), paste(replicate_result$sequences, collapse = ", "), style = "margin: 8px 0;")
+        )
       }
     )
+    
   }, error = function(e) {
-    div(
-      p("Error detecting study design:", style = "color: #dc3545; margin: 8px 0;"),
-      p(as.character(e$message), style = "color: #6c757d; font-size: 12px; margin: 8px 0;")
-    )
+    cat("[DEBUG] Design detection error:", e$message, "\n")
+    p("Error detecting study design:", e$message, style = "color: #dc3545; margin: 8px 0;")
   })
 })
 
@@ -227,10 +219,11 @@ create_help_modal(session, input, "confidence_level", help_texts$confidence_leve
 create_help_modal(session, input, "be_limits", help_texts$be_limits$title, help_texts$be_limits$content)
 create_help_modal(session, input, "reference_scaling", help_texts$reference_scaling$title, help_texts$reference_scaling$content)
 
-# Observer to disable carryover assessment for parallel designs
+# Observer to disable carryover assessment for parallel designs and PK parameter datasets
 observe({
   # Check if study design indicates parallel design
   is_parallel <- FALSE
+  is_pk_data <- FALSE
   
   if (!is.null(input$study_design)) {
     # Check manual selection
@@ -242,11 +235,9 @@ observe({
     if (input$study_design == "auto" && !is.null(values$uploaded_data)) {
       tryCatch({
         data <- values$uploaded_data
-        n_treatments <- length(unique(data$treatment))
-        treatments_per_subject <- data %>%
-          group_by(subject) %>%
-          summarise(n_treatments = length(unique(treatment)), .groups = "drop")
-        is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
+        n_treatments <- length(unique(data$Formulation))
+        treatments_per_subject <- tapply(data$Formulation, data$Subject, function(x) length(unique(x)))
+        is_crossover <- all(treatments_per_subject == n_treatments)
         is_parallel <- !is_crossover  # TRUE if NOT crossover (i.e., parallel)
       }, error = function(e) {
         is_parallel <- FALSE
@@ -254,9 +245,22 @@ observe({
     }
   }
   
-  # Update the carryover checkbox if parallel design is detected
-  if (is_parallel) {
+  # Check if this is PK parameter data (no Time/Concentration columns)
+  if (!is.null(values$data_type) && values$data_type == "pk_parameters") {
+    is_pk_data <- TRUE
+  } else if (!is.null(values$uploaded_data)) {
+    # Double-check by looking for Time/Concentration columns
+    has_time <- any(c("Time", "time", "Time.Point", "timepoint") %in% names(values$uploaded_data))
+    has_conc <- any(c("Concentration", "concentration", "Conc", "DV") %in% names(values$uploaded_data))
+    is_pk_data <- !(has_time && has_conc)
+  }
+  
+  # Disable carryover checkbox if parallel design or PK parameter data
+  if (is_parallel || is_pk_data) {
     updateCheckboxInput(session, "test_carryover", value = FALSE)
+    shinyjs::disable("test_carryover")
+  } else {
+    shinyjs::enable("test_carryover")
   }
 })
 
@@ -308,11 +312,9 @@ output$settings_summary <- renderUI({
   detected_design <- if (study_design == "auto" && !is.null(values$uploaded_data)) {
     tryCatch({
       data <- values$uploaded_data
-      n_treatments <- length(unique(data$treatment))
-      treatments_per_subject <- data %>%
-        group_by(subject) %>%
-        summarise(n_treatments = length(unique(treatment)), .groups = "drop")
-      is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
+      n_treatments <- length(unique(data$Formulation))
+      treatments_per_subject <- tapply(data$Formulation, data$Subject, function(x) length(unique(x)))
+      is_crossover <- all(treatments_per_subject == n_treatments)
       
       if (is_crossover && n_treatments == 2) "2×2×2" else 
       if (is_crossover) paste0(n_treatments, "×", n_treatments) else "Parallel"
@@ -492,6 +494,7 @@ observeEvent(input$run_analysis, {
   analysis_config <- list(
     study_design = input$study_design %||% "auto",
     be_analysis_type = input$be_analysis_type %||% "ABE",  # NEW: BE analysis type
+    abel_method = input$abel_method %||% "A",  # NEW: ABEL method selection (A or B)
     auc_method = input$auc_method %||% "mixed",
     lambda_z_method = input$lambda_z_method %||% "aic",
     lambda_z_points = input$lambda_z_points %||% 3,
@@ -568,11 +571,13 @@ observeEvent(input$run_analysis, {
     if (analysis_config$study_design == "auto") {
       # Auto-detect design logic here
       data <- values$uploaded_data
-      n_treatments <- length(unique(data$treatment))
-      treatments_per_subject <- data %>%
-        group_by(subject) %>%
-        summarise(n_treatments = length(unique(treatment)), .groups = "drop")
-      is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
+      
+      # Use capitalized column names (Subject, Formulation) as per standardization
+      n_treatments <- length(unique(data$Formulation))
+      
+      # Count treatments per subject without dplyr
+      treatments_per_subject <- tapply(data$Formulation, data$Subject, function(x) length(unique(x)))
+      is_crossover <- all(treatments_per_subject == n_treatments)
       
       detected_design <- if (is_crossover && n_treatments == 2) {
         "2x2x2"
@@ -621,12 +626,8 @@ observeEvent(input$run_analysis, {
           cat(sprintf("[DEBUG] Excluding subjects with carryover: %s\n", paste(excluded_subjects, collapse = ", ")))
           cat(sprintf("[DEBUG] Original data has %d rows\n", nrow(analysis_data)))
           
-          # Check which column name exists in analysis_data and use that for filtering
-          if ("Subject" %in% names(analysis_data)) {
-            analysis_data <- analysis_data[!analysis_data$Subject %in% excluded_subjects, ]
-          } else if ("subject" %in% names(analysis_data)) {
-            analysis_data <- analysis_data[!analysis_data$subject %in% excluded_subjects, ]
-          }
+          # Data should ALWAYS have Subject (capitalized) from data upload
+          analysis_data <- analysis_data[!analysis_data$Subject %in% excluded_subjects, ]
           
           cat(sprintf("[DEBUG] Filtered data has %d rows\n", nrow(analysis_data)))
           # Carryover notification removed; summary is now only in Results view
@@ -690,20 +691,16 @@ observeEvent(input$run_analysis, {
       if (!("sequence" %in% names(nca_results)) || !("period" %in% names(nca_results))) {
         cat("[DEBUG] Adding missing design variables to NCA results for ANOVA...\n")
         
-        # Create unique identifier for merging
-        analysis_data$merge_id <- paste(analysis_data$subject, analysis_data$treatment, sep = "_")
-        nca_results$merge_id <- paste(nca_results$subject, nca_results$treatment, sep = "_")
+        # Create unique identifier for merging - use CAPITALIZED column names
+        analysis_data$merge_id <- paste(analysis_data$Subject, analysis_data$Formulation, sep = "_")
+        nca_results$merge_id <- paste(nca_results$Subject, nca_results$Formulation, sep = "_")
         
         # Get design variables from original data
-        design_vars <- analysis_data %>%
-          select(merge_id, subject, sequence, period, treatment) %>%
-          group_by(merge_id) %>%
-          slice(1) %>%  # Take first row for each subject-treatment combination
-          ungroup()
+        design_vars <- analysis_data[!duplicated(analysis_data$merge_id), c("merge_id", "Subject", "Sequence", "Period", "Formulation")]
         
         # Merge design variables with NCA results
-        nca_results <- nca_results %>%
-          select(-merge_id) %>%  # Remove temporary merge column if it exists
+        nca_results <- merge(nca_results, design_vars, by = "merge_id", all.x = TRUE, suffixes = c("", ".design"))
+        nca_results$merge_id <- NULL  # Remove temporary merge column
           left_join(design_vars %>% select(merge_id, sequence, period), by = c("merge_id" = "merge_id")) %>%
           select(-merge_id)  # Remove temporary merge column
         
@@ -961,7 +958,17 @@ observeEvent(input$run_analysis, {
       alpha <- (100 - analysis_config$confidence_level) / 100
       
       # Prepare data for BE analysis 
-      be_data <- values$uploaded_data
+      # For PK parameter data, uploaded_data already contains everything we need
+      # For concentration-time data, we need to merge NCA results
+      if (values$data_type == "pk_parameters") {
+        # PK parameter data: use uploaded data directly (already has Subject, Formulation, Period, Sequence, PK params)
+        be_data <- values$uploaded_data
+        cat("📋 Using PK parameter data directly for BE analysis\n")
+      } else {
+        # Concentration-time data: use uploaded data as base and will merge NCA results below
+        be_data <- values$uploaded_data
+        cat("📋 Using concentration-time data - will merge NCA results\n")
+      }
       
       # Ensure proper column names for BE analysis functions
       # BE analysis functions expect: Subject, Formulation, Period, Sequence
@@ -983,8 +990,8 @@ observeEvent(input$run_analysis, {
       cat(sprintf("📋 Columns: %s\n", paste(names(be_data), collapse = ", ")))
       cat(sprintf("📋 Unique subjects: %d\n", length(unique(be_data$Subject))))
       
-      # Add NCA results to the BE data for analysis
-      if (is.data.frame(nca_results) && nrow(nca_results) > 0) {
+      # Add NCA results to the BE data for analysis (ONLY for concentration-time data)
+      if (values$data_type == "concentration_time" && is.data.frame(nca_results) && nrow(nca_results) > 0) {
         cat(sprintf("📋 NCA Results structure: %d rows, %d cols\n", nrow(nca_results), ncol(nca_results)))
         cat(sprintf("📋 NCA Columns: %s\n", paste(names(nca_results), collapse = ", ")))
         
@@ -1099,7 +1106,7 @@ observeEvent(input$run_analysis, {
           
           non_na_count <- sum(!is.na(param_values))
           numeric_count <- sum(is.numeric(param_values), na.rm = TRUE)
-          positive_count <- 0
+          positive_count <- 0;
           
           cat(sprintf("📊 %s: %d total, %d non-NA, class=%s\n", 
                       param, length(param_values), non_na_count, class(param_values)[1]))
@@ -1190,12 +1197,15 @@ observeEvent(input$run_analysis, {
         confidence_intervals = list(),
         be_conclusions = list(),
         design = study_design,
-        n_subjects = length(unique(values$uploaded_data$subject)),
+        n_subjects = length(unique(values$uploaded_data$Subject)),
         parameters = analysis_config$pk_parameters,
         alpha = alpha,
         be_limits = be_limits,
         anova_results = anova_results  # PRESERVE ANOVA RESULTS EVEN WHEN BE FAILS
       )
+      
+      # Mark analysis as incomplete
+      values$analysis_complete <- FALSE
       
       showNotification(
         paste("BE Analysis Error:", e$message), 
@@ -1217,6 +1227,8 @@ observeEvent(input$run_analysis, {
     error_message <- paste("Analysis failed:", e$message)
     if (grepl("log.*non-numeric", e$message, ignore.case = TRUE)) {
       error_message <- "Analysis failed: Unable to perform log transformation on non-numeric data. Please ensure your data contains only numeric values for PK parameters."
+    } else if (grepl("no package called", e$message, ignore.case = TRUE)) {
+      error_message <- paste("Analysis failed:", e$message, "- Please install required packages.")
     }
     
     showNotification(
@@ -1236,8 +1248,10 @@ observeEvent(input$run_analysis, {
   shinyjs::hide("analysis_progress")
   updateTabItems(session, "sidebar", "results")
   
-  # Show success notification (simplified)
-  showNotification("Analysis completed successfully!", type = "message", duration = 5)
+  # Show success notification only if analysis actually completed
+  if (isTRUE(values$analysis_complete)) {
+    showNotification("Analysis completed successfully!", type = "default", duration = 5)
+  }
 })
 
 # Custom template saving
