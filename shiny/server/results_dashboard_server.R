@@ -47,184 +47,156 @@ calculate_pk_comparison <- function(nca_data, param_name) {
     return(NULL)
   }
   
-  # Extract subject data
+  # Extract subject data - already mapped with standard column names
   subject_data <- nca_data$subject_data
-  
-  # Debug: Check what columns are available
-  cat("Available columns in subject_data:", names(subject_data), "\n")
   
   # Check if parameter exists
   if (!param_name %in% names(subject_data)) {
-    cat("Parameter", param_name, "not found in columns:", names(subject_data), "\n")
     return(NULL)
   }
   
-  cat("Parameter", param_name, "found in data\n")
-  
-  # Check what columns are available and find the correct column names
-  available_cols <- names(subject_data)
-  cat("Searching for subject and treatment columns in:", paste(available_cols, collapse = ", "), "\n")
-  
-  # Find subject column (could be "Subject", "subject", "SUBJECT", etc.)
-  subject_col <- NULL
-  for (col in c("Subject", "subject", "SUBJECT", "subj", "SUBJ", "ID", "id")) {
-    if (col %in% available_cols) {
-      subject_col <- col
-      break
-    }
-  }
-  
-  # Find treatment column (could be "Treatment", "treatment", "TREATMENT", "TRT", etc.)
-  treatment_col <- NULL
-  for (col in c("Treatment", "treatment", "TREATMENT", "TRT", "trt", "Drug", "drug")) {
-    if (col %in% available_cols) {
-      treatment_col <- col
-      break
-    }
-  }
-  
-  # Return NULL if we can't find the required columns
-  if (is.null(subject_col) || is.null(treatment_col)) {
-    cat("Could not find required columns. subject_col:", subject_col, "treatment_col:", treatment_col, "\n")
+  # Expected columns from mapped data: Subject, Formulation, Period, Sequence
+  required_cols <- c("Subject", "Formulation", param_name)
+  if (!all(required_cols %in% names(subject_data))) {
+    available <- names(subject_data)
     return(list(
-      error = paste("Required columns not found. Available columns:", 
-                   paste(available_cols, collapse = ", "))
+      error = paste0("Required columns not found. Available columns: ", 
+                    paste(available, collapse = ", "))
     ))
   }
   
-  cat("Found columns - subject_col:", subject_col, "treatment_col:", treatment_col, "\n")
+  # Detect if this is a replicate design by checking periods per subject
+  periods_per_subject <- subject_data %>%
+    group_by(Subject) %>%
+    summarise(n_periods = n_distinct(Period), .groups = "drop") %>%
+    pull(n_periods) %>%
+    max()
   
-  # Filter for the parameter and reshape data using base R
-  # Extract relevant columns
-  cat("Extracting columns:", subject_col, treatment_col, param_name, "\n")
+  is_replicate <- periods_per_subject > 2
   
-  # Check if all columns exist before extraction
-  required_cols <- c(subject_col, treatment_col, param_name)
-  missing_cols <- setdiff(required_cols, names(subject_data))
-  if (length(missing_cols) > 0) {
-    cat("Missing columns:", paste(missing_cols, collapse = ", "), "\n")
-    return(list(
-      error = paste("Missing columns:", paste(missing_cols, collapse = ", "))
-    ))
+  # Extract parameter data
+  param_data <- subject_data %>%
+    select(Subject, Formulation, Period, all_of(param_name)) %>%
+    rename(Value = !!param_name) %>%
+    filter(!is.na(Value))
+  
+  if (nrow(param_data) == 0) {
+    return(list(error = "No data available for this parameter"))
   }
   
-  param_data <- subject_data[, c(subject_col, treatment_col, param_name)]
-  names(param_data) <- c("Subject", "Treatment", "Value")  # Standardize column names
-  
-  cat("Extracted data dimensions:", nrow(param_data), "rows x", ncol(param_data), "columns\n")
-  
-  # Remove rows with missing values
-  param_data <- param_data[!is.na(param_data$Value), ]
-  
-  # Check what treatments are available
-  unique_treatments <- unique(param_data$Treatment)
-  cat("Available treatments:", paste(unique_treatments, collapse = ", "), "\n")
-  
-  # Find Test and Reference treatments more flexibly
-  test_treatment <- NULL
-  ref_treatment <- NULL
-  
-  # Look for Test treatment (could be T, Test, TEST, etc.)
-  for (trt in c("T", "Test", "TEST", "test", "1")) {
-    if (trt %in% unique_treatments) {
-      test_treatment <- trt
-      break
+  if (is_replicate) {
+    # REPLICATE DESIGN: Calculate T1/R1, T2/R2, and Tavg/Ravg
+    
+    # Separate Test and Reference data
+    test_data <- param_data %>% filter(Formulation == "T")
+    ref_data <- param_data %>% filter(Formulation == "R")
+    
+    # For each subject, get all Test and Reference values by period
+    test_by_subject <- test_data %>%
+      group_by(Subject) %>%
+      arrange(Period) %>%
+      summarise(
+        T1 = if(n() >= 1) Value[1] else NA_real_,
+        T2 = if(n() >= 2) Value[2] else NA_real_,
+        T_mean = mean(Value, na.rm = TRUE),
+        T_n = n(),
+        .groups = "drop"
+      )
+    
+    ref_by_subject <- ref_data %>%
+      group_by(Subject) %>%
+      arrange(Period) %>%
+      summarise(
+        R1 = if(n() >= 1) Value[1] else NA_real_,
+        R2 = if(n() >= 2) Value[2] else NA_real_,
+        R_mean = mean(Value, na.rm = TRUE),
+        R_n = n(),
+        .groups = "drop"
+      )
+    
+    # Merge Test and Reference data
+    comparison_data <- full_join(test_by_subject, ref_by_subject, by = "Subject") %>%
+      mutate(
+        # Individual period ratios
+        Ratio_T1_R1 = T1 / R1,
+        Ratio_T2_R2 = T2 / R2,
+        # Average ratio
+        Ratio_Tavg_Ravg = T_mean / R_mean,
+        # Flag missing data
+        Missing_Test = replace_na(T_n < periods_per_subject / 2, FALSE),
+        Missing_Ref = replace_na(R_n < periods_per_subject / 2, FALSE),
+        Subject = as.character(Subject)
+      )
+    
+    # Calculate summary statistics for each ratio type
+    calc_stats <- function(values, label) {
+      valid_values <- values[!is.na(values) & !is.infinite(values)]
+      if (length(valid_values) == 0) {
+        return(data.frame(
+          Ratio_Type = label,
+          N = 0,
+          Geometric_Mean = NA,
+          CV_percent = NA,
+          Min = NA,
+          Median = NA,
+          Max = NA
+        ))
+      }
+      
+      data.frame(
+        Ratio_Type = label,
+        N = length(valid_values),
+        Geometric_Mean = exp(mean(log(valid_values))),
+        CV_percent = 100 * sqrt(exp(var(log(valid_values))) - 1),
+        Min = min(valid_values),
+        Median = median(valid_values),
+        Max = max(valid_values)
+      )
     }
-  }
-  
-  # Look for Reference treatment (could be R, Reference, REF, etc.)
-  for (trt in c("R", "Reference", "REF", "ref", "REFERENCE", "2")) {
-    if (trt %in% unique_treatments) {
-      ref_treatment <- trt
-      break
-    }
-  }
-  
-  if (is.null(test_treatment) || is.null(ref_treatment)) {
-    return(list(
-      error = paste("Could not identify Test and Reference treatments. Available treatments:", 
-                   paste(unique_treatments, collapse = ", "))
-    ))
-  }
-  
-  # Split by treatment to get Test and Reference values
-  test_data <- param_data[param_data$Treatment == test_treatment, ]
-  ref_data <- param_data[param_data$Treatment == ref_treatment, ]
-  
-  cat("Test data rows:", nrow(test_data), "Reference data rows:", nrow(ref_data), "\n")
-  
-  # Merge Test and Reference data by Subject
-  comparison_data <- merge(test_data[, c("Subject", "Value")], 
-                          ref_data[, c("Subject", "Value")], 
-                          by = "Subject", 
-                          suffixes = c("_Test", "_Reference"),
-                          all = TRUE)
-  
-  # Rename columns and calculate ratio
-  names(comparison_data) <- c("Subject", "Test", "Reference")
-  comparison_data$Ratio <- comparison_data$Test / comparison_data$Reference
-  comparison_data$Subject <- as.character(comparison_data$Subject)
-  
-  # Remove rows where both Test and Reference are missing
-  comparison_data <- comparison_data[!(is.na(comparison_data$Test) & is.na(comparison_data$Reference)), ]
-  
-  # Calculate summary statistics
-  test_values <- comparison_data$Test[!is.na(comparison_data$Test)]
-  ref_values <- comparison_data$Reference[!is.na(comparison_data$Reference)]
-  ratio_values <- comparison_data$Ratio[!is.na(comparison_data$Ratio)]
-  
-  # Arithmetic statistics
-  # Note: Arithmetic ratio is mean of individual subject ratios (T/R for each subject)
-  arithmetic_stats <- data.frame(
-    Statistic = c("Arithmetic Mean", "Standard Deviation", "CV%"),
-    Test = c(
-      mean(test_values, na.rm = TRUE),
-      sd(test_values, na.rm = TRUE),
-      100 * sd(test_values, na.rm = TRUE) / mean(test_values, na.rm = TRUE)
-    ),
-    Reference = c(
-      mean(ref_values, na.rm = TRUE),
-      sd(ref_values, na.rm = TRUE),
-      100 * sd(ref_values, na.rm = TRUE) / mean(ref_values, na.rm = TRUE)
-    ),
-    Ratio = c(
-      mean(ratio_values, na.rm = TRUE),  # Mean of individual T/R ratios
-      sd(ratio_values, na.rm = TRUE),
-      100 * sd(ratio_values, na.rm = TRUE) / mean(ratio_values, na.rm = TRUE)
+    
+    summary_stats <- bind_rows(
+      calc_stats(comparison_data$Ratio_T1_R1, "T1/R1"),
+      calc_stats(comparison_data$Ratio_T2_R2, "T2/R2"),
+      calc_stats(comparison_data$Ratio_Tavg_Ravg, "T_avg/R_avg")
     )
-  )
-  
-  # Geometric statistics (only for positive values)
-  positive_test <- test_values[test_values > 0]
-  positive_ref <- ref_values[ref_values > 0]
-  positive_ratio <- ratio_values[ratio_values > 0]
-  
-  # For log-transformed parameters, we don't calculate geometric mean
-  is_log_param <- grepl("^(log|ln)", tolower(param_name))
-  
-  if (!is_log_param && length(positive_test) > 0 && length(positive_ref) > 0) {
-    geo_mean_test <- exp(mean(log(positive_test)))
-    geo_mean_ref <- exp(mean(log(positive_ref)))
-    geo_mean_ratio <- if(length(positive_ratio) > 0) exp(mean(log(positive_ratio))) else geo_mean_test / geo_mean_ref
     
-    # Geometric standard deviation calculation
-    geo_sd_test <- if(length(positive_test) > 1) exp(sd(log(positive_test))) else NA
-    geo_sd_ref <- if(length(positive_ref) > 1) exp(sd(log(positive_ref))) else NA
-    geo_sd_ratio <- if(length(positive_ratio) > 1) exp(sd(log(positive_ratio))) else NA
-    
-    # Geometric CV calculation
-    geo_cv_test <- if(length(positive_test) > 1) 100 * sqrt(exp(var(log(positive_test))) - 1) else NA
-    geo_cv_ref <- if(length(positive_ref) > 1) 100 * sqrt(exp(var(log(positive_ref))) - 1) else NA
-    geo_cv_ratio <- if(length(positive_ratio) > 1) 100 * sqrt(exp(var(log(positive_ratio))) - 1) else NA
-    
-    geometric_stats <- data.frame(
-      Statistic = c("Geometric Mean", "Geometric SD", "Geometric CV%"),
-      Test = c(geo_mean_test, geo_sd_test, geo_cv_test),
-      Reference = c(geo_mean_ref, geo_sd_ref, geo_cv_ref),
-      Ratio = c(geo_mean_ratio, geo_sd_ratio, geo_cv_ratio)
-    )
   } else {
-    geometric_stats <- NULL
+    # 2x2x2 CROSSOVER DESIGN: Simple T/R ratio per subject
+    
+    test_data <- param_data %>% filter(Formulation == "T")
+    ref_data <- param_data %>% filter(Formulation == "R")
+    
+    comparison_data <- full_join(
+      test_data %>% select(Subject, Value) %>% rename(Test = Value),
+      ref_data %>% select(Subject, Value) %>% rename(Reference = Value),
+      by = "Subject"
+    ) %>%
+      mutate(
+        Ratio = Test / Reference,
+        Subject = as.character(Subject)
+      )
+    
+    # Calculate summary statistics
+    valid_ratios <- comparison_data$Ratio[!is.na(comparison_data$Ratio) & !is.infinite(comparison_data$Ratio)]
+    
+    if (length(valid_ratios) > 0) {
+      summary_stats <- data.frame(
+        Statistic = c("N", "Geometric Mean Ratio", "CV%", "Min", "Median", "Max"),
+        Value = c(
+          length(valid_ratios),
+          exp(mean(log(valid_ratios))),
+          100 * sqrt(exp(var(log(valid_ratios))) - 1),
+          min(valid_ratios),
+          median(valid_ratios),
+          max(valid_ratios)
+        )
+      )
+    } else {
+      summary_stats <- data.frame(
+        Statistic = "No valid ratios",
+        Value = NA
+      )
+    }
   }
   
   # Determine units based on parameter
@@ -243,39 +215,12 @@ calculate_pk_comparison <- function(nca_data, param_name) {
     unit <- paste0("ln(", sub("^(log|ln)", "", param_name), ")")
   }
   
-  # Calculate least squares means with SD and CV%
-  # Note: LSM ratio is ratio of treatment means (mean(T) / mean(R))
-  # For now, using simple means (should ideally come from ANOVA model)
-  lsmeans_test <- mean(test_values, na.rm = TRUE)
-  lsmeans_ref <- mean(ref_values, na.rm = TRUE)
-  # LSM ratio should be ratio of LSMeans, not mean of individual ratios
-  lsmeans_ratio <- lsmeans_test / lsmeans_ref
-  
-  lsmeans_test_sd <- sd(test_values, na.rm = TRUE)
-  lsmeans_ref_sd <- sd(ref_values, na.rm = TRUE)
-  # For LSM ratio SD, we need to calculate from the ratio of means approach
-  # This is an approximation - ideally would come from ANOVA model
-  lsmeans_ratio_sd <- lsmeans_ratio * sqrt((lsmeans_test_sd/lsmeans_test)^2 + (lsmeans_ref_sd/lsmeans_ref)^2)
-  
-  lsmeans_test_cv <- 100 * lsmeans_test_sd / lsmeans_test
-  lsmeans_ref_cv <- 100 * lsmeans_ref_sd / lsmeans_ref
-  lsmeans_ratio_cv <- 100 * lsmeans_ratio_sd / lsmeans_ratio
-  
-  lsmeans <- data.frame(
-    Statistic = c("Least Squares Mean", "Standard Deviation", "CV%"),
-    Test = c(lsmeans_test, lsmeans_test_sd, lsmeans_test_cv),
-    Reference = c(lsmeans_ref, lsmeans_ref_sd, lsmeans_ref_cv),
-    Ratio = c(lsmeans_ratio, lsmeans_ratio_sd, lsmeans_ratio_cv)
-  )
-  
   return(list(
     individual_data = comparison_data,
-    lsmeans = lsmeans,
-    arithmetic_stats = arithmetic_stats,
-    geometric_stats = geometric_stats,
+    summary_stats = summary_stats,
+    is_replicate = is_replicate,
     unit = unit,
-    parameter = param_name,
-    n_subjects = nrow(comparison_data)
+    parameter = param_name
   ))
 }
 
@@ -2441,7 +2386,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               class = "alert alert-info",
               style = "margin-bottom: 20px;",
               icon("users"),
-              paste(" Analysis based on", comparison_results$n_subjects, "subjects")
+              paste(" Analysis based on", nrow(comparison_results$individual_data), "subjects",
+                   if(comparison_results$is_replicate) " (Replicate Design)" else " (2x2x2 Crossover)")
             ),
             
             # Single consolidated statistics table (removed redundant h6 label)
@@ -2464,17 +2410,51 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       
       if (is.null(comparison_results)) return(NULL)
       
-      # Format the individual data
+      # Format the individual data based on design type
       formatted_data <- comparison_results$individual_data
-      formatted_data$Test <- round(formatted_data$Test, 3)
-      formatted_data$Reference <- round(formatted_data$Reference, 3)
-      formatted_data$Ratio <- round(formatted_data$Ratio, 3)
       
-      # Clean column names
-      col_names <- c("Subject", "Test", "Reference", "T/R Ratio")
+      if (comparison_results$is_replicate) {
+        # REPLICATE DESIGN: Show T1, R1, T2, R2, averages, and all ratios
+        display_data <- formatted_data %>%
+          select(Subject, T1, R1, T2, R2, T_mean, R_mean, Ratio_T1_R1, Ratio_T2_R2, Ratio_Tavg_Ravg) %>%
+          mutate(across(where(is.numeric), ~round(., 3)))
+        
+        # Add missing data indicators
+        display_data <- display_data %>%
+          mutate(
+            Notes = case_when(
+              is.na(T1) & is.na(T2) ~ "Missing all T",
+              is.na(R1) & is.na(R2) ~ "Missing all R",
+              is.na(T1) | is.na(T2) ~ "Missing T period",
+              is.na(R1) | is.na(R2) ~ "Missing R period",
+              TRUE ~ ""
+            )
+          )
+        
+        col_names <- c("Subject", "T1", "R1", "T2", "R2", "T avg", "R avg", 
+                      "T1/R1", "T2/R2", "Tavg/Ravg", "Notes")
+        
+      } else {
+        # 2x2x2 CROSSOVER: Simple T, R, and Ratio
+        display_data <- formatted_data %>%
+          select(Subject, Test, Reference, Ratio) %>%
+          mutate(across(where(is.numeric), ~round(., 3)))
+        
+        # Add missing data indicators
+        display_data <- display_data %>%
+          mutate(
+            Notes = case_when(
+              is.na(Test) ~ "Missing Test",
+              is.na(Reference) ~ "Missing Ref",
+              TRUE ~ ""
+            )
+          )
+        
+        col_names <- c("Subject", "Test", "Reference", "T/R Ratio", "Notes")
+      }
       
       DT::datatable(
-        formatted_data,
+        display_data,
         options = list(
           pageLength = 15,
           dom = 'tp',  # 't' = table, 'p' = pagination
@@ -2501,167 +2481,45 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       
       if (is.null(comparison_results)) return(NULL)
       
-      # Helper function for smart mean formatting (3 significant figures minimum)
-      format_mean <- function(value) {
-        if (is.na(value)) return(NA)
+      # Format summary stats based on design type
+      summary_stats <- comparison_results$summary_stats
+      
+      if (comparison_results$is_replicate) {
+        # REPLICATE DESIGN: Show stats for each ratio type
+        display_data <- summary_stats %>%
+          mutate(across(where(is.numeric), ~round(., 4)))
         
-        # Determine decimal places based on magnitude to maintain 3 significant figures
-        if (value >= 1000) {
-          return(round(value, 0))  # #### (no decimals)
-        } else if (value >= 100) {
-          return(round(value, 1))  # ###.#
-        } else if (value >= 10) {
-          return(round(value, 2))  # ##.##
-        } else {
-          return(round(value, 3))  # #.###
-        }
-      }
-      
-      # Create consolidated data frame
-      consolidated_data <- data.frame(
-        Statistic = character(),
-        Test = character(),  # Changed to character for mixed formatting
-        Reference = character(),
-        Ratio = character(),
-        stringsAsFactors = FALSE
-      )
-      
-      # Add Arithmetic Mean section
-      arith_stats <- comparison_results$arithmetic_stats
-      consolidated_data <- rbind(consolidated_data, data.frame(
-        Statistic = c("Arithmetic Mean", "SD", "CV%"),
-        Test = c(
-          as.character(format_mean(arith_stats$Test[1])),  # Smart formatting for mean
-          as.character(round(arith_stats$Test[2], 3)),     # 3 decimals for SD
-          as.character(round(arith_stats$Test[3], 3))      # 3 decimals for CV%
-        ),
-        Reference = c(
-          as.character(format_mean(arith_stats$Reference[1])),  # Smart formatting for mean
-          as.character(round(arith_stats$Reference[2], 3)),     # 3 decimals for SD
-          as.character(round(arith_stats$Reference[3], 3))      # 3 decimals for CV%
-        ),
-        Ratio = c(
-          as.character(format_mean(arith_stats$Ratio[1])),  # Smart formatting for mean
-          as.character(round(arith_stats$Ratio[2], 3)),     # 3 decimals for SD
-          as.character(round(arith_stats$Ratio[3], 3))      # 3 decimals for CV%
-        )
-      ))
-      
-      # Add separator row
-      consolidated_data <- rbind(consolidated_data, data.frame(
-        Statistic = "─────────────────",
-        Test = "NA",
-        Reference = "NA",
-        Ratio = "NA"
-      ))
-      
-      # Add Geometric Mean section (if available)
-      if (!is.null(comparison_results$geometric_stats)) {
-        geom_stats <- comparison_results$geometric_stats
-        consolidated_data <- rbind(consolidated_data, data.frame(
-          Statistic = c("Geometric Mean", "Geometric SD", "Geometric CV%"),
-          Test = c(
-            as.character(format_mean(geom_stats$Test[1])),    # Smart formatting for mean
-            as.character(round(geom_stats$Test[2], 3)),       # 3 decimals for SD
-            as.character(round(geom_stats$Test[3], 3))        # 3 decimals for CV%
-          ),
-          Reference = c(
-            as.character(format_mean(geom_stats$Reference[1])),    # Smart formatting for mean
-            as.character(round(geom_stats$Reference[2], 3)),       # 3 decimals for SD
-            as.character(round(geom_stats$Reference[3], 3))        # 3 decimals for CV%
-          ),
-          Ratio = c(
-            as.character(format_mean(geom_stats$Ratio[1])),    # Smart formatting for mean
-            as.character(round(geom_stats$Ratio[2], 3)),       # 3 decimals for SD
-            as.character(round(geom_stats$Ratio[3], 3))        # 3 decimals for CV%
-          )
-        ))
+        col_names <- c("Ratio Type", "N", "Geometric Mean", "CV%", "Min", "Median", "Max")
         
-        # Add separator row
-        consolidated_data <- rbind(consolidated_data, data.frame(
-          Statistic = "─────────────────",
-          Test = "NA",
-          Reference = "NA",
-          Ratio = "NA"
-        ))
+      } else {
+        # 2x2x2 CROSSOVER: Standard summary
+        display_data <- summary_stats %>%
+          mutate(across(where(is.numeric), ~round(., 4)))
+        
+        col_names <- c("Statistic", "Value")
       }
-      
-      # Add Least Squares Mean section
-      lsmeans <- comparison_results$lsmeans
-      consolidated_data <- rbind(consolidated_data, data.frame(
-        Statistic = c("Least Squares Mean", "SD", "CV%"),
-        Test = c(
-          as.character(format_mean(lsmeans$Test[1])),    # Smart formatting for mean
-          as.character(round(lsmeans$Test[2], 3)),       # 3 decimals for SD
-          as.character(round(lsmeans$Test[3], 3))        # 3 decimals for CV%
-        ),
-        Reference = c(
-          as.character(format_mean(lsmeans$Reference[1])),    # Smart formatting for mean
-          as.character(round(lsmeans$Reference[2], 3)),       # 3 decimals for SD
-          as.character(round(lsmeans$Reference[3], 3))        # 3 decimals for CV%
-        ),
-        Ratio = c(
-          as.character(format_mean(lsmeans$Ratio[1])),    # Smart formatting for mean
-          as.character(round(lsmeans$Ratio[2], 3)),       # 3 decimals for SD
-          as.character(round(lsmeans$Ratio[3], 3))        # 3 decimals for CV%
-        )
-      ))
-      
-      # Clean column names (remove "Statistic" as requested)
-      col_names <- c("", "Test", "Reference", "T/R Ratio")
       
       DT::datatable(
-        consolidated_data,
+        display_data,
         options = list(
-          dom = 't',
-          paging = FALSE,
-          searching = FALSE,
+          pageLength = 10,
+          dom = 't',  # Just table, no pagination needed for summary
           ordering = FALSE,
-          scrollX = FALSE,  # Disable horizontal scrolling
-          autoWidth = FALSE,  # Control width manually
           columnDefs = list(
-            list(className = 'dt-left', targets = 0, width = '35%'),
-            list(className = 'dt-center', targets = 1, width = '20%'),
-            list(className = 'dt-center', targets = 2, width = '20%'), 
-            list(className = 'dt-center', targets = 3, width = '25%'),
-            # Bold the main statistic headers
-            list(
-              targets = 0,
-              createdCell = JS(
-                "function(td, cellData, rowData, row, col) {",
-                "  if (cellData.includes('Mean')) {",
-                "    $(td).css('font-weight', 'bold');",
-                "  }",
-                "  if (cellData.includes('─')) {",
-                "    $(td).css('color', '#dee2e6');",
-                "    $(td).css('font-weight', 'normal');",
-                "  }",
-                "}"
-              )
-            ),
-            # Hide values in separator rows
-            list(
-              targets = 1:3,
-              createdCell = JS(
-                "function(td, cellData, rowData, row, col) {",
-                "  if (rowData[0].includes('─')) {",
-                "    $(td).css('color', '#dee2e6');",
-                "    $(td).html('─────');",
-                "  }",
-                "}"
-              )
-            )
-          )
+            list(className = 'dt-center', targets = '_all')
+          ),
+          scrollX = TRUE
         ),
         rownames = FALSE,
         colnames = col_names
       ) %>%
-      DT::formatStyle(columns = 1:4, fontSize = '13px') %>%  # Slightly smaller font
-      DT::formatStyle(columns = 1:4, 'white-space' = 'nowrap') %>%  # Prevent text wrapping
-      DT::formatStyle(columns = 1:4, 'padding' = '8px 4px')  # Reduce padding
+        DT::formatStyle(
+          columns = colnames(display_data),
+          backgroundColor = '#f9f9f9',
+          fontWeight = 'bold'
+        )
     })
     
-    # Render least squares means table
     # Refresh button handler
     observeEvent(input$refresh_pk_comparison, {
       # Force reactivity
