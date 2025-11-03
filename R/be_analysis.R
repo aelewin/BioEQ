@@ -343,15 +343,26 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
                   ifelse(data_is_logged, "FALSE", "TRUE")))
       
       # Get ABEL-specific parameters from params (with defaults)
-      # Regulator is now passed directly from UI
-      abel_regulator <- if (!is.null(params$abel_upper_cap)) params$abel_upper_cap else "EMA"
+      # Map UI values to replicateBE regulator codes
+      abel_cap_input <- if (!is.null(params$abel_upper_cap)) params$abel_upper_cap else "50"
+      
+      # Map to replicateBE regulator parameter
+      # "none" = no cap (not directly supported by replicateBE, will use EMA without enforcement)
+      # "50" = 50% cap (EMA standard: 69.84% - 143.19%)
+      # "fixed" = fixed widened limits (GCC: 75% - 133.33%)
+      abel_regulator <- switch(abel_cap_input,
+        "none" = "EMA",   # Use EMA but with very high cap (effectively no cap)
+        "50" = "EMA",     # EMA with 50% cap (69.84% - 143.19%)
+        "fixed" = "GCC",  # GCC with fixed widened limits (75% - 133.33%)
+        "EMA"             # Default to EMA for backward compatibility
+      )
       
       abel_adjust <- if (!is.null(params$abel_adjust_tie)) params$abel_adjust_tie else FALSE
       abel_ola <- if (!is.null(params$abel_outlier_analysis)) params$abel_outlier_analysis else FALSE
       abel_fence <- if (!is.null(params$abel_outlier_fence)) params$abel_outlier_fence else 2
       
-      cat(sprintf("  - ABEL Settings: Regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
-                  abel_regulator, abel_adjust, abel_ola, abel_fence))
+      cat(sprintf("  - ABEL Settings: Cap=%s -> Regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
+                  abel_cap_input, abel_regulator, abel_adjust, abel_ola, abel_fence))
       
       # Call appropriate replicateBE method based on ANOVA model selection
       if (use_method_a) {

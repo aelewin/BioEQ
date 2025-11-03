@@ -522,16 +522,24 @@ tagList(
                 inline = FALSE
               ),
               
-              # ABEL method info - shown when ABEL selected
+              # ABEL Cap Selection - shown when ABEL selected
               conditionalPanel(
                 condition = "input.be_analysis_type == 'ABEL'",
-                div(style = "margin-top: 10px; padding: 10px; background-color: #e7f3ff; border-left: 3px solid #2196F3; border-radius: 4px;",
-                  div(style = "font-size: 0.85em; color: #555;",
-                    tags$strong(icon("info-circle"), " ABEL Method"), 
-                    help_icon("abel_method", "Click for details", "ABEL Method Selection", help_texts$abel_method$content),
-                    tags$div(style = "margin-top: 5px;",
-                      "Method determined by ANOVA selection above"
-                    )
+                div(style = "margin-top: 15px; margin-left: 20px;",
+                  h6("Cap the Limits",
+                     help_icon("abel_upper_cap", help_texts$abel_upper_cap$tooltip, 
+                              help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content),
+                     style = "font-weight: 600; color: #495057; margin-bottom: 8px;"
+                  ),
+                  selectInput(
+                    "abel_upper_cap",
+                    label = NULL,
+                    choices = list(
+                      "None (no cap)" = "none",
+                      "50% cap (limits: 69.84% - 143.19%)" = "50",
+                      "Fixed widened limits (75.00% - 133.33%)" = "fixed"
+                    ),
+                    selected = "50"
                   )
                 )
               )
@@ -574,24 +582,6 @@ tagList(
                   div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
                     "• Standard: 80.00% - 125.00% for most drugs"
                   )
-                )
-              ),
-              
-              # ABEL Upper Cap Selection
-              conditionalPanel(
-                condition = "input.be_analysis_type == 'ABEL'",
-                h5("ABEL Regulatory Approach",
-                   help_icon("abel_upper_cap", help_texts$abel_upper_cap$tooltip, 
-                            help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content)
-                ),
-                selectInput(
-                  "abel_upper_cap",
-                  label = NULL,
-                  choices = list(
-                    "EMA - Scaling with 50% cap (limits: 69.84% - 143.19%)" = "EMA",
-                    "GCC - Fixed widened limits (75.00% - 133.33%)" = "GCC"
-                  ),
-                  selected = "EMA"
                 )
               ),
               
