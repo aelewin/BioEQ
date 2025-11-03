@@ -60,20 +60,6 @@ generate_cumulative_be_plots <- function(data, parameters = c("Cmax", "AUC0t", "
     cat(sprintf("Found %d subjects for cumulative analysis\n", n_subjects))
     cat("Available subjects in cumulative data:", paste(subjects, collapse = ", "), "\n")
     
-    # Debug: Check if subject 113 is in the original data
-    cat("Checking for subject 113 in data...\n")
-    has_113 <- "113" %in% as.character(analysis_data$subject)
-    cat("Subject 113 present:", has_113, "\n")
-    
-    if (has_113) {
-      subj_113_data <- analysis_data[analysis_data$subject == "113", ]
-      cat("Subject 113 data rows:", nrow(subj_113_data), "\n")
-      if (nrow(subj_113_data) > 0) {
-        cat("Subject 113 treatments:", paste(unique(subj_113_data$treatment), collapse = ", "), "\n")
-        cat("Subject 113 columns:", paste(names(subj_113_data), collapse = ", "), "\n")
-      }
-    }
-    
     # Filter parameters to only those available in data
     available_params <- intersect(parameters, names(analysis_data))
     if (length(available_params) == 0) {

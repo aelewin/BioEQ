@@ -2291,14 +2291,6 @@ plot_anova_diagnostics_static <- function(be_results, parameters = NULL) {
 #' @export
 create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
   
-  # Debug: Print data structure
-  cat("Data columns:", paste(names(data), collapse = ", "), "\n")
-  cat("Data dimensions:", nrow(data), "x", ncol(data), "\n")
-  cat("Subject types and sample values:\n")
-  cat("  Type:", class(data$subject), "\n")
-  cat("  Sample values:", paste(head(unique(data$subject), 10), collapse = ", "), "\n")
-  cat("  Unique subjects count:", length(unique(data$subject)), "\n")
-  
   # Find the actual parameter name (handle ln prefix)
   param_name <- parameter
   if (!parameter %in% names(data)) {
@@ -2348,10 +2340,6 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
       mutate(TR_Ratio = (Test / Reference) * 100)
     cat("Used original scale data\n")
   }
-  
-  # Debug: Print available subjects before filtering
-  cat("Available subjects in data:", paste(sort(unique(tr_data$subject)), collapse = ", "), "\n")
-  cat("Subject order requested:", paste(subject_order, collapse = ", "), "\n")
   
   # Apply subject ordering (preserve numerical ordering) - INCLUDE ALL SUBJECTS
   tr_data <- tr_data %>%

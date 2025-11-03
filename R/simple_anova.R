@@ -127,7 +127,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
   # Explicitly set drug factor levels with R as reference to ensure T/R ratio calculation
   # This ensures drugT coefficient represents ln(Test/Reference)
   unique_treatments <- unique(nca_data$treatment)
-  cat(sprintf("  [DEBUG] Available treatments: %s\n", paste(unique_treatments, collapse = ", ")))
   
   if (all(c("R", "T") %in% unique_treatments)) {
     nca_data$drug <- factor(nca_data$treatment, levels = c("R", "T"))
@@ -335,8 +334,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           }
           
           # Parse random effects specification
-          cat(sprintf("  [DEBUG] Parsing random effects: %s\n", random_effects))
-          
           # For nlme, we need to create the proper random effects formula
           # Handle group effects in random effects specification
           if (has_groups && include_group_random) {
@@ -361,8 +358,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
               grouping_var <- all.vars(random_formula)[length(all.vars(random_formula))]
             }
           }
-          
-          cat(sprintf("  [DEBUG] Random formula: %s, grouping var: %s\n", deparse(random_formula), grouping_var))
           
           # Check if grouping variable exists in data
           if (!grouping_var %in% names(complete_data)) {
