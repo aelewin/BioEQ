@@ -486,13 +486,16 @@ tagList(
                 )
               ),
               
-              # Note about Tmax methodology
-              div(
-                style = "margin-top: 8px; padding: 8px; background-color: #fff3cd; border-left: 3px solid #ffc107; border-radius: 3px;",
-                tags$small(
-                  icon("exclamation-triangle"), 
-                  " Note: Tmax requires non-parametric analysis methods (median differences, Wilcoxon tests) per regulatory guidance and is not suitable for standard confidence interval-based bioequivalence assessment.",
-                  style = "color: #856404;"
+              # Note about Tmax methodology - only show when Tmax is selected
+              conditionalPanel(
+                condition = "input.secondary_pk_params && input.secondary_pk_params.indexOf('Tmax') > -1",
+                div(
+                  style = "margin-top: 8px; padding: 8px; background-color: #fff3cd; border-left: 3px solid #ffc107; border-radius: 3px;",
+                  tags$small(
+                    icon("exclamation-triangle"), 
+                    " Note: Tmax requires non-parametric analysis methods (median differences, Wilcoxon tests) per regulatory guidance and is not suitable for standard confidence interval-based bioequivalence assessment.",
+                    style = "color: #856404;"
+                  )
                 )
               )
             )
@@ -520,28 +523,6 @@ tagList(
                 ),
                 selected = "ABE",
                 inline = FALSE
-              ),
-              
-              # ABEL Cap Selection - shown when ABEL selected
-              conditionalPanel(
-                condition = "input.be_analysis_type == 'ABEL'",
-                div(style = "margin-top: 15px; margin-left: 20px;",
-                  h6("Cap the Limits",
-                     help_icon("abel_upper_cap", help_texts$abel_upper_cap$tooltip, 
-                              help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content),
-                     style = "font-weight: 600; color: #495057; margin-bottom: 8px;"
-                  ),
-                  selectInput(
-                    "abel_upper_cap",
-                    label = NULL,
-                    choices = list(
-                      "None (no cap)" = "none",
-                      "50% cap (limits: 69.84% - 143.19%)" = "50",
-                      "Fixed widened limits (75.00% - 133.33%)" = "fixed"
-                    ),
-                    selected = "50"
-                  )
-                )
               )
             ),
             
@@ -581,6 +562,32 @@ tagList(
                   ),
                   div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
                     "• Standard: 80.00% - 125.00% for most drugs"
+                  )
+                )
+              ),
+              
+              # Conditional panel for ABEL cap selection - matching ABE limits formatting
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'ABEL'",
+                h5("Cap the Limits",
+                   help_icon("abel_upper_cap", help_texts$abel_upper_cap$tooltip, 
+                            help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content)
+                ),
+                div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
+                  selectInput(
+                    "abel_upper_cap",
+                    label = NULL,
+                    choices = list(
+                      "None (no cap)" = "none",
+                      "50% cap (limits: 69.84% - 143.19%)" = "50",
+                      "Fixed widened limits (75.00% - 133.33%)" = "fixed"
+                    ),
+                    selected = "50"
+                  ),
+                  div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
+                    "• EMA: 50% cap (69.84% - 143.19%)",
+                    tags$br(),
+                    "• GCC: Fixed widened limits (75.00% - 133.33%)"
                   )
                 )
               ),
