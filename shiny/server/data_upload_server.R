@@ -1055,8 +1055,6 @@ validate_pk_data_enhanced <- function(data) {
   if (has_manual_mapping) {
     # Data already has capitalized standard column names (from manual mapping)
     # Just record what we have
-    cat("[DEBUG] PK Validation - Data already standardized with capitalized names\n")
-    cat("[DEBUG] PK Validation - Columns:", paste(names(processed_data), collapse = ", "), "\n")
     
     # Record the standard columns
     if ("Subject" %in% names(processed_data)) mapped_columns[["Subject"]] <- "Subject"
@@ -1073,7 +1071,6 @@ validate_pk_data_enhanced <- function(data) {
     
   } else {
     # Original auto-mapping logic for data that hasn't been manually mapped yet
-    cat("[DEBUG] PK Validation - Performing auto-mapping\n")
     
     # Map required columns to standard names
     for (std_name in names(column_mappings)) {
@@ -1121,14 +1118,9 @@ validate_pk_data_enhanced <- function(data) {
     required_columns <- c("subject", "treatment")
     missing_required <- setdiff(required_columns, names(mapped_columns))
     
-    cat("[DEBUG] PK Validation - Required columns check:\n")
-    cat("[DEBUG] PK Validation - Mapped columns:", paste(names(mapped_columns), collapse = ", "), "\n")
-    cat("[DEBUG] PK Validation - Missing required:", paste(missing_required, collapse = ", "), "\n")
-    
     for (missing in missing_required) {
       possible_names <- paste(column_mappings[[missing]], collapse = ", ")
       errors <- c(errors, paste0("Missing required column '", missing, "'. Expected one of: ", possible_names))
-      cat("[DEBUG] PK Validation - Error added for missing:", missing, "\n")
     }
   }
   
@@ -1138,9 +1130,6 @@ validate_pk_data_enhanced <- function(data) {
     warnings <- c(warnings, "No standard PK parameters automatically identified. You will need to specify which columns contain PK parameters.")
     suggestions <- c(suggestions, paste0("Available columns that could be PK parameters: ", 
                                        paste(setdiff(names(data), names(mapped_columns)), collapse = ", ")))
-    cat("[DEBUG] PK Validation - No PK parameters found in columns:", paste(names(data), collapse = ", "), "\n")
-    cat("[DEBUG] PK Validation - Mapped columns:", paste(names(mapped_columns), collapse = ", "), "\n")
-    cat("[DEBUG] PK Validation - Unmapped columns:", paste(setdiff(names(data), names(mapped_columns)), collapse = ", "), "\n")
   } else {
     # Check for primary PK parameters
     primary_params <- c("AUC0t", "AUC0inf", "Cmax")
@@ -1644,21 +1633,12 @@ observeEvent(input$confirm_concentration_mapping, {
   # Track which columns are PK parameters and their log-transform status
   pk_parameter_info <- list()
   
-  # Debug: Show what we received
-  cat("\n[DEBUG] ========== COLUMN MAPPING CONFIRMATION ==========\n")
-  cat("[DEBUG] Column mappings received:\n")
-  for (dt in names(column_mappings)) {
-    cat(sprintf("[DEBUG]   '%s' -> '%s'\n", column_mappings[[dt]], dt))
-  }
-  cat("[DEBUG] ===============================================\n\n")
-  
   # Process each column mapping
   for (data_type in names(column_mappings)) {
     original_col <- column_mappings[[data_type]]
     
     # Skip columns mapped to "other" (they will be removed)
     if (tolower(data_type) == "other" || grepl("ignore", tolower(data_type), ignore.case = TRUE)) {
-      cat(sprintf("[DEBUG] Column '%s' mapped to '%s' - SKIPPING (will be removed)\n", original_col, data_type))
       next
     }
     
@@ -1674,7 +1654,6 @@ observeEvent(input$confirm_concentration_mapping, {
     )
     
     # Rename column in processed data
-    cat(sprintf("[DEBUG] Renaming '%s' -> '%s'\n", original_col, standard_name))
     names(processed_data)[names(processed_data) == original_col] <- standard_name
     
     # Track PK parameters (anything not in the standard design columns)
@@ -1686,7 +1665,6 @@ observeEvent(input$confirm_concentration_mapping, {
         is_logged <- isTRUE(units_settings[[original_col]]$log_transformed)
       }
       
-      cat(sprintf("[DEBUG] Tracking PK parameter '%s' (log-transformed=%s)\n", standard_name, is_logged))
       pk_parameter_info[[standard_name]] <- list(
         original_name = original_col,
         is_log_transformed = is_logged
@@ -1707,9 +1685,6 @@ observeEvent(input$confirm_concentration_mapping, {
   # processed_data has already been renamed, so we check against renamed names
   columns_to_keep <- intersect(columns_to_keep, names(processed_data))
   
-  cat(sprintf("[DEBUG] Keeping %d columns: %s\n", 
-              length(columns_to_keep), paste(columns_to_keep, collapse = ", ")))
-  
   if (length(columns_to_keep) > 0) {
     processed_data <- processed_data[, columns_to_keep, drop = FALSE]
   } else {
@@ -1718,18 +1693,6 @@ observeEvent(input$confirm_concentration_mapping, {
   
   # Store PK parameter information for later use
   values$pk_parameter_info <- pk_parameter_info
-  
-  cat(sprintf("\n[DEBUG] ========== FINAL PROCESSED DATA ==========\n"))
-  cat(sprintf("[DEBUG] PK Parameters tracked: %d\n", length(pk_parameter_info)))
-  if (length(pk_parameter_info) > 0) {
-    for (pk_name in names(pk_parameter_info)) {
-      pk_info <- pk_parameter_info[[pk_name]]
-      cat(sprintf("[DEBUG]   - %s (original: %s, log: %s)\n", 
-                  pk_name, pk_info$original_name, pk_info$is_log_transformed))
-    }
-  }
-  cat(sprintf("[DEBUG] Final columns in processed data: %s\n", paste(names(processed_data), collapse = ", ")))
-  cat(sprintf("[DEBUG] ==========================================\n\n"))
   
   # Apply treatment designations to remap treatment values
   if (!is.null(values$treatment_designations)) {
@@ -1773,7 +1736,6 @@ observeEvent(input$confirm_concentration_mapping, {
       if (is_pk_param && !is.numeric(processed_data[[col_name]])) {
         numeric_values <- suppressWarnings(as.numeric(processed_data[[col_name]]))
         if (!all(is.na(numeric_values))) {
-          cat(sprintf("[DEBUG] Column mapping: Force converting %s to numeric\n", col_name))
           processed_data[[col_name]] <- numeric_values
           values$uploaded_data <- processed_data
         }
@@ -1783,16 +1745,7 @@ observeEvent(input$confirm_concentration_mapping, {
   
   # Recreate data summary with mapped data
   # Pass PK parameter info to show which are log-transformed
-  cat("\n\n[DEBUG] !!!!! UPDATING DATA SUMMARY AFTER COLUMN MAPPING !!!!!\n")
-  cat(sprintf("[DEBUG] Creating summary with %d PK parameters: %s\n", 
-              length(values$pk_parameter_info), 
-              paste(names(values$pk_parameter_info), collapse = ", ")))
-  
   values$data_summary <- create_data_summary_enhanced(processed_data, values$pk_parameter_info)
-  
-  cat(sprintf("[DEBUG] NEW summary created - PK parameters: %d\n", values$data_summary$n_pk_parameters))
-  cat(sprintf("[DEBUG] NEW summary PK params: %s\n", paste(values$data_summary$pk_parameters, collapse = ", ")))
-  cat("[DEBUG] !!!!! DATA SUMMARY UPDATE COMPLETE !!!!!\n\n")
   
   values$data_summary$column_mappings_confirmed <- TRUE
   values$data_summary$mapped_columns <- names(column_mappings)
@@ -2452,7 +2405,6 @@ observeEvent(input$confirm_pk_mapping, {
         next
       }
       names(processed_data)[names(processed_data) == original_col] <- pk_param
-      cat(sprintf("[DEBUG] Mapped PK column: '%s' -> '%s'\n", original_col, pk_param))
       
       # Track in pk_parameter_info for summary
       pk_parameter_info[[pk_param]] <- list(
@@ -2486,22 +2438,9 @@ observeEvent(input$confirm_pk_mapping, {
   # Filter to only keep mapped columns
   columns_to_keep <- unique(intersect(columns_to_keep, names(processed_data)))
   
-  cat(sprintf("\n[DEBUG] ========== PK PARAMETER MAPPING ==========\n"))
-  cat(sprintf("[DEBUG] Mapped PK parameters: %d\n", length(pk_parameter_info)))
-  for (pk_name in names(pk_parameter_info)) {
-    pk_info <- pk_parameter_info[[pk_name]]
-    cat(sprintf("[DEBUG]   - %s (original: %s, log: %s)\n", 
-                pk_name, pk_info$original_name, pk_info$is_log_transformed))
-  }
-  cat(sprintf("[DEBUG] Keeping %d columns: %s\n", 
-              length(columns_to_keep), paste(columns_to_keep, collapse = ", ")))
-  
   if (length(columns_to_keep) > 0) {
     processed_data <- processed_data[, columns_to_keep, drop = FALSE]
   }
-  
-  cat(sprintf("[DEBUG] Final columns in processed_data: %s\n", paste(names(processed_data), collapse = ", ")))
-  cat(sprintf("[DEBUG] =========================================\n\n"))
   
   # Remove any duplicate columns that might have been created
   if (any(duplicated(names(processed_data)))) {
@@ -2509,7 +2448,6 @@ observeEvent(input$confirm_pk_mapping, {
     cat(sprintf("[WARNING] Found duplicate columns after mapping: %s\n", paste(unique(dup_cols), collapse = ", ")))
     cat("[WARNING] Removing duplicate columns (keeping first occurrence)\n")
     processed_data <- processed_data[, !duplicated(names(processed_data)), drop = FALSE]
-    cat(sprintf("[DEBUG] Columns after deduplication: %s\n", paste(names(processed_data), collapse = ", ")))
   }
   
   # Apply treatment designations to remap treatment values for PK data
@@ -2548,7 +2486,6 @@ observeEvent(input$confirm_pk_mapping, {
     if (is_pk_param && !is.numeric(processed_data[[col_name]])) {
       numeric_values <- suppressWarnings(as.numeric(processed_data[[col_name]]))
       if (!all(is.na(numeric_values))) {
-        cat(sprintf("[DEBUG] PK mapping: Force converting %s to numeric\n", col_name))
         processed_data[[col_name]] <- numeric_values
       }
     }
@@ -2560,18 +2497,10 @@ observeEvent(input$confirm_pk_mapping, {
   values$pk_parameter_info <- pk_parameter_info  # Store for later use
   
   # Update data summary AND data_type
-  cat("\n[DEBUG] !!!!! CREATING PK DATA SUMMARY !!!!!\n")
-  cat(sprintf("[DEBUG] Summary will be created with %d PK parameters\n", length(pk_parameter_info)))
-  
   values$data_summary <- create_data_summary_enhanced(processed_data, pk_parameter_info)
   values$data_summary$pk_mappings_confirmed <- TRUE
   values$data_summary$data_type <- "pk_parameters"
   values$data_type <- "pk_parameters"  # CRITICAL: Update the main data_type variable
-  
-  cat(sprintf("[DEBUG] Summary created - shows %d PK parameters: %s\n", 
-              values$data_summary$n_pk_parameters,
-              paste(values$data_summary$pk_parameters, collapse = ", ")))
-  cat("[DEBUG] !!!!! PK DATA SUMMARY COMPLETE !!!!!\n\n")
   
   showNotification("Column mapping confirmed!", type = "message", duration = 3)
 })

@@ -104,14 +104,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         cat("Generating concentration-time plots...\n")
         conc_data <- uploaded_data()
         
-        # Debug: Check data structure
-        if (!is.null(conc_data)) {
-          cat("Concentration data columns:", paste(names(conc_data), collapse = ", "), "\n")
-          cat("Concentration data rows:", nrow(conc_data), "\n")
-        } else {
-          cat("Concentration data is NULL\n")
-        }
-        
         # Get user-specified units from validation result
         concentration_label <- "Concentration (ng/mL)"
         time_label <- "Time (h)"
@@ -372,13 +364,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         if (!is.null(pk_data) && nrow(pk_data) > 0) {
           cat("Found PK data with", nrow(pk_data), "rows and", ncol(pk_data), "columns\n")
           cat("Available columns:", paste(names(pk_data), collapse = ", "), "\n")
-          
-          # Debug: Check subjects in pk_data (uses capitalized Subject)
-          if ("Subject" %in% names(pk_data)) {
-            pk_subjects <- sort(unique(pk_data$Subject))
-            cat("Subjects in PK data:", paste(pk_subjects, collapse = ", "), "\n")
-            cat("Subject 113 in PK data:", "113" %in% as.character(pk_data$Subject), "\n")
-          }
           
           # Setup cumulative analysis data using the new approach
           cumulative_setup <- generate_cumulative_be_plots(

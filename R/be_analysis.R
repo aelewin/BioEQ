@@ -315,14 +315,6 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         stop("No valid data for parameter ", param_to_use)
       }
       
-      # DEBUG: Check data structure before writing
-      cat(sprintf("  - Replicate data: %d rows\n", nrow(replicate_data)))
-      cat(sprintf("  - Subject levels: %s\n", paste(levels(replicate_data$subject)[1:min(5, length(levels(replicate_data$subject)))], collapse=", ")))
-      cat(sprintf("  - Period levels: %s\n", paste(levels(replicate_data$period), collapse=", ")))
-      cat(sprintf("  - Sequence levels: %s\n", paste(levels(replicate_data$sequence), collapse=", ")))
-      cat(sprintf("  - Treatment levels: %s\n", paste(levels(replicate_data$treatment), collapse=", ")))
-      cat(sprintf("  - PK range: [%.2f, %.2f]\n", min(replicate_data$PK, na.rm=TRUE), max(replicate_data$PK, na.rm=TRUE)))
-      
       # Call replicateBE method (A or B) for ABEL (EMA method)
       # Method A: ANOVA-based approach (default)
       # Method B: Mixed model approach with subjects as random effect
@@ -383,7 +375,6 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
           )
         }, error = function(e) {
           cat(sprintf("[ERROR] replicateBE::method.A() failed for %s: %s\n", param, e$message))
-          cat("[DEBUG] Traceback:\n")
           print(traceback())
           stop(e)
         })
@@ -405,7 +396,6 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
           )
         }, error = function(e) {
           cat(sprintf("[ERROR] replicateBE::method.B(ola='%s') failed for %s: %s\n", df_method, param, e$message))
-          cat("[DEBUG] Traceback:\n")
           print(traceback())
           stop(e)
         })
@@ -413,15 +403,6 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       
       # Clean up temp file
       unlink(paste0(temp_file, ".csv"))
-      
-      # DEBUG: Check what we got back
-      cat(sprintf("DEBUG: abel_result class = %s\n", class(abel_result)))
-      cat(sprintf("DEBUG: abel_result dim = %s\n", paste(dim(abel_result), collapse = " x ")))
-      if (is.data.frame(abel_result) && nrow(abel_result) > 0) {
-        cat(sprintf("DEBUG: Column names = %s\n", paste(names(abel_result), collapse = ", ")))
-        cat("DEBUG: First row:\n")
-        print(abel_result[1, ])
-      }
       
       # Extract key results from the data frame (single row)
       # Use row/column indexing: result[1, "column_name"]
@@ -873,8 +854,6 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     # Extract pre-calculated treatment difference from ANOVA results
     # This ensures consistent T/R ratio calculation
     treatment_diff <- anova_result$treatment_coef
-    cat(sprintf("  [DEBUG] Using pre-calculated treatment_diff: %s\n", 
-                if(is.na(treatment_diff)) "NA" else format(treatment_diff, digits=6)))
     
     # Check if treatment_diff is valid
     if (is.na(treatment_diff) || is.null(treatment_diff)) {
@@ -1006,17 +985,6 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     ci_lower <- exp(ci_lower_log) * 100
     ci_upper <- exp(ci_upper_log) * 100
     
-    # Debug output for BE calculation values
-    cat(sprintf("  [DEBUG] %s BE calculation values:\n", param))
-    cat(sprintf("    treatment_diff: %s\n", if(is.na(treatment_diff)) "NA" else format(treatment_diff, digits=6)))
-    cat(sprintf("    mse: %s\n", if(is.na(mse)) "NA" else format(mse, digits=6)))
-    cat(sprintf("    treatment_se: %s\n", if(is.na(treatment_se)) "NA" else format(treatment_se, digits=6)))
-    cat(sprintf("    df: %s\n", if(is.na(df) || df <= 0) "NA" else as.character(round(df))))
-    cat(sprintf("    t_critical: %s\n", if(is.na(t_critical)) "NA" else format(t_critical, digits=6)))
-    cat(sprintf("    point_estimate: %s\n", if(is.na(point_estimate)) "NA" else format(point_estimate, digits=2)))
-    cat(sprintf("    ci_lower: %s\n", if(is.na(ci_lower)) "NA" else format(ci_lower, digits=2)))
-    cat(sprintf("    ci_upper: %s\n", if(is.na(ci_upper)) "NA" else format(ci_upper, digits=2)))
-    
     # Check for invalid values before evaluating bioequivalence
     if (is.na(ci_lower) || is.na(ci_upper) || is.infinite(ci_lower) || is.infinite(ci_upper)) {
       cat(sprintf("  ⚠️  Warning: Invalid confidence interval values for %s - skipping BE evaluation\n", param))
@@ -1133,14 +1101,6 @@ analyze_crossover_parameter <- function(data, parameter, alpha, be_limits, anova
 #' @return Parameter analysis results
 analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction = TRUE) {
   
-  # Debug: show the data structure being passed
-  cat(sprintf("  [DEBUG] analyze_parallel_parameter called with parameter: %s (Welch: %s)\n", parameter, welch_correction))
-  
-  # Print ALL the raw data values for debugging (optional)
-  if (parameter %in% names(data)) {
-    cat(sprintf("  [DEBUG] Analysis of %s values (n=%d)\n", parameter, nrow(data)))
-  }
-  
   # Prepare parameter data
   param_data <- prepare_parameter_data(data, parameter)
   
@@ -1165,15 +1125,12 @@ analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction 
     stop("Cannot find treatment column in data. Available columns: ", paste(names(param_data), collapse = ", "))
   }
   
-  # Get unique treatment values to debug
+  # Get unique treatment values
   unique_treatments <- unique(param_data[[treatment_col]])
-  cat(sprintf("  [DEBUG] Treatment column: %s, values: %s\n", treatment_col, paste(unique_treatments, collapse = ", ")))
   
   # Handle all possible test/reference value mappings
   test_data <- subset(param_data, param_data[[treatment_col]] %in% c("Test", "T", "test"))
   ref_data <- subset(param_data, param_data[[treatment_col]] %in% c("Reference", "R", "ref", "reference"))
-  
-  cat(sprintf("  [DEBUG] Test group size: %d, Ref group size: %d\n", nrow(test_data), nrow(ref_data)))
   
   if (nrow(test_data) == 0 || nrow(ref_data) == 0) {
     warning("Missing test or reference data for parameter: ", parameter)
@@ -1188,16 +1145,12 @@ analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction 
     var.equal = !welch_correction    # Use welch_correction parameter
   )
   
-  # Debug: show the t.test results (key information only)
-  cat(sprintf("  [DEBUG] t-test: t=%.3f, df=%.1f, p=%.4f\n", test_result$statistic, test_result$parameter, test_result$p.value))
   
   # EXACTLY like reference code: calculate results
   logPE <- as.numeric(test_result$estimate[1] - test_result$estimate[2])
   point_estimate <- 100 * exp(logPE)
   ci_lower <- 100 * exp(test_result$conf.int[1])
   ci_upper <- 100 * exp(test_result$conf.int[2])
-  
-  cat(sprintf("  [DEBUG] Results: PE=%.2f%%, CI=[%.2f%%, %.2f%%]\n", point_estimate, ci_lower, ci_upper))
   
   # Return simple results structure
   ci_result <- list(
@@ -1627,16 +1580,6 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
   for (param in names(confidence_intervals)) {
     ci <- confidence_intervals[[param]]
     
-    # Debug the CI structure
-    cat(sprintf("🔍 Evaluating %s:\n", param))
-    cat(sprintf("  CI structure: %s\n", paste(names(ci), collapse = ", ")))
-    cat(sprintf("  ci_lower value: %s (is.na: %s)\n", ci$ci_lower, is.na(ci$ci_lower)))
-    cat(sprintf("  ci_upper value: %s (is.na: %s)\n", ci$ci_upper, is.na(ci$ci_upper)))
-    if ("log_ci_lower" %in% names(ci)) {
-      cat(sprintf("  log_ci_lower value: %s (is.na: %s)\n", ci$log_ci_lower, is.na(ci$log_ci_lower)))
-      cat(sprintf("  log_ci_upper value: %s (is.na: %s)\n", ci$log_ci_upper, is.na(ci$log_ci_upper)))
-    }
-    
     # Handle different CI structure possibilities
     ci_lower <- NULL
     ci_upper <- NULL
@@ -1717,13 +1660,6 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
     total_count <- length(valid_conclusions)
     cat(sprintf("📊 Summary: %d of %d parameters are bioequivalent\n", 
                 be_count, total_count))
-  }
-  
-  # Debug: Print all BE conclusions
-  cat("🔍 BE Conclusions Debug:\n")
-  for (param_name in names(be_conclusions)) {
-    conclusion_value <- be_conclusions[[param_name]]
-    cat(sprintf("  %s: %s (class: %s)\n", param_name, conclusion_value, class(conclusion_value)))
   }
   
   return(be_conclusions)

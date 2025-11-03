@@ -366,10 +366,6 @@ format_simple_anova_results <- function(param_result, param_name) {
     sum_sq_decimals <- if (is_log_param) 5 else 0
     mean_sq_decimals <- if (is_log_param) 5 else 0
     
-    # Debug output
-    cat(sprintf("[DEBUG] ANOVA Formatting - Parameter: %s, Is Log: %s, Decimals: %d\n", 
-                param_name, is_log_param, sum_sq_decimals))
-    
     anova_display <- data.frame(
       Source = rownames(anova_df),
       Df = anova_df$Df,
@@ -691,12 +687,10 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         } else if (!is.null(nca_res$parameters)) {
           data <- nca_res$parameters
         } else {
-          cat("[DEBUG] Select All - No valid NCA data found\n")
           return()
         }
         
         available_cols <- names(data)
-        cat("[DEBUG] Select All - Available columns:", paste(available_cols, collapse=", "), "\n")
         
         # Subject info - use the actual checkbox values
         subject_choices <- c("Subject", "Treatment", "Period", "Sequence", "dose")
@@ -706,11 +700,9 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         primary_choices <- c("Cmax", "AUC0t", "AUC0inf")
         if ("pAUC" %in% available_cols) {
           primary_choices <- c(primary_choices, "pAUC")
-          cat("[DEBUG] Select All - Adding pAUC to primary choices\n")
         }
         if ("AUC072" %in% available_cols) {
           primary_choices <- c(primary_choices, "AUC072")
-          cat("[DEBUG] Select All - Adding AUC072 to primary choices\n")
         }
         updateCheckboxGroupInput(session, "primary_pk_cols", selected = primary_choices)
         
@@ -718,7 +710,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         secondary_choices <- c("Tmax", "t_half", "Tlast", "Clast", "CL_F", "Vd_F", "MRT", "AUC_percent_extrap")
         if ("pAUC" %in% available_cols && !"pAUC" %in% primary_choices) {
           secondary_choices <- c(secondary_choices, "pAUC")
-          cat("[DEBUG] Select All - Adding pAUC to secondary choices\n")
         }
         available_secondary <- intersect(secondary_choices, available_cols)
         updateCheckboxGroupInput(session, "secondary_pk_cols", selected = available_secondary)
@@ -736,7 +727,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         updateCheckboxGroupInput(session, "log_pk_cols", selected = log_choices)
         
       }, error = function(e) {
-        cat(sprintf("[DEBUG] Error in select_all_cols: %s\n", e$message))
+        # Silent error handling
       })
     })
     
@@ -775,9 +766,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           stop("No valid NCA data found")
         }
         
-        cat("[DEBUG] Primary PK UI - Available columns:", paste(names(data), collapse=", "), "\n")
-        cat("[DEBUG] Primary PK UI - Checking for pAUC:", "pAUC" %in% names(data), "\n")
-        
         # Standard primary parameters always available
         primary_choices <- list(
           "Cmax" = "Cmax",
@@ -788,14 +776,10 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         # Optional parameters - only show if calculated
         if ("pAUC" %in% names(data)) {
           primary_choices[["pAUC"]] <- "pAUC"
-          cat("[DEBUG] Primary PK UI - Adding pAUC to choices\n")
         }
         if ("AUC072" %in% names(data)) {
           primary_choices[["AUC0-72"]] <- "AUC072"
-          cat("[DEBUG] Primary PK UI - Adding AUC072 to choices\n")
         }
-        
-        cat("[DEBUG] Primary PK UI - Final choices:", paste(names(primary_choices), collapse=", "), "\n")
         
         checkboxGroupInput(
           session$ns("primary_pk_cols"),
@@ -837,8 +821,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           stop("No valid NCA data found")
         }
         
-        cat("[DEBUG] Secondary PK UI - Available columns:", paste(names(data), collapse=", "), "\n")
-        
         secondary_choices <- list(
           "Tmax" = "Tmax",
           "Half-life" = "t_half",
@@ -853,10 +835,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         # Add pAUC to secondary parameters if available
         if ("pAUC" %in% names(data)) {
           secondary_choices[["pAUC"]] <- "pAUC"
-          cat("[DEBUG] Secondary PK UI - Adding pAUC to choices\n")
         }
-        
-        cat("[DEBUG] Secondary PK UI - Final choices:", paste(names(secondary_choices), collapse=", "), "\n")
         
         checkboxGroupInput(
           session$ns("secondary_pk_cols"),
@@ -876,16 +855,10 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
     
     # Dynamic UI for Log-Transformed Parameters - only show calculated parameters
     output$log_pk_cols_ui <- renderUI({
-      cat("DEBUG: log_pk_cols_ui called - ENTRY POINT\n")
       
       if (!results_available()) {
-        cat("DEBUG: results_available() is FALSE - exiting early\n")
-        cat("DEBUG: be_results() is null:", is.null(be_results()), "\n")
-        cat("DEBUG: nca_results() is null:", is.null(nca_results()), "\n")
         return(div("No results available yet"))
       }
-      
-      cat("DEBUG: results_available() is TRUE, proceeding...\n")
       
       tryCatch({
         nca_res <- nca_results()
@@ -898,24 +871,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         } else if (!is.null(nca_res$parameters)) {
           data <- nca_res$parameters
         } else {
-          cat("DEBUG: NCA results structure not recognized\n")
           return(div("No log-transformed parameters available"))
         }
-        
-        # Debug: Print structure of data to console
-        cat("DEBUG log_pk_cols_ui: NCA results structure:\n")
-        if (is.data.frame(nca_res)) {
-          cat("  - nca_res is a data.frame with columns:", paste(names(nca_res), collapse=", "), "\n")
-        } else {
-          cat("  - nca_res is a list with elements:", paste(names(nca_res), collapse=", "), "\n")
-          if (!is.null(nca_res$subject_data)) {
-            cat("  - nca_res$subject_data has columns:", paste(names(nca_res$subject_data), collapse=", "), "\n")
-          }
-          if (!is.null(nca_res$parameters)) {
-            cat("  - nca_res$parameters has columns:", paste(names(nca_res$parameters), collapse=", "), "\n")
-          }
-        }
-        cat("  - data has columns:", paste(names(data), collapse=", "), "\n")
         
         log_choices <- list()
         
@@ -940,8 +897,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         if ("lnAUC072" %in% names(data)) {
           log_choices[["ln(AUC0-72)"]] <- "lnAUC072"
         }
-        
-        cat("DEBUG: log_choices found:", length(log_choices), "items -", paste(names(log_choices), collapse=", "), "\n")
         
         checkboxGroupInput(
           session$ns("log_pk_cols"),
@@ -968,7 +923,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         
         # Check if ANOVA results exist (they should be attached to BE results)
         if (is.null(be_res$anova_results) || length(be_res$anova_results) == 0) {
-          cat("[DEBUG] ANOVA Parameter UI - No anova_results found in BE results\n")
           return(selectInput(
             session$ns("anova_parameter_select"),
             label = NULL,
@@ -984,8 +938,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         } else {
           character(0)
         }
-        
-        cat("[DEBUG] ANOVA Parameter UI - Parameters from Step 2:", paste(available_params, collapse=", "), "\n")
         
         if (length(available_params) == 0) {
           return(selectInput(
@@ -1053,7 +1005,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         )
         
       }, error = function(e) {
-        cat(sprintf("[DEBUG] Error creating ANOVA parameter selection: %s\n", e$message))
         selectInput(
           session$ns("anova_parameter_select"),
           label = NULL,
@@ -1070,9 +1021,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       tryCatch({
         nca_res <- nca_results()
         
-        cat(sprintf("[DEBUG] NCA results class: %s\n", class(nca_res)))
-        cat(sprintf("[DEBUG] NCA results names: %s\n", paste(names(nca_res), collapse = ", ")))
-        
         # Get the actual data
         if (is.data.frame(nca_res)) {
           data <- nca_res
@@ -1081,12 +1029,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         } else if (!is.null(nca_res$subject_data)) {
           data <- nca_res$subject_data
         } else {
-          cat("[DEBUG] No valid data found in NCA results\n")
           return(DT::datatable(data.frame(Message = "No data available")))
         }
-        
-        # Debug: Log available columns
-        cat("\n[DEBUG] Available columns in data:", paste(names(data), collapse=", "), "\n")
         
         # Get selected columns from new UI structure - prefer direct input over reactive values
         input_selected_cols <- c(
@@ -1105,17 +1049,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           column_selection$log_pk
         )
         
-        cat("[DEBUG] Selected columns from input:", paste(input_selected_cols, collapse=", "), "\n")
-        cat("[DEBUG] Selected columns from reactive values:", paste(reactive_selected_cols, collapse=", "), "\n")
-        
         # Prefer input values over reactive values to handle unchecked states properly
         selected_cols <- input_selected_cols
         
-        cat("[DEBUG] Final selected columns:", paste(selected_cols, collapse=", "), "\n")
-        
         # If nothing selected, create empty table message
         if (length(selected_cols) == 0) {
-          cat("[DEBUG] No columns selected, showing empty state message\n")
           return(DT::datatable(data.frame(Message = "No parameters selected for display. Please select columns above."), 
                               options = list(dom = 't', searching = FALSE, paging = FALSE, info = FALSE)))
         }
@@ -1137,8 +1075,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           }
         }
         
-        cat("[DEBUG] Matched columns:", paste(matched_cols, collapse=", "), "\n")
-        
         # If no matches found and we have selections, try to find any available columns as fallback
         if (length(matched_cols) == 0 && length(selected_cols) > 0) {
           # Just use minimal columns
@@ -1146,21 +1082,16 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           minimal_matches <- minimal_cols[minimal_cols %in% available_cols]
           if (length(minimal_matches) > 0) {
             matched_cols <- minimal_matches
-            cat("[DEBUG] No column matches found, using minimal display:", paste(matched_cols, collapse=", "), "\n")
           }
         }
         
         # Final fallback: if still no columns, return empty table message
         if (length(matched_cols) == 0) {
-          cat("[DEBUG] No valid columns to display\n")
           return(DT::datatable(data.frame(Message = "No columns selected for display")))
         }
         
         # Select the matched columns
         display_data <- data[, matched_cols, drop = FALSE]
-        
-        cat(sprintf("[DEBUG] Display data dimensions: %d rows x %d columns\n", nrow(display_data), ncol(display_data)))
-        cat(sprintf("[DEBUG] Display data column names: %s\n", paste(names(display_data), collapse = ", ")))
         
         # Comprehensive column display names for all 19 potential columns
         col_display_names <- c(
@@ -1192,13 +1123,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         
         # Apply display names
         display_names <- names(display_data)
-        cat(sprintf("[DEBUG] Original display names: %s\n", paste(display_names, collapse = ", ")))
         for (i in seq_along(display_names)) {
           if (display_names[i] %in% names(col_display_names)) {
             display_names[i] <- col_display_names[display_names[i]]
           }
         }
-        cat(sprintf("[DEBUG] Final display names: %s\n", paste(display_names, collapse = ", ")))
         
         # Enhanced formatting for numeric columns
         for (col in names(display_data)) {
@@ -1417,20 +1346,13 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         # Get all parameters that have both CI results and BE conclusions
         all_available_params <- intersect(names(ci_results), names(be_conclusions))
         
-        cat(sprintf("[DEBUG] All available parameters with BE results: %s\n", 
-                   paste(all_available_params, collapse = ", ")))
-        
         # Include all available parameters (not just primary ones)
         for (param in all_available_params) {
           if (!is.null(ci_results[[param]]) && !is.null(be_conclusions[[param]])) {
             primary_ci[[param]] <- ci_results[[param]]
             primary_conclusions[[param]] <- be_conclusions[[param]]
-            cat(sprintf("[DEBUG] Including parameter: %s\n", param))
           }
         }
-        
-        cat(sprintf("[DEBUG] Found %d parameters with BE results: %s\n", 
-                   length(primary_ci), paste(names(primary_ci), collapse = ", ")))
         
         if (length(primary_ci) == 0) {
           return(tagList(
@@ -1454,18 +1376,12 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         results_list <- mapply(function(param, is_be) {
           ci <- primary_ci[[param]]
           
-          # DEBUG: Check the BE conclusion values
-          cat(sprintf("[DEBUG] Processing %s: is_be = %s (class: %s)\n", param, is_be, class(is_be)))
-          
           # Handle NA values in BE conclusions
           be_status <- if (is.na(is_be)) {
-            cat(sprintf("[DEBUG] %s is NA - setting to UNKNOWN\n", param))
             "❓ UNKNOWN"
           } else if (is_be) {
-            cat(sprintf("[DEBUG] %s is TRUE - setting to PASS\n", param))
             "✅ PASS"
           } else {
-            cat(sprintf("[DEBUG] %s is FALSE - setting to FAIL\n", param))
             "❌ FAIL"
           }
           
@@ -1551,9 +1467,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
     
     # Format simple ANOVA results for display (non-reactive)
     format_simple_anova_results <- function(param_result, param_name) {
-      
-      cat(sprintf("[DEBUG] Formatting ANOVA results for parameter: %s\n", param_name))
-      cat(sprintf("[DEBUG] Available fields: %s\n", paste(names(param_result), collapse = ", ")))
       
       # Check if param_result has the expected structure
       if (is.null(param_result) || length(param_result) == 0) {
@@ -1839,7 +1752,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
     selected_anova_param <- reactive({
       req(input$anova_parameter_select)
       param <- input$anova_parameter_select
-      cat("[DEBUG] Selected ANOVA parameter:", param, "\n")
       param
     })
     
@@ -1850,21 +1762,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       tryCatch({
         be_res <- be_results()
         
-        # Debug: Check the structure of BE results
-        cat("[DEBUG] ANOVA Display - BE results structure:\n")
-        cat("[DEBUG] BE results names:", paste(names(be_res), collapse=", "), "\n")
-        
-        # Check if we have BE analysis ANOVA results (from the actual BE analysis)
-        if (!is.null(be_res$anova_results_be)) {
-          cat("[DEBUG] Found BE analysis ANOVA results\n")
-        }
-        if (!is.null(be_res$anova_results)) {
-          cat("[DEBUG] ANOVA results structure:", paste(names(be_res$anova_results), collapse=", "), "\n")
-        }
-        
         # Check if ANOVA results exist (they should be attached to BE results)
         if (is.null(be_res$anova_results) || length(be_res$anova_results) == 0) {
-          cat("[DEBUG] ANOVA Display - No anova_results found in BE results\n")
           return(div(class = "alert alert-warning",
             h5(icon("exclamation-triangle"), " No ANOVA Results Available"),
             p("ANOVA analysis was not performed or failed to complete. Please check the analysis configuration.")
@@ -1875,7 +1774,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         anova_data <- be_res$anova_results$anova_results  # This contains the actual ANOVA results
         
         if (is.null(anova_data) || length(anova_data) == 0) {
-          cat("[DEBUG] ANOVA Display - No actual ANOVA results found\n")
           return(div(class = "alert alert-warning",
             h5(icon("exclamation-triangle"), " No ANOVA Results Available"),
             p("ANOVA analysis results are empty. Please check the analysis configuration.")
@@ -1883,10 +1781,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         }
         
         param <- selected_anova_param()
-        
-        # Debug: Check what values we're getting
-        cat(sprintf("[DEBUG] UI - Selected param: %s\n", param))
-        cat(sprintf("[DEBUG] UI - Available anova parameters: %s\n", paste(names(anova_data), collapse = ", ")))
         
         # Check if parameter exists in ANOVA results
         if (!param %in% names(anova_data)) {
@@ -1968,9 +1862,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             p("No valid bioequivalence results available for display.")
           ))
         }
-        
-        cat(sprintf("[DEBUG] Complete BE analysis showing %d parameters: %s\n", 
-                   length(valid_be_params_final), paste(valid_be_params_final, collapse = ", ")))
         
         # Create comprehensive results table for all valid BE parameters
         results_list <- lapply(valid_be_params_final, function(param) {

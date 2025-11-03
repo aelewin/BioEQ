@@ -552,17 +552,10 @@ perform_nca_analysis <- function(data, id_cols = c("subject", "treatment"),
                                 calculate_pAUC = FALSE, pAUC_start = 0, pAUC_end = 2) {
   
   cat("🧮 Performing NCA analysis...\n")
-  cat(sprintf("[DEBUG] Requested id_cols: %s\n", paste(id_cols, collapse = ", ")))
-  cat(sprintf("[DEBUG] Available data columns: %s\n", paste(names(data), collapse = ", ")))
   
   # Check which id_cols are actually available
   available_id_cols <- intersect(id_cols, names(data))
   missing_id_cols <- setdiff(id_cols, names(data))
-  
-  cat(sprintf("[DEBUG] Available id_cols: %s\n", paste(available_id_cols, collapse = ", ")))
-  if (length(missing_id_cols) > 0) {
-    cat(sprintf("[DEBUG] Missing id_cols: %s\n", paste(missing_id_cols, collapse = ", ")))
-  }
   
   # Check if required time and concentration columns exist
   if (!time_col %in% names(data)) {

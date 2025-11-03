@@ -112,7 +112,6 @@ output$detected_design <- renderUI({
       replicate_result <- tryCatch({
         detect_replicate_design(data)
       }, error = function(e) {
-        cat("[DEBUG] Replicate detection error:", e$message, "\n")
         NULL
       })
     }
@@ -145,7 +144,6 @@ output$detected_design <- renderUI({
     )
     
   }, error = function(e) {
-    cat("[DEBUG] Design detection error:", e$message, "\n")
     p("Error detecting study design:", e$message, style = "color: #dc3545; margin: 8px 0;")
   })
 })
@@ -467,11 +465,6 @@ observeEvent(input$run_analysis, {
   selected_primary <- input$primary_pk_params %||% c()
   selected_secondary <- input$secondary_pk_params %||% c()
   
-  # Debug: Check what parameters are actually selected
-  cat(sprintf("[DEBUG] Primary PK params from input: %s\n", paste(selected_primary, collapse = ", ")))
-  cat(sprintf("[DEBUG] Secondary PK params from input: %s\n", paste(selected_secondary, collapse = ", ")))
-  cat(sprintf("[DEBUG] Combined selected: %s\n", paste(c(selected_primary, selected_secondary), collapse = ", ")))
-  
   if (length(selected_primary) == 0 && length(selected_secondary) == 0) {
     showNotification(
       "Please select at least one PK parameter for ANOVA analysis.",
@@ -537,9 +530,6 @@ observeEvent(input$run_analysis, {
         combined_params <- c("Cmax", "AUC0t", "AUC0inf")
       }
       
-      cat(sprintf("[DEBUG] Analysis Config - Primary params: %s\n", paste(primary_selected, collapse = ", ")))
-      cat(sprintf("[DEBUG] Analysis Config - Secondary params: %s\n", paste(secondary_selected, collapse = ", ")))
-      cat(sprintf("[DEBUG] Analysis Config - Combined params: %s\n", paste(combined_params, collapse = ", ")))
       combined_params
     },
     outlier_test = input$outlier_test %||% TRUE,
@@ -634,13 +624,10 @@ observeEvent(input$run_analysis, {
         # Exclude subjects with carryover if requested
         if (analysis_config$exclude_carryover_subjects && nrow(carryover_results$flagged_subjects) > 0) {
           excluded_subjects <- carryover_results$flagged_subjects$Subject  # Capital S to match carryover function output
-          cat(sprintf("[DEBUG] Excluding subjects with carryover: %s\n", paste(excluded_subjects, collapse = ", ")))
-          cat(sprintf("[DEBUG] Original data has %d rows\n", nrow(analysis_data)))
           
           # Data should ALWAYS have Subject (capitalized) from data upload
           analysis_data <- analysis_data[!analysis_data$Subject %in% excluded_subjects, ]
           
-          cat(sprintf("[DEBUG] Filtered data has %d rows\n", nrow(analysis_data)))
           # Carryover notification removed; summary is now only in Results view
         } # No pop-up for carryover detection
         
@@ -700,7 +687,6 @@ observeEvent(input$run_analysis, {
       # Add missing design variables for ANOVA analysis
       # The NCA analysis might not preserve all design variables, so we add them back
       if (!("sequence" %in% names(nca_results)) || !("period" %in% names(nca_results))) {
-        cat("[DEBUG] Adding missing design variables to NCA results for ANOVA...\n")
         
         # Create unique identifier for merging - use CAPITALIZED column names
         analysis_data$merge_id <- paste(analysis_data$Subject, analysis_data$Treatment, sep = "_")
@@ -714,8 +700,6 @@ observeEvent(input$run_analysis, {
         nca_results$merge_id <- NULL  # Remove temporary merge column
           left_join(design_vars %>% select(merge_id, sequence, period), by = c("merge_id" = "merge_id")) %>%
           select(-merge_id)  # Remove temporary merge column
-        
-        cat(sprintf("[DEBUG] NCA results now have columns: %s\n", paste(names(nca_results), collapse = ", ")))
       }
       
     } else if (has_pk_params && !has_time && !has_concentration) {
@@ -748,9 +732,6 @@ observeEvent(input$run_analysis, {
           }
         }
       }
-      
-      cat(sprintf("[DEBUG] Pre-calculated data formatted as NCA results with %d rows and %d columns\n", nrow(nca_results), ncol(nca_results)))
-      cat(sprintf("[DEBUG] Available columns: %s\n", paste(names(nca_results), collapse = ", ")))
       
     } else {
       # Unclear data type - attempt NCA but handle gracefully
@@ -803,9 +784,6 @@ observeEvent(input$run_analysis, {
       # Determine which parameters to analyze based on user selection and availability
       selected_params <- analysis_config$selected_pk_params
       
-      cat(sprintf("[DEBUG] Raw selected_pk_params from config: %s\n", paste(selected_params, collapse = ", ")))
-      cat(sprintf("[DEBUG] Available columns in nca_results: %s\n", paste(names(nca_results), collapse = ", ")))
-      
       # Check if selected_params is empty
       if (length(selected_params) == 0) {
         cat("[ERROR] No parameters selected for analysis!\n")
@@ -856,11 +834,6 @@ observeEvent(input$run_analysis, {
         }
       }
       
-      cat(sprintf("[DEBUG] User selected parameters: %s\n", paste(selected_params, collapse = ", ")))
-      cat(sprintf("[DEBUG] Expanded parameters (including log versions): %s\n", paste(expanded_params, collapse = ", ")))
-      cat(sprintf("[DEBUG] Available expanded parameters: %s\n", paste(available_selected_params, collapse = ", ")))
-      cat(sprintf("[DEBUG] Numeric parameters for ANOVA: %s\n", paste(numeric_params, collapse = ", ")))
-      
       # Check if this is a replicate design with ABEL selected
       # If so, skip separate ANOVA and let replicateBE handle it
       # Detect design from data or use configured design
@@ -898,7 +871,6 @@ observeEvent(input$run_analysis, {
       } else if (length(numeric_params) > 0) {
         
         tryCatch({
-          cat("[DEBUG] Running simple ANOVA analysis...\n")
           
           # Use the ANOVA function with the selected model type and random effects
           simple_anova_results <- perform_simple_anova(
@@ -918,10 +890,7 @@ observeEvent(input$run_analysis, {
             parameters = available_selected_params
           )
           
-          cat(sprintf("[DEBUG] ✓ Simple ANOVA completed for %d parameters\n", length(simple_anova_results)))
-          
         }, error = function(e) {
-          cat(sprintf("[DEBUG] ✗ Simple ANOVA failed: %s\n", e$message))
           anova_results <- list(
             error = paste("ANOVA failed:", e$message)
           )
@@ -935,7 +904,6 @@ observeEvent(input$run_analysis, {
           error_msg <- paste(error_msg, "All selected parameters contain non-numeric data or insufficient observations.")
         }
         
-        cat(sprintf("[DEBUG] %s\n", error_msg))
         anova_results <- list(
           error = error_msg
         )
@@ -952,9 +920,6 @@ observeEvent(input$run_analysis, {
     # Store ANOVA results (but NOT if we're doing ABEL - it will be populated later from replicateBE)
     if (!(is_replicate_design && is_abel_analysis)) {
       values$anova_results <- anova_results
-      cat("[DEBUG] Stored ANOVA results (non-ABEL path)\n")
-    } else {
-      cat("[DEBUG] Skipping ANOVA results storage - will be populated by replicateBE\n")
     }
     
     Sys.sleep(1.5)
@@ -967,12 +932,6 @@ observeEvent(input$run_analysis, {
     
     # FIXED: Use real NCA results instead of mock data
     # The nca_results already contains all 19 parameters calculated correctly
-    cat(sprintf("[DEBUG] NCA results structure: %s\n", class(nca_results)))
-    if (is.data.frame(nca_results)) {
-      cat(sprintf("[DEBUG] NCA results has %d rows and %d columns\n", nrow(nca_results), ncol(nca_results)))
-      cat(sprintf("[DEBUG] NCA results columns: %s\n", paste(names(nca_results), collapse = ", ")))
-    }
-    
     values$nca_results <- list(
       # Use real NCA results data  
       subject_data = nca_results,  # This contains all 19 parameters
@@ -1038,7 +997,6 @@ observeEvent(input$run_analysis, {
         names(be_data)[names(be_data) == "sequence"] <- "Sequence"
       }
       
-      # Debug: Check data structure
       cat(sprintf("📋 BE Data structure: %d rows, %d cols\n", nrow(be_data), ncol(be_data)))
       cat(sprintf("📋 Columns: %s\n", paste(names(be_data), collapse = ", ")))
       cat(sprintf("📋 Unique subjects: %d\n", length(unique(be_data$Subject))))
@@ -1104,7 +1062,6 @@ observeEvent(input$run_analysis, {
       cat(sprintf("📊 BE data final structure: %d rows, %d columns\n", nrow(be_data), ncol(be_data)))
       cat(sprintf("📊 Final columns: %s\n", paste(names(be_data), collapse = ", ")))
       
-      # Debug: Check a few sample rows
       if (nrow(be_data) > 0) {
         cat("🔍 Sample BE data rows:\n")
         print(head(be_data[, names(be_data)[1:min(10, ncol(be_data))]], 3))
@@ -1225,15 +1182,6 @@ observeEvent(input$run_analysis, {
       
       # Store the real BE analysis results and merge ANOVA results
       values$be_results <- be_analysis_result
-      
-      # Debug: Check what we got from BE analysis
-      cat("[DEBUG] BE analysis complete. Checking ANOVA results...\n")
-      cat(sprintf("[DEBUG] BE analysis type: %s\n", analysis_config$be_analysis_type))
-      cat(sprintf("[DEBUG] BE result has anova_results: %s\n", !is.null(be_analysis_result$anova_results)))
-      if (!is.null(be_analysis_result$anova_results)) {
-        cat(sprintf("[DEBUG] anova_results length: %d\n", length(be_analysis_result$anova_results)))
-        cat(sprintf("[DEBUG] anova_results names: %s\n", paste(names(be_analysis_result$anova_results), collapse = ", ")))
-      }
       
       # For ABEL with replicate designs, ANOVA results come from replicateBE
       # For other designs, use the separate ANOVA results
