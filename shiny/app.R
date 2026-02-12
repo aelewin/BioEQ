@@ -60,6 +60,12 @@ tryCatch({
 })
 
 tryCatch({
+  library(PowerTOST)
+}, error = function(e) {
+  message("PowerTOST not available - sample size estimation module will not work")
+})
+
+tryCatch({
   library(htmlwidgets)
 }, error = function(e) {
   message("htmlwidgets not available - plot export may be limited")
@@ -130,6 +136,7 @@ ui <- dashboardPage(
       br(),
       menuSubItem("Advanced Options", tabName = "advanced", icon = icon("sliders-h")),
       menuSubItem("Validation", tabName = "validation", icon = icon("check-circle")),
+      menuSubItem("Sample Size", tabName = "sample_size", icon = icon("calculator")),
       menuSubItem("Help & Support", tabName = "help", icon = icon("question-circle"))
     ),
     div(
@@ -856,6 +863,12 @@ ui <- dashboardPage(
         )
       ),
       
+      # Sample Size Tab
+      tabItem(
+        tabName = "sample_size",
+        source("ui/sample_size_ui.R", local = TRUE)$value
+      ),
+      
       # Help Tab
       tabItem(
         tabName = "help",
@@ -1007,6 +1020,7 @@ server <- function(input, output, session) {
     source("server/data_upload_server.R", local = environment())
     source("server/analysis_setup_server.R", local = environment()) 
     source("server/results_server.R", local = environment())
+    source("server/sample_size_server.R", local = environment())
   })
   
   # Initialize results dashboard module
