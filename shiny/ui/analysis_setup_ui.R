@@ -168,10 +168,7 @@ tagList(
                   )
                 ),
 
-                h5(tags$strong("Missing Data Handling"),
-                   help_icon("missing_data", help_texts$missing_data$tooltip, 
-                            help_texts$missing_data$title, help_texts$missing_data$content)
-                ),
+                h5(tags$strong("Missing Data Handling")),
                 tags$label("Middle Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
                 selectInput(
                   "missing_data_middle",
@@ -262,9 +259,6 @@ tagList(
                     condition = "output.is_parallel_design == true",
                     div(style = "opacity: 0.4; pointer-events: none; background-color: #f8f9fa; padding: 10px; border-radius: 5px; border: 1px dashed #dee2e6;",
                       h5(tags$strong("Carryover Detection (ICH M13A)"),
-                         help_icon("carryover_effect", "ICH M13A Section 2.2.3.3 carryover detection method", 
-                                  "ICH M13A Carryover Detection", 
-                                  "Proper carryover detection examines pre-dose samples in Period 2+ and compares to Cmax within the same period. If pre-dose > 5% of Cmax, significant carryover is detected and the subject should be excluded per regulatory guidelines."),
                          tags$span(" (Not available for parallel studies)", style = "color: #6c757d; font-weight: normal; font-size: 0.9em;")
                       ),
                       
@@ -304,11 +298,7 @@ tagList(
                   
                   conditionalPanel(
                     condition = "output.is_parallel_design == false",
-                    h5(tags$strong("Carryover Detection (ICH M13A)"),
-                       help_icon("carryover_effect", "ICH M13A Section 2.2.3.3 carryover detection method", 
-                                "ICH M13A Carryover Detection", 
-                                "Proper carryover detection examines pre-dose samples in Period 2+ and compares to Cmax within the same period. If pre-dose > 5% of Cmax, significant carryover is detected and the subject should be excluded per regulatory guidelines.")
-                    ),
+                    h5(tags$strong("Carryover Detection (ICH M13A)")),
                     
                     div(style = "margin-left: 20px;",
                       checkboxInput(

@@ -1571,6 +1571,75 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           ) %>% 
             DT::formatStyle(columns = 1:6, fontSize = '14px'),
           
+          # AUC0-t / AUC0-inf coverage ratio (Test, Reference, Overall)
+          {
+            auc_coverage_div <- NULL
+            tryCatch({
+              nca_res <- nca_results()
+              sd <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+              if (!is.null(sd) && "AUC0t" %in% names(sd) && "AUC0inf" %in% names(sd)) {
+                evaluable <- !is.na(sd$AUC0t) & !is.na(sd$AUC0inf) & sd$AUC0inf > 0
+                if (sum(evaluable) > 0) {
+                  sd_eval <- sd[evaluable, ]
+                  overall_pct <- mean(sd_eval$AUC0t / sd_eval$AUC0inf * 100)
+                  
+                  # Detect treatment labels
+                  trt_col <- sd_eval$Treatment
+                  test_mask <- trt_col %in% c("T", "Test")
+                  ref_mask <- trt_col %in% c("R", "Reference")
+                  
+                  test_pct <- if (sum(test_mask) > 0) mean(sd_eval$AUC0t[test_mask] / sd_eval$AUC0inf[test_mask] * 100) else NA
+                  ref_pct <- if (sum(ref_mask) > 0) mean(sd_eval$AUC0t[ref_mask] / sd_eval$AUC0inf[ref_mask] * 100) else NA
+                  
+                  all_pass <- all(c(test_pct, ref_pct, overall_pct) >= 80, na.rm = TRUE)
+                  border_color <- if (all_pass) "#28a745" else "#ffc107"
+                  
+                  # Build value spans
+                  fmt_val <- function(label, val) {
+                    if (is.na(val)) return(NULL)
+                    color <- if (val >= 80) "#28a745" else "#dc3545"
+                    tags$span(
+                      tags$strong(paste0(label, ": ")),
+                      tags$span(style = paste0("color: ", color, "; font-weight: 600;"), sprintf("%.1f%%", val))
+                    )
+                  }
+                  
+                  value_spans <- list(fmt_val("Test", test_pct), fmt_val("Reference", ref_pct), fmt_val("Overall", overall_pct))
+                  value_spans <- Filter(Negate(is.null), value_spans)
+                  # Interleave with separators
+                  display_items <- list()
+                  for (j in seq_along(value_spans)) {
+                    display_items[[length(display_items) + 1]] <- value_spans[[j]]
+                    if (j < length(value_spans)) {
+                      display_items[[length(display_items) + 1]] <- tags$span(style = "color: #adb5bd; margin: 0 10px;", "|")
+                    }
+                  }
+                  
+                  guidance_note <- if (!all_pass) {
+                    tags$div(style = "margin-top: 6px;",
+                      tags$small(style = "color: #856404;",
+                        icon("exclamation-triangle"),
+                        " Regulatory guidance recommends AUC0-t should cover \u2265 80% of AUC0-\u221e."
+                      )
+                    )
+                  }
+                  
+                  auc_coverage_div <- div(
+                    style = paste0("padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid ", border_color, "; margin-top: 5px;"),
+                    div(style = "display: flex; align-items: center; flex-wrap: wrap; gap: 5px;",
+                      tags$span(style = "font-weight: 700; color: #495057; margin-right: 8px;", "AUC0-t / AUC0-\u221e Coverage:"),
+                      display_items
+                    ),
+                    guidance_note
+                  )
+                }
+              }
+            }, error = function(e) {
+              cat(sprintf("[DEBUG] AUC coverage calculation skipped: %s\n", e$message))
+            })
+            if (!is.null(auc_coverage_div)) tagList(br(), auc_coverage_div) else NULL
+          },
+          
           br(),
           div(
             style = "padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid #6c757d;",
