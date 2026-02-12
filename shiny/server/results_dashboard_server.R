@@ -1542,9 +1542,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           
           # Results table
           h5("📊 Bioequivalence Assessment - All Parameters"),
-          p(style = "font-size: 0.9em; color: #6c757d; margin-bottom: 15px;", 
-            "Bioequivalence assessment for all analyzed parameters. ",
-            "Statistical analysis performed on log-transformed data where appropriate; results displayed with original parameter names for clarity."),
           DT::datatable(
             results_rows,
             options = list(
@@ -1579,7 +1576,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             style = "padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid #6c757d;",
             tags$small(
               tags$strong("Note: "), 
-              "Bioequivalence evaluation performed on log-transformed data (regulatory requirement) but results displayed with original parameter names (Cmax, AUC0-t, AUC0-∞) for clarity. ",
+              "Bioequivalence evaluation performed on log-transformed data (regulatory requirement) but results displayed with original parameter names (Cmax, AUC0-t, AUC0-\u221e) for clarity. ",
               "Complete statistical analysis including all calculated parameters is available in the 'BE Analysis' tab."
             )
           )
