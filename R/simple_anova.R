@@ -52,6 +52,24 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
   
   cat("\n=== ANOVA Analysis ===\n")
   
+  # Standardize column names to lowercase for consistent processing
+  # This handles both capitalized (Subject, Treatment) and lowercase (subject, treatment) inputs
+  col_mapping <- c(
+    "Subject" = "subject",
+    "Treatment" = "treatment", 
+    "Period" = "period",
+    "Sequence" = "sequence",
+    "Group" = "group"
+  )
+  
+  for (old_name in names(col_mapping)) {
+    new_name <- col_mapping[[old_name]]
+    if (old_name %in% names(nca_data) && !new_name %in% names(nca_data)) {
+      nca_data[[new_name]] <- nca_data[[old_name]]
+      cat(sprintf("  📝 Standardized column: %s -> %s\n", old_name, new_name))
+    }
+  }
+  
   # Detect study design
   study_design <- detect_anova_design(nca_data)
   cat(sprintf("Detected Study Design: %s\n", study_design))
@@ -141,6 +159,13 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
                 paste(unique_treatments, collapse = ", ")))
     cat("  ⚠️  Factor levels will be set alphabetically - verify T/R ratio interpretation\n")
   }
+  
+  # Determine the drug coefficient name dynamically based on factor levels
+  # When levels are c("R", "T"), coefficient is "drugT"
+  # When levels are c("Reference", "Test"), coefficient is "drugTest"
+  drug_levels <- levels(nca_data$drug)
+  drug_coef_name <- paste0("drug", drug_levels[length(drug_levels)])  # Non-reference level
+  cat(sprintf("  ✓ Drug coefficient name: %s\n", drug_coef_name))
   
   # Check for group effects and prepare group factor
   has_groups <- FALSE
@@ -316,9 +341,9 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           
           # Extract treatment effect
           coeffs <- coef(model)
-          if ("drugT" %in% names(coeffs)) {
-            pe_estimate <- 100 * exp(coeffs[["drugT"]])
-            ci <- 100 * exp(confint(model, "drugT", level = 0.9))
+          if (drug_coef_name %in% names(coeffs)) {
+            pe_estimate <- 100 * exp(coeffs[[drug_coef_name]])
+            ci <- 100 * exp(confint(model, drug_coef_name, level = 0.9))
             ci_lower <- ci[1]
             ci_upper <- ci[2]
             df_residual <- anova_table["Residuals", "Df"]
@@ -425,26 +450,26 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           tTable <- model_summary$tTable
           cat(sprintf("  [DEBUG] tTable rownames: %s\n", paste(rownames(tTable), collapse=", ")))
           
-          if ("drugT" %in% rownames(tTable)) {
-            cat("  [DEBUG] Found drugT coefficient\n")
-            pe_estimate <- 100 * exp(tTable["drugT", "Value"])
+          if (drug_coef_name %in% rownames(tTable)) {
+            cat(sprintf("  [DEBUG] Found %s coefficient\n", drug_coef_name))
+            pe_estimate <- 100 * exp(tTable[drug_coef_name, "Value"])
             
             # Get confidence intervals for nlme model 
             cat("  [DEBUG] Getting confidence intervals...\n")
             tryCatch({
               ci_obj <- nlme::intervals(model, which = "fixed", level = 0.9)
               cat("  [DEBUG] Intervals object obtained\n")
-              if ("drugT" %in% rownames(ci_obj$fixed)) {
-                ci_vals <- 100 * exp(ci_obj$fixed["drugT", c("lower", "upper")])
+              if (drug_coef_name %in% rownames(ci_obj$fixed)) {
+                ci_vals <- 100 * exp(ci_obj$fixed[drug_coef_name, c("lower", "upper")])
                 ci_lower <- ci_vals[1]
                 ci_upper <- ci_vals[2]
                 cat("  [DEBUG] Confidence intervals extracted from intervals() function\n")
               } else {
-                cat("  [DEBUG] drugT not found in intervals object, using manual calculation\n")
+                cat(sprintf("  [DEBUG] %s not found in intervals object, using manual calculation\n", drug_coef_name))
                 # Fallback: calculate CI manually using t-distribution
-                coef_val <- tTable["drugT", "Value"]
-                se_val <- tTable["drugT", "Std.Error"]
-                df_val <- tTable["drugT", "DF"]
+                coef_val <- tTable[drug_coef_name, "Value"]
+                se_val <- tTable[drug_coef_name, "Std.Error"]
+                df_val <- tTable[drug_coef_name, "DF"]
                 t_crit <- qt(0.95, df_val)  # 90% CI
                 ci_lower <- 100 * exp(coef_val - t_crit * se_val)
                 ci_upper <- 100 * exp(coef_val + t_crit * se_val)
@@ -452,18 +477,18 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             }, error = function(e) {
               cat(sprintf("  [DEBUG] Error in intervals(): %s\n", e$message))
               # Fallback calculation if intervals() fails
-              coef_val <- tTable["drugT", "Value"]
-              se_val <- tTable["drugT", "Std.Error"]
-              df_val <- tTable["drugT", "DF"]
+              coef_val <- tTable[drug_coef_name, "Value"]
+              se_val <- tTable[drug_coef_name, "Std.Error"]
+              df_val <- tTable[drug_coef_name, "DF"]
               t_crit <- qt(0.95, df_val)  # 90% CI
               ci_lower <- 100 * exp(coef_val - t_crit * se_val)
               ci_upper <- 100 * exp(coef_val + t_crit * se_val)
               cat("  [DEBUG] Used fallback CI calculation\n")
             })
             
-            df_residual <- tTable["drugT", "DF"]
+            df_residual <- tTable[drug_coef_name, "DF"]
           } else {
-            cat("  [DEBUG] drugT not found in tTable\n")
+            cat(sprintf("  [DEBUG] %s not found in tTable\n", drug_coef_name))
           }
           
           # Create anova-like table for nlme
@@ -631,10 +656,10 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           
           # Extract treatment effect
           coeffs <- model_summary$coefficients
-          if ("drugT" %in% rownames(coeffs)) {
-            pe_log <- coeffs["drugT", "Estimate"]
-            se_log <- coeffs["drugT", "Std. Error"]
-            df_val <- coeffs["drugT", "df"]
+          if (drug_coef_name %in% rownames(coeffs)) {
+            pe_log <- coeffs[drug_coef_name, "Estimate"]
+            se_log <- coeffs[drug_coef_name, "Std. Error"]
+            df_val <- coeffs[drug_coef_name, "df"]
             
             pe_estimate <- 100 * exp(pe_log)
             alpha <- 0.1  # For 90% CI
@@ -711,10 +736,10 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           
           # Extract treatment effect
           coeffs <- model_summary$coefficients
-          if ("drugT" %in% rownames(coeffs)) {
-            pe_log <- coeffs["drugT", "Estimate"]
-            se_log <- coeffs["drugT", "Std. Error"]
-            df_val <- coeffs["drugT", "df"]
+          if (drug_coef_name %in% rownames(coeffs)) {
+            pe_log <- coeffs[drug_coef_name, "Estimate"]
+            se_log <- coeffs[drug_coef_name, "Std. Error"]
+            df_val <- coeffs[drug_coef_name, "df"]
             
             pe_estimate <- 100 * exp(pe_log)
             alpha <- 0.1  # For 90% CI
@@ -774,24 +799,24 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         
         if (anova_model == "nlme") {
           # For nlme models, use fixef() and tTable
-          if ("drugT" %in% rownames(model_summary$tTable)) {
-            treatment_coef <- model_summary$tTable["drugT", "Value"]
-            treatment_se <- model_summary$tTable["drugT", "Std.Error"]
-            treatment_pval <- model_summary$tTable["drugT", "p-value"]
+          if (drug_coef_name %in% rownames(model_summary$tTable)) {
+            treatment_coef <- model_summary$tTable[drug_coef_name, "Value"]
+            treatment_se <- model_summary$tTable[drug_coef_name, "Std.Error"]
+            treatment_pval <- model_summary$tTable[drug_coef_name, "p-value"]
           }
         } else if (anova_model %in% c("satterthwaite", "kenward-roger")) {
           # For lmer models
-          if (!is.null(model_summary$coefficients) && "drugT" %in% rownames(model_summary$coefficients)) {
-            treatment_coef <- model_summary$coefficients["drugT", "Estimate"]
-            treatment_se <- model_summary$coefficients["drugT", "Std. Error"]
-            treatment_pval <- model_summary$coefficients["drugT", 5]  # p-value column
+          if (!is.null(model_summary$coefficients) && drug_coef_name %in% rownames(model_summary$coefficients)) {
+            treatment_coef <- model_summary$coefficients[drug_coef_name, "Estimate"]
+            treatment_se <- model_summary$coefficients[drug_coef_name, "Std. Error"]
+            treatment_pval <- model_summary$coefficients[drug_coef_name, 5]  # p-value column
           }
         } else {
           # For fixed effects models
-          if (!is.null(model_summary$coefficients) && "drugT" %in% rownames(model_summary$coefficients)) {
-            treatment_coef <- model_summary$coefficients["drugT", "Estimate"]
-            treatment_se <- model_summary$coefficients["drugT", "Std. Error"]
-            treatment_pval <- model_summary$coefficients["drugT", 4]  # p-value column
+          if (!is.null(model_summary$coefficients) && drug_coef_name %in% rownames(model_summary$coefficients)) {
+            treatment_coef <- model_summary$coefficients[drug_coef_name, "Estimate"]
+            treatment_se <- model_summary$coefficients[drug_coef_name, "Std. Error"]
+            treatment_pval <- model_summary$coefficients[drug_coef_name, 4]  # p-value column
           }
         }
         

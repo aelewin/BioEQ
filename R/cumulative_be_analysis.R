@@ -379,12 +379,16 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
     return(NULL)
   }
   
-  # Check that we have both treatments
+  # Check that we have both treatments (support both "T"/"R" and "Test"/"Reference" labels)
   treatments <- unique(valid_data$treatment)
-  if (length(treatments) < 2 || !all(c("Test", "Reference") %in% treatments)) {
-    cat("Missing treatment groups - need both Test and Reference\n")
+  has_tr <- all(c("T", "R") %in% treatments)
+  has_test_ref <- all(c("Test", "Reference") %in% treatments)
+  if (length(treatments) < 2 || (!has_tr && !has_test_ref)) {
+    cat("Missing treatment groups - need both Test and Reference (or T and R)\n")
     return(NULL)
   }
+  test_label <- if (has_tr) "T" else "Test"
+  ref_label <- if (has_tr) "R" else "Reference"
   
   # Get unique subjects
   subjects <- unique(valid_data$subject)
@@ -394,8 +398,8 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
   
   # For single subject, calculate simple ratio (no CI possible)
   if (n_subjects == 1) {
-    test_data <- valid_data[valid_data$treatment == "Test", ]
-    ref_data <- valid_data[valid_data$treatment == "Reference", ]
+    test_data <- valid_data[valid_data$treatment == test_label, ]
+    ref_data <- valid_data[valid_data$treatment == ref_label, ]
     
     if (nrow(test_data) > 0 && nrow(ref_data) > 0) {
       log_ratio <- mean(test_data[[parameter]]) - mean(ref_data[[parameter]])

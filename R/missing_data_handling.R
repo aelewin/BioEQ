@@ -89,8 +89,8 @@ handle_missing_data <- function(data, method = "complete",
 #' @return Summary of changes made
 validate_missing_data_handling <- function(original_data, processed_data, method) {
   
-  original_missing <- sum(is.na(original_data$concentration))
-  processed_missing <- sum(is.na(processed_data$concentration))
+  original_missing <- sum(is.na(original_data$Concentration))
+  processed_missing <- sum(is.na(processed_data$Concentration))
   
   cat(sprintf("\n📋 Missing Data Handling Summary (%s):\n", method))
   cat(sprintf("  Original missing values: %d\n", original_missing))

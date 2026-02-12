@@ -673,9 +673,9 @@ observeEvent(input$run_analysis, {
       
       nca_results <- perform_nca_analysis(
         data = analysis_data,  # Use potentially filtered data
-        id_cols = c("subject", "treatment", "period", "sequence"),
-        time_col = "time",
-        conc_col = "concentration",
+        id_cols = c("Subject", "Treatment", "Period", "Sequence"),
+        time_col = "Time",
+        conc_col = "Concentration",
         lambda_z_method = analysis_config$lambda_z_method,
         auc_method = auc_method,
         lambda_z_points = analysis_config$lambda_z_points,  # Pass the manual points
@@ -686,7 +686,7 @@ observeEvent(input$run_analysis, {
       
       # Add missing design variables for ANOVA analysis
       # The NCA analysis might not preserve all design variables, so we add them back
-      if (!("sequence" %in% names(nca_results)) || !("period" %in% names(nca_results))) {
+      if (!("Sequence" %in% names(nca_results)) || !("Period" %in% names(nca_results))) {
         
         # Create unique identifier for merging - use CAPITALIZED column names
         analysis_data$merge_id <- paste(analysis_data$Subject, analysis_data$Treatment, sep = "_")
@@ -698,8 +698,6 @@ observeEvent(input$run_analysis, {
         # Merge design variables with NCA results
         nca_results <- merge(nca_results, design_vars, by = "merge_id", all.x = TRUE, suffixes = c("", ".design"))
         nca_results$merge_id <- NULL  # Remove temporary merge column
-          left_join(design_vars %>% select(merge_id, sequence, period), by = c("merge_id" = "merge_id")) %>%
-          select(-merge_id)  # Remove temporary merge column
       }
       
     } else if (has_pk_params && !has_time && !has_concentration) {
@@ -741,9 +739,9 @@ observeEvent(input$run_analysis, {
       nca_results <- tryCatch({
         perform_nca_analysis(
           data = analysis_data,
-          id_cols = c("subject", "treatment", "period", "sequence"),
-          time_col = "time",
-          conc_col = "concentration",
+          id_cols = c("Subject", "Treatment", "Period", "Sequence"),
+          time_col = "Time",
+          conc_col = "Concentration",
           lambda_z_method = analysis_config$lambda_z_method,
           auc_method = auc_method,
           lambda_z_points = analysis_config$lambda_z_points,
@@ -870,6 +868,10 @@ observeEvent(input$run_analysis, {
         
       } else if (length(numeric_params) > 0) {
         
+        cat(sprintf("[INFO] 📊 Running ANOVA for %d parameters: %s\n", 
+                    length(numeric_params), paste(numeric_params, collapse = ", ")))
+        cat(sprintf("[INFO]    Model: %s, Design: %s\n", analysis_config$anova_model, detected_study_design))
+        
         tryCatch({
           
           # Use the ANOVA function with the selected model type and random effects
@@ -883,6 +885,8 @@ observeEvent(input$run_analysis, {
             analysis_config$include_group_treatment_interaction
           )
           
+          cat(sprintf("[INFO] ✅ ANOVA completed for %d parameters\n", length(simple_anova_results)))
+          
           # Wrap results in expected structure for the UI
           anova_results <- list(
             anova_results = simple_anova_results,
@@ -891,7 +895,9 @@ observeEvent(input$run_analysis, {
           )
           
         }, error = function(e) {
-          anova_results <- list(
+          cat(sprintf("[ERROR] ❌ ANOVA failed: %s\n", e$message))
+          anova_results <<- list(
+            anova_results = list(),  # Empty list instead of error
             error = paste("ANOVA failed:", e$message)
           )
         })
@@ -1002,7 +1008,7 @@ observeEvent(input$run_analysis, {
       cat(sprintf("📋 Unique subjects: %d\n", length(unique(be_data$Subject))))
       
       # Add NCA results to the BE data for analysis (ONLY for concentration-time data)
-      if (values$data_type == "concentration_time" && is.data.frame(nca_results) && nrow(nca_results) > 0) {
+      if (values$data_type == "concentration" && is.data.frame(nca_results) && nrow(nca_results) > 0) {
         cat(sprintf("📋 NCA Results structure: %d rows, %d cols\n", nrow(nca_results), ncol(nca_results)))
         cat(sprintf("📋 NCA Columns: %s\n", paste(names(nca_results), collapse = ", ")))
         

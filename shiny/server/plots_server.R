@@ -305,10 +305,10 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         nca_data <- nca_results()
         
         # Get the selected ANOVA method and PK parameters
-        anova_method <- if (!is.null(config) && !is.null(config$anova_method)) {
-          config$anova_method
+        anova_method <- if (!is.null(config) && !is.null(config$anova_model)) {
+          config$anova_model
         } else {
-          "fixed_effects"
+          "fixed"
         }
         
         selected_params <- if (!is.null(config) && !is.null(config$selected_pk_params)) {
