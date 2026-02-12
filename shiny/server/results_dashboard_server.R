@@ -604,7 +604,7 @@ format_simple_anova_results <- function(param_result, param_name) {
   )
 }
 
-results_dashboard_server <- function(id, be_results, nca_results, analysis_config, carryover_results = NULL) {
+results_dashboard_server <- function(id, be_results, nca_results, analysis_config, carryover_results = NULL, missing_data_log = NULL) {
   moduleServer(id, function(input, output, session) {
     
     # Reactive values for tracking state
@@ -1184,6 +1184,141 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
     })
 
     # Individual subject interpretation - moved to PK Parameters tab
+    
+    # ── Missing Data Summary output ──
+    output$missing_data_summary <- renderUI({
+      log_data <- NULL
+      if (!is.null(missing_data_log)) {
+        tryCatch({
+          log_data <- missing_data_log()
+        }, error = function(e) NULL)
+      }
+      
+      # Get the method from analysis config
+      config <- NULL
+      tryCatch({
+        config <- analysis_config()
+      }, error = function(e) NULL)
+      method_name <- function(m) {
+        switch(m, "interpolate" = "Linear interpolation", "locf" = "LOCF", "complete" = "Exclude point", m)
+      }
+      middle_m <- config$missing_data_middle %||% "complete"
+      terminal_m <- config$missing_data_terminal %||% "complete"
+      method_label <- sprintf("Middle: %s | Terminal: %s", method_name(middle_m), method_name(terminal_m))
+      
+      if (is.null(log_data) || nrow(log_data) == 0) {
+        return(div(
+          class = "alert alert-success",
+          style = "margin-bottom: 0;",
+          icon("check-circle"),
+          tags$strong(" No Missing Data"),
+          p("All concentration values were present. No imputation was required.",
+            style = "margin-bottom: 0; margin-top: 5px;")
+        ))
+      }
+      
+      # Separate BLQ actions from imputation actions
+      blq_log <- log_data[log_data$Method == "blq_to_zero", , drop = FALSE]
+      impute_log <- log_data[log_data$Method != "blq_to_zero", , drop = FALSE]
+      
+      # Build the summary UI
+      summary_elements <- list()
+      
+      # Method used
+      summary_elements[[length(summary_elements) + 1]] <- div(
+        style = "margin-bottom: 12px;",
+        tags$strong("Method: ", style = "color: #2d3748;"),
+        tags$span(method_label, style = "color: #4a5568;")
+      )
+      
+      # BLQ summary
+      if (nrow(blq_log) > 0) {
+        summary_elements[[length(summary_elements) + 1]] <- div(
+          class = "alert alert-info",
+          style = "padding: 10px; margin-bottom: 10px;",
+          icon("flask"),
+          tags$strong(sprintf(" %d BLQ value(s) set to 0", nrow(blq_log))),
+          p(sprintf("Subjects: %s", paste(unique(blq_log$Subject), collapse = ", ")),
+            style = "margin-bottom: 0; margin-top: 5px; font-size: 13px;")
+        )
+      }
+      
+      # Imputation summary
+      if (nrow(impute_log) > 0) {
+        n_imputed <- sum(impute_log$Method %in% c("interpolation", "locf", "locf_fallback"))
+        n_removed <- sum(impute_log$Method == "removed")
+        n_unable <- sum(impute_log$Method == "unable")
+        n_middle <- sum(impute_log$Position == "middle")
+        n_terminal <- sum(impute_log$Position == "terminal")
+        
+        # Summary counts
+        summary_text <- c()
+        if (n_imputed > 0) summary_text <- c(summary_text, sprintf("%d imputed", n_imputed))
+        if (n_removed > 0) summary_text <- c(summary_text, sprintf("%d removed", n_removed))
+        if (n_unable > 0) summary_text <- c(summary_text, sprintf("%d unable to impute", n_unable))
+        
+        position_text <- c()
+        if (n_middle > 0) position_text <- c(position_text, sprintf("%d middle", n_middle))
+        if (n_terminal > 0) position_text <- c(position_text, sprintf("%d terminal", n_terminal))
+        
+        summary_elements[[length(summary_elements) + 1]] <- div(
+          class = "alert alert-warning",
+          style = "padding: 10px; margin-bottom: 10px;",
+          icon("exclamation-triangle"),
+          tags$strong(sprintf(" %d missing concentration(s) handled", nrow(impute_log))),
+          p(paste0("Actions: ", paste(summary_text, collapse = ", ")),
+            style = "margin-bottom: 2px; margin-top: 5px; font-size: 13px;"),
+          if (length(position_text) > 0) {
+            p(paste0("Positions: ", paste(position_text, collapse = ", ")),
+              style = "margin-bottom: 0; font-size: 13px;")
+          }
+        )
+        
+        # Detailed table of all imputed/handled points
+        display_log <- impute_log[, c("Subject", "Treatment", "Period", "Time", "Position", "Method", "Imputed"), drop = FALSE]
+        display_log$Imputed <- ifelse(is.na(display_log$Imputed), "\u2014", sprintf("%.4f", display_log$Imputed))
+        display_log$Position <- ifelse(display_log$Position == "middle", "Middle", 
+                                ifelse(display_log$Position == "terminal", "Terminal", display_log$Position))
+        display_log$Method <- ifelse(display_log$Method == "interpolation", "Interpolation",
+                              ifelse(display_log$Method == "locf", "LOCF",
+                              ifelse(display_log$Method == "locf_fallback", "LOCF (fallback)",
+                              ifelse(display_log$Method == "removed", "Removed",
+                              ifelse(display_log$Method == "unable", "Unable", display_log$Method)))))
+        names(display_log) <- c("Subject", "Treatment", "Period", "Time", "Position", "Method", "Imputed Value")
+        
+        summary_elements[[length(summary_elements) + 1]] <- div(
+          style = "margin-top: 10px;",
+          tags$details(
+            tags$summary(
+              style = "cursor: pointer; color: #3498db; font-weight: 600;",
+              icon("table"), " View Details"
+            ),
+            div(
+              style = "margin-top: 8px; max-height: 300px; overflow-y: auto;",
+              tags$table(
+                class = "table table-striped table-sm",
+                style = "font-size: 13px;",
+                tags$thead(
+                  tags$tr(
+                    lapply(names(display_log), function(col) tags$th(col, style = "padding: 6px 8px;"))
+                  )
+                ),
+                tags$tbody(
+                  lapply(seq_len(nrow(display_log)), function(i) {
+                    tags$tr(
+                      lapply(display_log[i, ], function(val) tags$td(as.character(val), style = "padding: 4px 8px;"))
+                    )
+                  })
+                )
+              )
+            )
+          )
+        )
+      }
+      
+      do.call(div, summary_elements)
+    })
+    
     # Carryover summary output
     output$carryover_summary <- renderUI({
       if (is.null(carryover_results) || is.null(carryover_results())) {

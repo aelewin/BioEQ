@@ -300,7 +300,16 @@ results_dashboard_ui <- function(id) {
             fluidRow(
               column(12,
                 div(class = "summary-card",
-                  h4("📋 Carryover Assessment Summary"),
+                  h4("� Missing Data Summary"),
+                  uiOutput(ns("missing_data_summary"))
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(12,
+                div(class = "summary-card",
+                  h4("�📋 Carryover Assessment Summary"),
                   uiOutput(ns("carryover_summary"))
                 )
               )

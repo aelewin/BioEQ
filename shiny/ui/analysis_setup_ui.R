@@ -172,16 +172,28 @@ tagList(
                    help_icon("missing_data", help_texts$missing_data$tooltip, 
                             help_texts$missing_data$title, help_texts$missing_data$content)
                 ),
+                tags$label("Middle Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
                 selectInput(
-                  "missing_data",
+                  "missing_data_middle",
                   label = NULL,
                   choices = list(
-                    "Last observation carried forward" = "locf",
-                    "Linear interpolation" = "interpolate", 
-                    "Multiple imputation" = "multiple"
+                    "Exclude point" = "complete",
+                    "Linear interpolation" = "interpolate",
+                    "Last observation carried forward" = "locf"
                   ),
-                  selected = "interpolate"
-                )
+                  selected = "complete"
+                ),
+                tags$label("Terminal Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
+                selectInput(
+                  "missing_data_terminal",
+                  label = NULL,
+                  choices = list(
+                    "Exclude point" = "complete",
+                    "Last observation carried forward" = "locf"
+                  ),
+                  selected = "complete"
+                ),
+                helpText("BLQ values are always set to 0.")
               ),
               column(6,
                 h5(tags$strong("Optional PK Parameters"),

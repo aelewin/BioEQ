@@ -934,7 +934,9 @@ server <- function(input, output, session) {
     validation_result = NULL,
     columns_mapped = FALSE,
     current_step = 1,
-    analysis_complete = FALSE
+    analysis_complete = FALSE,
+    carryover_results = NULL,
+    missing_data_log = NULL
   )
   
   # Progress tracking
@@ -1028,7 +1030,8 @@ server <- function(input, output, session) {
                           be_results = reactive(values$be_results),
                           nca_results = reactive(values$nca_results),
                           analysis_config = reactive(values$analysis_config),
-                          carryover_results = reactive(values$carryover_results))
+                          carryover_results = reactive(values$carryover_results),
+                          missing_data_log = reactive(values$missing_data_log))
   
   # Initialize plots dashboard module
   plots_server("plots_dashboard",

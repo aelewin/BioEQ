@@ -218,6 +218,19 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
       missing_conc <- sum(is.na(data$Concentration))
       missing_pct <- round(missing_conc / total_obs * 100, 2)
       
+      # Build per-subject missing detail
+      missing_detail <- NULL
+      if (missing_conc > 0) {
+        na_rows <- data[is.na(data$Concentration), , drop = FALSE]
+        missing_detail <- data.frame(
+          Subject = as.character(na_rows$Subject),
+          Treatment = as.character(na_rows$Treatment),
+          Period = if ("Period" %in% names(na_rows)) as.character(na_rows$Period) else "",
+          Time = as.numeric(na_rows$Time),
+          stringsAsFactors = FALSE
+        )
+      }
+      
       # Concentration range with safe handling - use capitalized Concentration
       conc_range <- tryCatch({
         valid_conc <- data$Concentration[is.finite(data$Concentration)]
@@ -248,6 +261,7 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
         design_type = design_type,
         missing_concentrations = missing_conc,
         missing_percentage = missing_pct,
+        missing_detail = missing_detail,
         concentration_range = conc_range,
         time_range = time_range,
         data_type = "concentration",
@@ -794,6 +808,10 @@ output$data_summary <- renderText({
       } else "Range not available", ")\n",
       "Total Observations: ", summary$total_observations, "\n",
       "Missing Concentrations: ", summary$missing_concentrations, " (", summary$missing_percentage, "%)\n",
+      if (summary$missing_concentrations > 0 && !is.null(summary$missing_detail)) {
+        affected <- unique(summary$missing_detail$Subject)
+        paste0("  Affected Subjects: ", paste(affected, collapse = ", "), "\n")
+      } else "",
       "Concentration Range: ", 
       if(!is.na(summary$concentration_range[1]) && !is.na(summary$concentration_range[2])) {
         paste0(round(summary$concentration_range[1], 3), " - ", round(summary$concentration_range[2], 3))

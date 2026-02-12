@@ -545,7 +545,8 @@ observeEvent(input$run_analysis, {
     pAUC_end = input$pAUC_end %||% 2,
     log_transform = input$log_transform %||% TRUE,
     model_effects = input$model_effects %||% c("sequence", "period", "treatment", "subject"),
-    missing_data = input$missing_data %||% "interpolate",
+    missing_data_middle = input$missing_data_middle %||% "complete",
+    missing_data_terminal = input$missing_data_terminal %||% "complete",
     reference_scaling = input$reference_scaling %||% FALSE,
     scaling_threshold = input$scaling_threshold %||% 30,
     scaling_cap = c(input$scaling_cap_lower %||% 0.8, input$scaling_cap_upper %||% 1.25),
@@ -671,8 +672,33 @@ observeEvent(input$run_analysis, {
       # This is concentration-time data - perform NCA analysis
       cat("📊 Detected concentration-time data - performing NCA analysis...\n")
       
+      # ── Handle missing data before NCA ──
+      middle_method <- analysis_config$missing_data_middle %||% "complete"
+      terminal_method <- analysis_config$missing_data_terminal %||% "complete"
+      cat(sprintf("🔄 Applying missing data handling: middle=%s, terminal=%s\n", middle_method, terminal_method))
+      
+      missing_result <- handle_missing_data(
+        data = analysis_data,
+        middle_method = middle_method,
+        terminal_method = terminal_method,
+        group_cols = c("Subject", "Treatment"),
+        time_col = "Time",
+        conc_col = "Concentration",
+        period_col = "Period"
+      )
+      analysis_data <- missing_result$data
+      values$missing_data_log <- missing_result$log
+      
+      if (nrow(missing_result$log) > 0) {
+        n_imputed <- sum(!missing_result$log$Method %in% c("removed", "unable"))
+        cat(sprintf("📋 Missing data: %d actions taken (%d imputed)\n", 
+                    nrow(missing_result$log), n_imputed))
+      } else {
+        cat("✅ No missing data detected\n")
+      }
+      
       nca_results <- perform_nca_analysis(
-        data = analysis_data,  # Use potentially filtered data
+        data = analysis_data,  # Use processed data with missing values handled
         id_cols = c("Subject", "Treatment", "Period", "Sequence"),
         time_col = "Time",
         conc_col = "Concentration",
