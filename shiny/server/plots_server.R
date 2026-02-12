@@ -1192,7 +1192,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     # Individual subjects plot update handler
     observeEvent(input$update_individual_plot, {
       req(plot_values$plot_objects$individual_subjects)
-      req(input$test_subjects_select, input$ref_subjects_select)
       
       individual_data <- plot_values$plot_objects$individual_subjects
       
