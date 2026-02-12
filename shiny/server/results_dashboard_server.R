@@ -715,7 +715,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         updateCheckboxGroupInput(session, "secondary_pk_cols", selected = available_secondary)
         
         # Lambda z statistics
-        lambda_choices <- c("lambda_z", "lambda_z_r_squared", "lambda_z_p_value")
+        lambda_choices <- c("lambda_z", "lambda_z_r_squared", "lambda_z_p_value", "lambda_z_points", "lambda_z_method")
         available_lambda <- intersect(lambda_choices, available_cols)
         updateCheckboxGroupInput(session, "lambda_z_cols", selected = available_lambda)
         
@@ -743,7 +743,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       updateCheckboxGroupInput(session, "subject_info_cols", selected = c("Subject", "Treatment"))
       updateCheckboxGroupInput(session, "primary_pk_cols", selected = c("Cmax", "AUC0t", "AUC0inf"))
       updateCheckboxGroupInput(session, "secondary_pk_cols", selected = c("Tmax", "t_half"))
-      updateCheckboxGroupInput(session, "lambda_z_cols", selected = c("lambda_z"))
+      updateCheckboxGroupInput(session, "lambda_z_cols", selected = c("lambda_z", "lambda_z_points"))
       updateCheckboxGroupInput(session, "log_pk_cols", selected = c("lnCmax", "lnAUC0t", "lnAUC0inf"))
     })
     

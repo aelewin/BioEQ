@@ -431,8 +431,10 @@ results_dashboard_ui <- function(id) {
                         label = NULL,
                         choices = c(
                           "λz Coefficient" = "lambda_z",
-                          "λz R²" = "lambda_z_r_squared",
-                          "λz P-value" = "lambda_z_p_value"
+                          "λz R\u00b2" = "lambda_z_r_squared",
+                          "λz P-value" = "lambda_z_p_value",
+                          "λz Points Used" = "lambda_z_points",
+                          "λz Method" = "lambda_z_method"
                         ),
                         selected = character(0)
                       )

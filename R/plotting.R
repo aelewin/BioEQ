@@ -2413,3 +2413,194 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
   cat("Plot created successfully\n")
   return(p)
 }
+
+
+#' Create Lambda Z Regression Diagnostic Plots
+#'
+#' Generates a page of small plots (one per concentration profile) showing the
+#' observed data points on a log scale, the terminal phase points used for
+#' lambda z estimation highlighted, and the regression line through them.
+#'
+#' @param conc_data Data frame with Subject, Treatment, Period, Time, Concentration columns
+#' @param nca_subject_data Data frame of per-subject NCA results containing
+#'   lambda_z_terminal_times, lambda_z_terminal_concs, lambda_z_slope,
+#'   lambda_z_intercept (comma-separated strings for times/concs)
+#' @param subjects Optional character vector of subjects to include (NULL = all)
+#' @param ncol Number of columns in the facet grid (default 4)
+#' @return A ggplot2 object
+#' @export
+create_lambda_z_regression_plots <- function(conc_data, nca_subject_data, 
+                                              subjects = NULL, ncol = 4) {
+  
+  # Standardize column names
+  names(conc_data) <- gsub("^subject$", "Subject", names(conc_data), ignore.case = TRUE)
+  names(conc_data) <- gsub("^treatment$", "Treatment", names(conc_data), ignore.case = TRUE)
+  names(conc_data) <- gsub("^period$", "Period", names(conc_data), ignore.case = TRUE)
+  names(conc_data) <- gsub("^time$", "Time", names(conc_data), ignore.case = TRUE)
+  names(conc_data) <- gsub("^concentration$", "Concentration", names(conc_data), ignore.case = TRUE)
+  
+  # Filter subjects if specified
+  if (!is.null(subjects)) {
+    conc_data <- conc_data[conc_data$Subject %in% subjects, ]
+    nca_subject_data <- nca_subject_data[nca_subject_data$Subject %in% subjects, ]
+  }
+  
+  if (nrow(nca_subject_data) == 0 || nrow(conc_data) == 0) {
+    return(ggplot() + 
+             annotate("text", x = 0.5, y = 0.5, label = "No data available", size = 5) +
+             theme_void())
+  }
+  
+  # Build per-profile data for plotting
+  plot_data_list <- list()
+  regression_line_list <- list()
+  terminal_point_list <- list()
+  r_squared_list <- list()
+  
+  for (i in seq_len(nrow(nca_subject_data))) {
+    row <- nca_subject_data[i, ]
+    subj <- as.character(row$Subject)
+    trt <- as.character(row$Treatment)
+    period <- if ("Period" %in% names(row) && !is.na(row$Period)) as.character(row$Period) else NA
+    
+    # Build profile label
+    profile_label <- paste0("Subj ", subj, " - ", trt)
+    if (!is.na(period)) {
+      profile_label <- paste0(profile_label, " (P", period, ")")
+    }
+    
+    # Get raw concentration data for this profile
+    mask <- conc_data$Subject == subj & conc_data$Treatment == trt
+    if (!is.na(period) && "Period" %in% names(conc_data)) {
+      mask <- mask & conc_data$Period == period
+    }
+    profile_conc <- conc_data[mask, ]
+    
+    if (nrow(profile_conc) == 0) next
+    
+    # All observed points (exclude zero concentrations for log scale)
+    obs <- profile_conc[profile_conc$Concentration > 0, c("Time", "Concentration")]
+    if (nrow(obs) == 0) next
+    
+    obs$Profile <- profile_label
+    obs$PointType <- "Observed"
+    plot_data_list[[length(plot_data_list) + 1]] <- obs
+    
+    # Terminal phase points and regression line
+    has_fit <- !is.na(row$lambda_z_slope) && 
+               !is.na(row$lambda_z_intercept) &&
+               !is.na(row$lambda_z_terminal_times) &&
+               nchar(as.character(row$lambda_z_terminal_times)) > 0
+    
+    if (has_fit) {
+      term_times <- as.numeric(strsplit(as.character(row$lambda_z_terminal_times), ",")[[1]])
+      term_concs <- as.numeric(strsplit(as.character(row$lambda_z_terminal_concs), ",")[[1]])
+      slope <- as.numeric(row$lambda_z_slope)
+      intercept <- as.numeric(row$lambda_z_intercept)
+      
+      # Terminal points
+      if (length(term_times) > 0 && all(is.finite(term_concs)) && all(term_concs > 0)) {
+        term_df <- data.frame(
+          Time = term_times,
+          Concentration = term_concs,
+          Profile = profile_label,
+          PointType = "Terminal Phase"
+        )
+        terminal_point_list[[length(terminal_point_list) + 1]] <- term_df
+      }
+      
+      # Collect R² for annotation
+      r_sq <- if ("lambda_z_r_squared" %in% names(row) && !is.na(row$lambda_z_r_squared)) {
+        as.numeric(row$lambda_z_r_squared)
+      } else NA
+      if (!is.na(r_sq)) {
+        r_squared_list[[length(r_squared_list) + 1]] <- data.frame(
+          Profile = profile_label,
+          r_squared = r_sq,
+          stringsAsFactors = FALSE
+        )
+      }
+      
+      # Regression line (extend slightly beyond terminal range for visibility)
+      if (is.finite(slope) && is.finite(intercept)) {
+        line_times <- seq(min(term_times), max(term_times), length.out = 50)
+        line_concs <- exp(intercept + slope * line_times)
+        
+        reg_df <- data.frame(
+          Time = line_times,
+          Concentration = line_concs,
+          Profile = profile_label
+        )
+        regression_line_list[[length(regression_line_list) + 1]] <- reg_df
+      }
+    }
+  }
+  
+  if (length(plot_data_list) == 0) {
+    return(ggplot() + 
+             annotate("text", x = 0.5, y = 0.5, label = "No profiles with valid data", size = 5) +
+             theme_void())
+  }
+  
+  # Combine data
+  all_obs <- do.call(rbind, plot_data_list)
+  all_terminal <- if (length(terminal_point_list) > 0) do.call(rbind, terminal_point_list) else NULL
+  all_regression <- if (length(regression_line_list) > 0) do.call(rbind, regression_line_list) else NULL
+  
+  # Build plot
+  p <- ggplot(all_obs, aes(x = Time, y = Concentration)) +
+    # Observed points (open circles)
+    geom_point(color = "grey50", shape = 1, size = 1.5) +
+    geom_line(color = "grey70", linewidth = 0.3, alpha = 0.5)
+  
+  # Add regression line (behind terminal points)
+  if (!is.null(all_regression)) {
+    p <- p + geom_line(data = all_regression, aes(x = Time, y = Concentration),
+                       color = "#2166AC", linewidth = 0.8, linetype = "solid")
+  }
+  
+  # Add terminal phase points (filled, on top)
+  if (!is.null(all_terminal)) {
+    p <- p + geom_point(data = all_terminal, aes(x = Time, y = Concentration),
+                        color = "#D6604D", fill = "#D6604D", shape = 16, size = 2.5)
+  }
+  
+  # Build R² annotation data frame positioned at top-right of each panel
+  all_r_squared <- if (length(r_squared_list) > 0) do.call(rbind, r_squared_list) else NULL
+  if (!is.null(all_r_squared)) {
+    # Compute per-panel max x and max y for positioning
+    panel_ranges <- do.call(rbind, lapply(split(all_obs, all_obs$Profile), function(d) {
+      data.frame(Profile = d$Profile[1],
+                 x_max = max(d$Time, na.rm = TRUE),
+                 y_max = max(d$Concentration, na.rm = TRUE),
+                 stringsAsFactors = FALSE)
+    }))
+    all_r_squared <- merge(all_r_squared, panel_ranges, by = "Profile")
+    all_r_squared$label <- sprintf("R\u00b2 = %.4f", all_r_squared$r_squared)
+    
+    p <- p + geom_label(data = all_r_squared,
+                        aes(x = x_max, y = y_max, label = label),
+                        hjust = 1, vjust = 1,
+                        size = 2.5, fontface = "bold",
+                        fill = "white", alpha = 0.85,
+                        label.padding = unit(0.2, "lines"),
+                        label.size = 0.3, color = "#2166AC",
+                        inherit.aes = FALSE)
+  }
+  
+  p <- p +
+    scale_y_log10() +
+    facet_wrap(~ Profile, scales = "free", ncol = ncol) +
+    labs(x = "Time", y = "Concentration (log scale)") +
+    theme_bw(base_size = 10) +
+    theme(
+      strip.text = element_text(size = 8, face = "bold"),
+      strip.background = element_rect(fill = "#f0f0f0"),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 7),
+      axis.title = element_text(size = 9),
+      plot.margin = margin(5, 5, 5, 5)
+    )
+  
+  return(p)
+}

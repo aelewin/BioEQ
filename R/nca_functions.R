@@ -91,7 +91,11 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
       r_squared = NA,
       n_points_used = 0,
       start_idx = NA,
-      end_idx = NA
+      end_idx = NA,
+      terminal_times = numeric(0),
+      terminal_concs = numeric(0),
+      slope = NA,
+      intercept = NA
     ))
   }
   
@@ -110,7 +114,11 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
       r_squared = NA,
       n_points_used = 0,
       start_idx = NA,
-      end_idx = NA
+      end_idx = NA,
+      terminal_times = numeric(0),
+      terminal_concs = numeric(0),
+      slope = NA,
+      intercept = NA
     ))
   }
   
@@ -126,7 +134,11 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
         r_squared = NA,
         n_points_used = 0,
         start_idx = NA,
-        end_idx = NA
+        end_idx = NA,
+        terminal_times = numeric(0),
+        terminal_concs = numeric(0),
+        slope = NA,
+        intercept = NA
       ))
     }
     
@@ -168,7 +180,11 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
         r_squared = NA,
         n_points_used = 0,
         start_idx = NA,
-        end_idx = NA
+        end_idx = NA,
+        terminal_times = numeric(0),
+        terminal_concs = numeric(0),
+        slope = NA,
+        intercept = NA
       ))
     }
     
@@ -209,7 +225,11 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
         r_squared = NA,
         n_points_used = 0,
         start_idx = NA,
-        end_idx = NA
+        end_idx = NA,
+        terminal_times = numeric(0),
+        terminal_concs = numeric(0),
+        slope = NA,
+        intercept = NA
       ))
     }
     
@@ -241,7 +261,11 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
         r_squared = NA,
         n_points_used = 0,
         start_idx = NA,
-        end_idx = NA
+        end_idx = NA,
+        terminal_times = numeric(0),
+        terminal_concs = numeric(0),
+        slope = NA,
+        intercept = NA
       ))
     }
     
@@ -264,7 +288,11 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
       r_squared = NA,
       n_points_used = 0,
       start_idx = NA,
-      end_idx = NA
+      end_idx = NA,
+      terminal_times = numeric(0),
+      terminal_concs = numeric(0),
+      slope = NA,
+      intercept = NA
     ))
   }
   
@@ -287,7 +315,11 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
     n_points_used = length(selected_idx),
     start_idx = valid_idx[start_idx],
     end_idx = valid_idx[end_idx],
-    method = method
+    method = method,
+    terminal_times = x,
+    terminal_concs = exp(y),
+    slope = coef(fit)[2],
+    intercept = coef(fit)[1]
   ))
 }
 
@@ -440,6 +472,20 @@ calculate_pk_parameters <- function(time, conc, dose = 1, lambda_z_method = "man
   pk_params$lambda_z_se <- lambda_z_result$lambda_z_se
   pk_params$lambda_z_points <- lambda_z_result$n_points_used  # Use n_points_used not points_used
   pk_params$lambda_z_method <- lambda_z_method  # This is already correct
+  
+  # Store terminal regression fit data for lambda z plots
+  # Serialize as comma-separated strings so they survive data.frame storage
+  if (length(lambda_z_result$terminal_times) > 0) {
+    pk_params$lambda_z_terminal_times <- paste(lambda_z_result$terminal_times, collapse = ",")
+    pk_params$lambda_z_terminal_concs <- paste(lambda_z_result$terminal_concs, collapse = ",")
+    pk_params$lambda_z_slope <- lambda_z_result$slope
+    pk_params$lambda_z_intercept <- lambda_z_result$intercept
+  } else {
+    pk_params$lambda_z_terminal_times <- NA
+    pk_params$lambda_z_terminal_concs <- NA
+    pk_params$lambda_z_slope <- NA
+    pk_params$lambda_z_intercept <- NA
+  }
   
   # Derived parameters
   if (!is.na(pk_params$lambda_z) && pk_params$lambda_z > 0) {

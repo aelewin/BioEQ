@@ -1260,5 +1260,198 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         cat("Cleaned up temp directory:", temp_dir_path, "\n")
       }
     })
+    
+    # =======================================================================
+    # LAMBDA Z REGRESSION PLOTS TAB
+    # =======================================================================
+    
+    # Method display name lookup
+    lambda_z_method_names <- c(
+      "manual" = "Manual (Fixed Points)",
+      "ars" = "ARS (Adjusted R-Squared)",
+      "aic" = "AIC (Akaike Information Criterion)",
+      "ttt" = "TTT (Two-Times-Tmax)"
+    )
+    
+    # Reactive: available subjects for lambda z tab
+    lambda_z_subjects <- reactive({
+      req(nca_results())
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data)
+      sort(unique(as.character(subject_data$Subject)))
+    })
+    
+    # Reactive: current page of subjects
+    lambda_z_page <- reactiveVal(1)
+    lambda_z_per_page <- 8  # profiles per page (2 rows of 4)
+    
+    output$lambda_z_regression_display <- renderUI({
+      # Check if PK parameters data was uploaded (not concentration-time data)
+      if (!is.null(validation_result()) && !is.null(validation_result()$data_type)) {
+        if (validation_result()$data_type == "pk_parameters") {
+          return(div(class = "alert alert-warning text-center",
+            icon("exclamation-triangle"), 
+            strong(" Concentration-Time Data Not Available"), br(),
+            "Lambda Z regression plots require raw concentration-time data."
+          ))
+        }
+      }
+      
+      req(nca_results())
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      
+      if (is.null(subject_data) || !"lambda_z_terminal_times" %in% names(subject_data)) {
+        return(div(class = "alert alert-info text-center",
+          icon("info-circle"), " Lambda Z regression plots will appear here once analysis is complete."
+        ))
+      }
+      
+      # Get method info
+      lz_method_code <- if (!is.null(nca_res$lambda_z_method)) nca_res$lambda_z_method else {
+        if ("lambda_z_method" %in% names(subject_data)) subject_data$lambda_z_method[1] else "unknown"
+      }
+      lz_method_display <- lambda_z_method_names[lz_method_code]
+      if (is.na(lz_method_display)) lz_method_display <- lz_method_code
+      
+      all_subjects <- sort(unique(as.character(subject_data$Subject)))
+      
+      div(class = "plot-card",
+        div(class = "plot-card-header",
+          icon("chart-area"), "Lambda Z Terminal Phase Regression"
+        ),
+        div(class = "plot-card-body",
+          # Method label
+          div(style = "margin-bottom: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid #2166AC;",
+            tags$span(style = "font-weight: 600; color: #495057;", 
+              paste0("Lambda Z Method: ", lz_method_display)),
+            tags$span(style = "color: #6c757d; margin-left: 15px; font-size: 0.9em;",
+              icon("circle", style = "color: #D6604D; font-size: 8px;"), " Terminal phase points used",
+              "    ",
+              icon("minus", style = "color: #2166AC;"), " Regression fit"
+            )
+          ),
+          
+          # Subject filter and pagination controls
+          fluidRow(
+            column(6,
+              selectInput(ns("lambda_z_subject_filter"),
+                label = "Filter Subjects",
+                choices = c("All Subjects" = "all", setNames(all_subjects, paste("Subject", all_subjects))),
+                selected = "all",
+                width = "100%"
+              )
+            ),
+            column(6,
+              div(style = "text-align: right; margin-top: 25px;",
+                actionButton(ns("lambda_z_prev_page"), icon("arrow-left"), class = "btn btn-sm btn-default"),
+                tags$span(id = ns("lambda_z_page_label"), style = "margin: 0 10px; font-weight: 600;",
+                  textOutput(ns("lambda_z_page_text"), inline = TRUE)
+                ),
+                actionButton(ns("lambda_z_next_page"), icon("arrow-right"), class = "btn btn-sm btn-default")
+              )
+            )
+          ),
+          
+          # Plot output
+          div(style = "margin-top: 10px;",
+            plotOutput(ns("lambda_z_regression_plot"), height = "700px")
+          )
+        )
+      )
+    })
+    
+    # Page text
+    output$lambda_z_page_text <- renderText({
+      req(nca_results())
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data)
+      
+      # Determine subjects to show based on filter
+      filter_val <- input$lambda_z_subject_filter
+      if (is.null(filter_val) || filter_val == "all") {
+        all_subjects <- sort(unique(as.character(subject_data$Subject)))
+      } else {
+        all_subjects <- filter_val
+      }
+      
+      # Count profiles (subject x treatment x period)
+      n_profiles <- nrow(subject_data[subject_data$Subject %in% all_subjects, ])
+      total_pages <- max(1, ceiling(n_profiles / lambda_z_per_page))
+      current_page <- min(lambda_z_page(), total_pages)
+      
+      paste0("Page ", current_page, " of ", total_pages)
+    })
+    
+    # Pagination handlers
+    observeEvent(input$lambda_z_prev_page, {
+      current <- lambda_z_page()
+      if (current > 1) lambda_z_page(current - 1)
+    })
+    
+    observeEvent(input$lambda_z_next_page, {
+      req(nca_results())
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data)
+      
+      filter_val <- input$lambda_z_subject_filter
+      if (is.null(filter_val) || filter_val == "all") {
+        n_profiles <- nrow(subject_data)
+      } else {
+        n_profiles <- nrow(subject_data[subject_data$Subject %in% filter_val, ])
+      }
+      
+      total_pages <- max(1, ceiling(n_profiles / lambda_z_per_page))
+      current <- lambda_z_page()
+      if (current < total_pages) lambda_z_page(current + 1)
+    })
+    
+    # Reset page when filter changes
+    observeEvent(input$lambda_z_subject_filter, {
+      lambda_z_page(1)
+    })
+    
+    # Render lambda z regression plots
+    output$lambda_z_regression_plot <- renderPlot({
+      req(nca_results(), uploaded_data())
+      
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data, "lambda_z_terminal_times" %in% names(subject_data))
+      
+      conc_data <- uploaded_data()
+      
+      # Filter by subject if specified
+      filter_val <- input$lambda_z_subject_filter
+      if (!is.null(filter_val) && filter_val != "all") {
+        page_subject_data <- subject_data[subject_data$Subject %in% filter_val, ]
+      } else {
+        page_subject_data <- subject_data
+      }
+      
+      # Apply pagination
+      n_profiles <- nrow(page_subject_data)
+      total_pages <- max(1, ceiling(n_profiles / lambda_z_per_page))
+      current_page <- min(lambda_z_page(), total_pages)
+      
+      start_row <- (current_page - 1) * lambda_z_per_page + 1
+      end_row <- min(current_page * lambda_z_per_page, n_profiles)
+      
+      page_subject_data <- page_subject_data[start_row:end_row, ]
+      
+      # Get the subjects on this page
+      page_subjects <- unique(as.character(page_subject_data$Subject))
+      
+      # Create the plots
+      create_lambda_z_regression_plots(
+        conc_data = conc_data,
+        nca_subject_data = page_subject_data,
+        subjects = page_subjects,
+        ncol = 4
+      )
+    }, res = 96)
   })
 }
