@@ -267,6 +267,7 @@ create_help_modal(session, input, "be_limits", help_texts$be_limits$title, help_
 create_help_modal(session, input, "reference_scaling", help_texts$reference_scaling$title, help_texts$reference_scaling$content)
 create_help_modal(session, input, "abel_method", help_texts$abel_method$title, help_texts$abel_method$content)
 create_help_modal(session, input, "abel_upper_cap", help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content)
+create_help_modal(session, input, "rsabe_method", help_texts$rsabe_method$title, help_texts$rsabe_method$content)
 
 # Observer to disable carryover assessment for parallel designs and PK parameter datasets
 observe({

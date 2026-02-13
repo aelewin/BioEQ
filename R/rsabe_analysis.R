@@ -6,8 +6,12 @@
 #
 # Key references:
 #   - FDA Guidance for HVD/HVDPs (2021)
-#   - Tóthfalusi & Endrényi (2016) J Pharm Pharm Sci 19(1):21-33
-#   - Howe (1974) JASA 69:789-794
+#   - Tóthfalusi L, Endrényi L (2016). An Exact Procedure for the Evaluation
+#     of Reference-Scaled Average Bioequivalence. The AAPS Journal, 18(2),
+#     476-489. DOI: 10.1208/s12248-016-9873-6
+#   - Howe WG (1974). Approximate Confidence Limits on the Mean of X + Y
+#     Where X and Y Are Two Tabled Independent Random Variables. Journal of
+#     the American Statistical Association, 69, 789-794.
 #
 # Regulatory constants:
 #   - θ_s = ln(1.25)/σ_w0 = 0.2231/0.25 ≈ 0.8924 (FDA scaling proportionality constant)
@@ -25,6 +29,192 @@
 
 # Helper: null-coalescing operator
 `%||%` <- function(x, y) if (is.null(x)) y else x
+
+
+# =============================================================================
+# SECTION 0: HELPER FUNCTIONS
+# =============================================================================
+
+#' Hedges' Bias Correction Factor
+#'
+#' The sample effect size d = (Y_T - Y_R) / s_WR is a biased estimator of
+#' the population effect size delta. Hedges' correction adjusts for this.
+#'
+#' Eq. 8 of Tóthfalusi & Endrényi (2016):
+#'   cr(df) = 1 - 3 / (4*df - 1)
+#'
+#' The exact form is cr(df) = Gamma(df/2) / [sqrt(df/2) * Gamma((df-1)/2)]
+#' but the approximation is standard and accurate for df >= 3.
+#'
+#' @param df Degrees of freedom (associated with s_WR)
+#' @return Bias correction factor cr (< 1)
+#' @export
+hedges_correction <- function(df) {
+  1 - 3 / (4 * df - 1)
+}
+
+
+#' Compute Design-Dependent Constant K
+#'
+#' K encodes the relationship Var(d_hat) = K^2 * sigma^2_WR, where
+#' d_hat = Y_T - Y_R (treatment difference on log scale) and sigma^2_WR
+#' is the within-subject reference variance.
+#'
+#' The formulas below are from Tóthfalusi & Endrényi (2016):
+#'   Eq. 21: 2x2x4 full replicate (TRTR/RTRT)
+#'   Eq. 24: 2x3x3 partial replicate (TRR/RTR/RRT)
+#'   Eq. 25: 2x2x3 full replicate (TRT/RTR)
+#'   Eq. 22: General formula for arbitrary designs
+#'
+#' Under homoscedasticity (z = s_WT/s_WR = 1):
+#'   2x2x4: K = sqrt((z^2 + 1) / (2*n))  -> 1/sqrt(n)
+#'   2x3x3 partial: K = sqrt((z^2 + 0.5) / n)  -> sqrt(1.5/n)
+#'   2x2x3: K = sqrt(0.75*(z^2 + 1) / n)  -> sqrt(1.5/n)
+#'
+#' Under heteroscedasticity, z is estimated from the data and the
+#' formulas retain the z terms.
+#'
+#' @param design_info Design info from detect_replicate_design()
+#' @param isc_result ISC variance results (provides s2_wR, s2_wT, n_R, n_T)
+#' @return List with K, z, df_nct (degrees of freedom for noncentral t)
+#' @export
+compute_K_constant <- function(design_info, isc_result) {
+  
+  s2_wR <- isc_result$s2_wR
+  s2_wT <- isc_result$s2_wT
+  n_R <- isc_result$n_R  # Number of subjects with replicated R
+  n_T <- isc_result$n_T  # Number of subjects with replicated T
+  
+  design_type <- design_info$design_type
+  n_total <- design_info$n_subjects_total
+  n_seq <- length(design_info$sequences)
+  seq_dist <- design_info$sequence_distribution
+  
+  # Estimate z = s_WT / s_WR (heteroscedasticity ratio)
+  # For partial replicate designs, s2_wT may not be estimable;
+  # assume homoscedasticity (z = 1) in that case.
+  if (!is.na(s2_wT) && s2_wR > 0 && s2_wT > 0) {
+    z <- sqrt(s2_wT / s2_wR)
+    cat(sprintf("    Heteroscedasticity ratio: z = s_WT/s_WR = %.4f\n", z))
+  } else {
+    z <- 1.0
+    cat("    Assuming homoscedasticity (z = 1) — s²_wT not available\n")
+  }
+  
+  z2 <- z^2
+  K <- NA_real_
+  df_nct <- NA_real_
+  design_label <- ""
+  
+  if (grepl("2x2x4|Full Replicate", design_type, ignore.case = TRUE) &&
+      design_info$n_periods == 4) {
+    # -----------------------------------------------------------------------
+    # 2x2x4 Full Replicate (TRTR/RTRT) — Eq. 21
+    # K = sqrt((z^2 + 1) / (2*n)) for balanced (n per sequence)
+    # For unbalanced: use per-sequence sample sizes
+    # -----------------------------------------------------------------------
+    design_label <- "2x2x4 Full Replicate (Eq. 21)"
+    
+    if (length(seq_dist) == 2) {
+      n1 <- as.numeric(seq_dist[1])
+      n2 <- as.numeric(seq_dist[2])
+      # General unbalanced: K^2 = (z^2 + 1)/2 * (1/n1 + 1/n2) / 2
+      # Per Eq. 22 with contrast coefficients C_T = C_R = 1/2 for each period:
+      # Var(d_hat) = sigma^2_WR * (z^2 + 1) / (2) * (1/n1 + 1/n2) / 2
+      # Actually for TRTR/RTRT, each sequence contributes d_hat_j = Y_T - Y_R
+      # with Var = (z^2+1)*sigma^2_WR/2 per subject. Combined:
+      # Var(d_hat) = (z^2+1)*sigma^2_WR/2 * (1/n1 + 1/n2)/2  -- wrong
+      # 
+      # For TRTR/RTRT balanced (n per seq), the standard result is:
+      #   Var(d_hat) = (z^2 + 1) * sigma^2_WR / (2*n)
+      # For unbalanced, the inverse-variance weighted estimator gives:
+      #   1/Var(d_hat) = n1/(sigma^2*(z^2+1)/2) + n2/(sigma^2*(z^2+1)/2)
+      #                = (n1+n2)*2 / (sigma^2*(z^2+1))
+      #   Var(d_hat) = sigma^2_WR*(z^2+1) / (2*(n1+n2))
+      K <- sqrt((z2 + 1) / (2 * (n1 + n2)))
+      df_nct <- n1 + n2 - 2  # Eq. from paper: sum(nj) - s
+    } else {
+      # Fallback: use total subjects
+      n_per_seq <- n_total / n_seq
+      K <- sqrt((z2 + 1) / (2 * n_per_seq))
+      df_nct <- n_total - n_seq
+    }
+    
+  } else if (grepl("Partial Replicate|2x3x3", design_type, ignore.case = TRUE) ||
+             (design_info$is_partial_replicate && design_info$n_periods == 3)) {
+    # -----------------------------------------------------------------------
+    # 2x3x3 Partial Replicate (TRR/RTR/RRT) — Eq. 24
+    # K = sqrt((z^2 + 0.5) / n) for balanced (n per sequence)
+    # -----------------------------------------------------------------------
+    design_label <- "2x3x3 Partial Replicate (Eq. 24)"
+    
+    if (length(seq_dist) >= 2) {
+      # For unbalanced partial replicate, the harmonic-mean approach:
+      # Eq. 22 with the appropriate contrast coefficients.
+      # For balanced: n_per_seq = n_total / 3
+      n_per_seq <- n_total / n_seq  # approximate for balanced
+      K <- sqrt((z2 + 0.5) / n_per_seq)
+      # df for s_WR: only subjects in sequences with replicated R
+      # In TRR/RTR/RRT, 2 out of 3 sequences have replicated R
+      # df = n_R (from ISC, already computed correctly)
+      df_nct <- n_R
+    } else {
+      n_per_seq <- n_total / 3
+      K <- sqrt((z2 + 0.5) / n_per_seq)
+      df_nct <- n_R
+    }
+    
+  } else if (grepl("2x2x3", design_type, ignore.case = TRUE) ||
+             (!design_info$is_partial_replicate && design_info$n_periods == 3 &&
+              design_info$is_replicate)) {
+    # -----------------------------------------------------------------------
+    # 2x2x3 Full Replicate (TRT/RTR) — Eq. 25
+    # K = sqrt(0.75 * (z^2 + 1) / n) for balanced
+    # df = n/2 - 1 (s_WR estimated only from RTR sequence)
+    # -----------------------------------------------------------------------
+    design_label <- "2x2x3 Full Replicate (Eq. 25)"
+    
+    if (length(seq_dist) == 2) {
+      n1 <- as.numeric(seq_dist[1])
+      n2 <- as.numeric(seq_dist[2])
+      n_per_seq <- (n1 + n2) / 2
+      K <- sqrt(0.75 * (z2 + 1) / n_per_seq)
+      # For TRT/RTR, s_WR comes from RTR sequence only
+      # df = number of subjects in the sequence with replicated R minus 1
+      # The ISC already handles this — use n_R from ISC
+      df_nct <- n_R
+    } else {
+      n_per_seq <- n_total / 2
+      K <- sqrt(0.75 * (z2 + 1) / n_per_seq)
+      df_nct <- n_R
+    }
+    
+  } else {
+    # -----------------------------------------------------------------------
+    # Fallback: estimate K from SE_d and s_WR
+    # Since Var(d_hat) = K^2 * sigma^2_WR, we can estimate:
+    #   K = SE_d / s_WR
+    # This works for any design but requires the ANOVA SE to be trustworthy.
+    # -----------------------------------------------------------------------
+    design_label <- "Generic (K estimated from SE_d / s_WR)"
+    cat("    ⚠️  Unknown design type for K constant — estimating from SE_d/s_WR\n")
+    K <- NA_real_  # Will be filled in by the caller from SE_d / s_WR
+    df_nct <- n_R  # Best available DF for s_WR
+  }
+  
+  cat(sprintf("    Design: %s\n", design_label))
+  if (!is.na(K)) {
+    cat(sprintf("    K = %.6f, df_nct = %d\n", K, df_nct))
+  }
+  
+  return(list(
+    K = K,
+    z = z,
+    df_nct = as.integer(df_nct),
+    design_label = design_label
+  ))
+}
+
 
 # =============================================================================
 # SECTION 1: VARIANCE ESTIMATION (Intra-Subject Contrasts)
@@ -352,57 +542,78 @@ rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
                                    alpha = 0.05, theta_s = log(1.25) / 0.25) {
   
   cat("  🔬 FDA Linearized RSABE Test (Howe UCB)...\n")
+  cat("    Per Tóthfalusi & Endrényi (2016) Eqs. 26-31 / Howe (1974)\n")
   
   # Regulatory constants
   theta2 <- theta_s^2
+  sw_R <- sqrt(s2_wR)
   
-  # Point estimate of the linearized criterion
-  # η̂ = d̂² - θ² · s²_wR
-  eta_hat <- d_hat^2 - theta2 * s2_wR
+  # ---------------------------------------------------------------------------
+  # Step 1: Point estimates (Eqs. 27, 28a, 28b)
+  #   Linearized criterion: η = d² - θ² · σ²_wR ≤ 0
+  #   Em = d̂²                        (point estimate of d²)
+  #   Es = θ² · s²_wR                 (point estimate of θ² · σ²_wR)
+  #   η̂ = Em - Es                    (point estimate of criterion)
+  # ---------------------------------------------------------------------------
+  Em <- d_hat^2
+  Es <- theta2 * s2_wR
+  eta_hat <- Em - Es
   
-  cat(sprintf("    d̂ = %.6f, d̂² = %.6f\n", d_hat, d_hat^2))
-  cat(sprintf("    θ² · s²_wR = %.6f · %.6f = %.6f\n", theta2, s2_wR, theta2 * s2_wR))
+  cat(sprintf("    d̂ = %.6f, Em = d̂² = %.6f\n", d_hat, Em))
+  cat(sprintf("    Es = θ² · s²_wR = %.6f · %.6f = %.6f\n", theta2, s2_wR, Es))
   cat(sprintf("    η̂ (point estimate) = %.6f\n", eta_hat))
   
-  # Components for Howe's UCB
-  # t-critical value
+  # ---------------------------------------------------------------------------
+  # Step 2: Individual upper confidence bounds (Eqs. 29a, 29b)
+  #   Cm = (|d̂| + t_{1-α,df_d} · SE_d)²     — UCB for d² (one-sided)
+  #   Cs = θ² · df_wR · s²_wR / χ²_{α,df_wR} — UCB for θ²·σ²_wR
+  #
+  # Note: Cm uses the UPPER bound (|d̂| + t·SE)², not the lower bound.
+  # This is because we are bounding d² FROM ABOVE (conservative for
+  # the 95% UCB of η = d² - θ²·σ²).
+  # Cs uses the LOWER chi-squared quantile χ²_{α} to get the UCB of σ².
+  # ---------------------------------------------------------------------------
   t_alpha <- qt(1 - alpha, df_d)
+  chi2_alpha <- qchisq(alpha, df_wR)  # lower tail
   
-  # Chi-squared critical values
-  chi2_alpha <- qchisq(alpha, df_wR)          # lower tail
-  chi2_1_alpha <- qchisq(1 - alpha, df_wR)    # upper tail
+  Cm <- (abs(d_hat) + t_alpha * se_d)^2
+  Cs <- theta2 * df_wR * s2_wR / chi2_alpha
   
-  # Component 1: squared treatment difference term
-  # x1 = max(0, |d̂| - t_α · SE_d)²
-  # This is the lower confidence bound for d² (one-sided)
-  d_lower <- max(0, abs(d_hat) - t_alpha * se_d)
-  x1 <- d_lower^2
+  cat(sprintf("    t_{1-α,df_d} = t_{%.3f,%d} = %.4f\n", 1 - alpha, df_d, t_alpha))
+  cat(sprintf("    χ²_{α,df_wR} = χ²_{%.3f,%d} = %.4f\n", alpha, df_wR, chi2_alpha))
+  cat(sprintf("    Cm = (|d̂| + t·SE)² = (%.6f + %.4f·%.6f)² = %.6f\n",
+              abs(d_hat), t_alpha, se_d, Cm))
+  cat(sprintf("    Cs = θ²·df·s²/χ² = %.6f·%d·%.6f/%.4f = %.6f\n",
+              theta2, df_wR, s2_wR, chi2_alpha, Cs))
   
-  # Component 2: upper confidence bound for θ²·σ²_wR  
-  # The UCB for σ²_wR is: s²_wR · df_wR / χ²_α
-  # So UCB for θ²·σ²_wR is: θ² · s²_wR · df_wR / χ²_α
-  x2 <- theta2 * s2_wR * df_wR / chi2_alpha
+  # ---------------------------------------------------------------------------
+  # Step 3: Squared confidence interval half-lengths (Eqs. 30a, 30b)
+  #   Lm = (Cm - Em)²
+  #   Ls = (Cs - Es)²
+  # ---------------------------------------------------------------------------
+  Lm <- (Cm - Em)^2
+  Ls <- (Cs - Es)^2
   
-  # Howe's 95% UCB for η:
-  # UCB = x1 - x2
-  # If UCB ≤ 0, RSABE is demonstrated
-  ucb <- x1 - x2
+  cat(sprintf("    Lm = (Cm - Em)² = (%.6f - %.6f)² = %.6f\n", Cm, Em, Lm))
+  cat(sprintf("    Ls = (Cs - Es)² = (%.6f - %.6f)² = %.6f\n", Cs, Es, Ls))
   
-  cat(sprintf("    t_{α,df} = t_{%.3f,%d} = %.4f\n", alpha, df_d, t_alpha))
-  cat(sprintf("    χ²_{α,df} = χ²_{%.3f,%d} = %.4f\n", alpha, df_wR, chi2_alpha))
-  cat(sprintf("    x1 = max(0, |d̂| - t·SE)² = max(0, |%.6f| - %.4f·%.6f)² = %.6f\n", 
-              d_hat, t_alpha, se_d, x1))
-  cat(sprintf("    x2 = θ²·s²_wR·df/χ² = %.6f·%.6f·%d/%.4f = %.6f\n",
-              theta2, s2_wR, df_wR, chi2_alpha, x2))
-  cat(sprintf("    UCB = x1 - x2 = %.6f - %.6f = %.6f\n", x1, x2, ucb))
+  # ---------------------------------------------------------------------------
+  # Step 4: Howe's combined UCB (Eq. 31)
+  #   UCB = (Em - Es) + sqrt(Lm + Ls)
+  #
+  # RSABE is demonstrated if UCB ≤ 0.
+  # ---------------------------------------------------------------------------
+  ucb <- (Em - Es) + sqrt(Lm + Ls)
+  
+  cat(sprintf("    UCB = (Em - Es) + sqrt(Lm + Ls) = %.6f + sqrt(%.6f) = %.6f\n",
+              Em - Es, Lm + Ls, ucb))
   
   # Decision
   rsabe_pass <- (ucb <= 0)
-  cat(sprintf("    UCB ≤ 0? %s → %s\n", ucb <= 0, ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")))
+  cat(sprintf("    UCB ≤ 0? %s → %s\n", ucb <= 0, 
+              ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")))
   
-  # Also compute the scaled BE limits for informational purposes
-  # Scaled limits: exp(±θ_s · σ_wR) on ratio scale
-  sw_R <- sqrt(s2_wR)
+  # Scaled BE limits for informational purposes
   scaled_lower <- exp(-theta_s * sw_R) * 100
   scaled_upper <- exp(theta_s * sw_R) * 100
   
@@ -412,7 +623,7 @@ rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
     ucb = ucb,
     rsabe_pass = rsabe_pass,
     d_hat = d_hat,
-    d_hat_sq = d_hat^2,
+    d_hat_sq = Em,
     se_d = se_d,
     df_d = df_d,
     s2_wR = s2_wR,
@@ -421,8 +632,12 @@ rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
     theta_sq = theta2,
     t_alpha = t_alpha,
     chi2_alpha = chi2_alpha,
-    x1_component = x1,
-    x2_component = x2,
+    Em = Em,
+    Es = Es,
+    Cm = Cm,
+    Cs = Cs,
+    Lm = Lm,
+    Ls = Ls,
     alpha = alpha,
     scaled_lower = scaled_lower,
     scaled_upper = scaled_upper,
@@ -435,150 +650,127 @@ rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
 # SECTION 4: NON-CENTRAL TOST (ncTOST) - EXACT METHOD
 # =============================================================================
 
-#' Non-Central TOST (ncTOST) for RSABE
+#' Non-Central TOST (ncTOST) for RSABE — Exact Method
 #'
-#' Exact method per Tóthfalusi & Endrényi (2016).
-#' 
-#' The scaled BE limits on the log scale are:
-#'   ±θ_s · σ_wR
-#' where θ_s = ln(1.25)/σ_w0 ≈ 0.8924
+#' Implements the exact procedure of Tóthfalusi & Endrényi (2016),
+#' "An Exact Procedure for the Evaluation of Reference-Scaled Average
+#' Bioequivalence," The AAPS Journal, 18(2), 476-489.
 #'
-#' When s_wR is estimated rather than known, the test statistics
-#'   t_1 = (d̂ + θ_s · s_wR) / SE_d
-#'   t_2 = (d̂ - θ_s · s_wR) / SE_d
-#' do NOT follow a central t distribution because s_wR is a random variable.
+#' The method uses the noncentral t distribution directly. The key insight
+#' is that the pivotal index d/K follows a noncentral t distribution:
 #'
-#' The exact ncTOST accounts for this by integrating over the distribution
-#' of s²_wR. Under the null hypothesis, s²_wR ~ (σ²_wR · χ²_{df_wR}) / df_wR.
+#'   d = d̂ / s_wR         (Glass's effect size estimator, Eq. 11)
+#'   d/K ~ t(df, ncp = δ / (K · σ_wR))
 #'
-#' At the boundary of H01: μ_T - μ_R = -θ_s · σ_wR, and d̂|σ ~ N(-θ_s·σ_wR, SE²_d).
-#' 
-#' The conditional power function integrates over realizations of s²_wR
-#' from its chi-squared distribution, computing the rejection probability
-#' of the TOST procedure at each realization.
+#' where K is the design-dependent constant (Eqs. 21-25) and df is the
+#' degrees of freedom associated with s_wR.
 #'
-#' Implementation uses numerical integration (Gauss-Legendre quadrature
-#' over the chi-squared density) to compute exact p-values.
+#' Hedges' bias correction cr(df) = 1 - 3/(4·df - 1) (Eq. 8) is applied
+#' to obtain an unbiased estimate of the noncentrality parameter.
 #'
-#' @param d_hat Treatment difference estimate
-#' @param se_d Standard error of d_hat
-#' @param df_d Degrees of freedom for d_hat
-#' @param s2_wR Within-subject reference variance (observed)
-#' @param df_wR Degrees of freedom for s2_wR
-#' @param alpha Significance level
-#' @param theta_s Regulatory scaling constant
+#' RSABE is demonstrated if BOTH (Eqs. 17a, 17b):
+#'   T_nc(0.95; -θ/K; df)  <  d / (K · cr(df))    [lower test]
+#'   T_nc(0.05;  θ/K; df)  >  d / (K · cr(df))    [upper test]
+#'
+#' where T_nc(p; ncp; df) is the quantile function of the noncentral t.
+#'
+#' Equivalently, as p-values:
+#'   p_lower = P[t(df, ncp = -θ/K) ≤ d/(K·cr)]    [must be > 1-α]
+#'   p_upper = P[t(df, ncp =  θ/K) ≥ d/(K·cr)]    [must be > 1-α]
+#'
+#' @param d_hat Treatment difference estimate (log-scale: μ_T - μ_R)
+#' @param se_d Standard error of d_hat (from ANOVA)
+#' @param df_d Degrees of freedom for d_hat (from ANOVA, used for CI only)
+#' @param s2_wR Within-subject reference variance (from ISC)
+#' @param df_wR Degrees of freedom for s2_wR (from ISC)
+#' @param K Design-dependent constant from compute_K_constant()
+#' @param df_nct Degrees of freedom for the noncentral t (from compute_K_constant())
+#' @param alpha Significance level (default 0.05)
+#' @param theta_s Regulatory scaling constant (default ln(1.25)/0.25 ≈ 0.8924)
 #' @return List with test results
 #' @export
 rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
+                               K, df_nct,
                                alpha = 0.05, theta_s = log(1.25) / 0.25) {
   
   cat("  🔬 Non-Central TOST (ncTOST) — Exact Method (Tóthfalusi & Endrényi 2016)...\n")
+  cat("    Per Eqs. 11, 17a, 17b with Hedges' correction (Eq. 8)\n")
   
   sw_R <- sqrt(s2_wR)
   
-  # Observed test statistics (for reporting)
-  limit_upper <- theta_s * sw_R   # +θ·s_wR
-  limit_lower <- -theta_s * sw_R  # -θ·s_wR
+  # =========================================================================
+  # Step 1: Compute pivotal index d (Eq. 11 — Glass's estimator)
+  #   d = d̂ / s_wR
+  # =========================================================================
+  d_index <- d_hat / sw_R
   
-  t1_obs <- (d_hat - limit_lower) / se_d   # = (d̂ + θ·s_wR) / SE_d
-  t2_obs <- (d_hat - limit_upper) / se_d   # = (d̂ - θ·s_wR) / SE_d
-  
-  cat(sprintf("    Scaled limits: [%.6f, %.6f] (log scale)\n", limit_lower, limit_upper))
-  cat(sprintf("    t1_obs = %.4f, t2_obs = %.4f\n", t1_obs, t2_obs))
+  cat(sprintf("    d̂ = %.6f, s_wR = %.6f\n", d_hat, sw_R))
+  cat(sprintf("    d = d̂ / s_wR = %.6f (pivotal index, Eq. 11)\n", d_index))
+  cat(sprintf("    K = %.6f, df_nct = %d\n", K, df_nct))
   
   # =========================================================================
-  # EXACT ncTOST p-values via numerical integration
+  # Step 2: Hedges' bias correction (Eq. 8)
+  #   cr(df) = 1 - 3 / (4·df - 1)
+  #   The unbiased noncentrality parameter estimate is d / (K · cr)
   # =========================================================================
-  # Reference: Tóthfalusi & Endrényi (2003, 2016)
-  #
-  # The scaled BE limits ±θ_s·σ_wR depend on the unknown σ_wR, which is
-  # estimated by s_wR. This creates non-centrality: the test statistic
-  # T₁ = (d̂ + θ·s_wR)/SE_d follows a non-central t distribution under H0
-  # because s_wR is random.
-  #
-  # Unconditional p-value for H01 (δ ≤ -θ·σ):
-  #   p₁ = ∫ P(T₁ > t₁_obs | W=w, H01 boundary) · f_χ²(w) dw
-  #
-  # where W = df_wR·s²_wR/σ² ~ χ²(df_wR), and for each w the test
-  # statistic T₁ ~ t(df_d, ncp = θ·σ·(√(w/df_wR) - 1)/SE_d).
-  #
-  # We evaluate at σ = s_wR (MLE) and integrate over the chi-squared
-  # distribution to obtain the unconditional p-value.
+  cr <- hedges_correction(df_nct)
+  stat <- d_index / (K * cr)  # bias-corrected test statistic
+  
+  cat(sprintf("    cr(df) = 1 - 3/(4·%d - 1) = %.6f (Hedges' correction)\n", df_nct, cr))
+  cat(sprintf("    d/(K·cr) = %.6f / (%.6f · %.6f) = %.6f\n", d_index, K, cr, stat))
+  
   # =========================================================================
+  # Step 3: Noncentral t TOST (Eqs. 17a, 17b)
+  #
+  # Lower test (Eq. 17a): reject H01: δ ≤ -θ
+  #   Pass if: T_nc(1-α; -θ/K; df) < d/(K·cr)
+  #   Equivalently: p_lower = pt(stat, df, ncp = -θ/K) > 1 - α
+  #
+  # Upper test (Eq. 17b): reject H02: δ ≥ θ  
+  #   Pass if: T_nc(α; θ/K; df) > d/(K·cr)
+  #   Equivalently: p_upper = pt(stat, df, ncp = θ/K, lower.tail=FALSE) < α
+  #   Or: 1 - pt(stat, df, ncp = θ/K) < α
+  #
+  # RSABE demonstrated if both tests reject at level α.
+  # =========================================================================
+  ncp_lower <- -theta_s / K   # ncp for lower test
+  ncp_upper <-  theta_s / K   # ncp for upper test
   
-  n_quad <- 500  # quadrature points
+  # p_lower = P[t(df, ncp=-θ/K) ≤ stat] — want this > 1-α (i.e., 0.95)
+  p_lower <- pt(stat, df_nct, ncp = ncp_lower)
   
-  # MLE of σ_wR (used as plug-in for the true σ under the null boundary)
-  sigma2_mle <- s2_wR
-  sigma_mle <- sqrt(sigma2_mle)
+  # p_upper = P[t(df, ncp=θ/K) ≥ stat] — want this > 1-α (i.e., 0.95)  
+  p_upper <- pt(stat, df_nct, ncp = ncp_upper, lower.tail = FALSE)
   
-  # Under H01 boundary: true δ = -θ·σ, so E[d̂] = -θ·σ
-  # Under H02 boundary: true δ = +θ·σ, so E[d̂] = +θ·σ
-  true_mean_h01 <- -theta_s * sigma_mle
-  true_mean_h02 <- theta_s * sigma_mle
+  # For reporting, convert to one-sided p-values (reject if < α):
+  p1 <- 1 - p_lower  # lower test p-value
+  p2 <- 1 - p_upper  # upper test p-value
   
-  # Chi-squared grid for numerical integration
-  # W = df_wR · s²_wR / σ² ~ χ²(df_wR)
-  chi2_quantiles <- qchisq(seq(0.0001, 0.9999, length.out = n_quad), df_wR)
-  chi2_density <- dchisq(chi2_quantiles, df_wR)
-  dw <- diff(chi2_quantiles)
+  cat(sprintf("    ncp_lower = -θ/K = %.6f, ncp_upper = θ/K = %.6f\n", ncp_lower, ncp_upper))
+  cat(sprintf("    Lower test: P[t(%d, ncp=%.4f) ≤ %.4f] = %.6f (need > %.3f)\n",
+              df_nct, ncp_lower, stat, p_lower, 1 - alpha))
+  cat(sprintf("    Upper test: P[t(%d, ncp=%.4f) ≥ %.4f] = %.6f (need > %.3f)\n",
+              df_nct, ncp_upper, stat, p_upper, 1 - alpha))
   
-  # For each chi-squared value w:
-  #   s_realized = σ_mle · √(w / df_wR)    (hypothetical s_wR for this w)
-  #   ncp = θ · (s_realized - σ_mle) / SE_d  (non-centrality parameter)
-  #   At w = df_wR: s_realized = σ_mle, ncp = 0 (central t)
+  # Decision: both must exceed 1-α
+  lower_pass <- (p_lower > 1 - alpha)
+  upper_pass <- (p_upper > 1 - alpha)
+  rsabe_pass <- lower_pass && upper_pass
   
-  # Compute unconditional p-values
-  # p₁ = ∫ P(t(df_d, ncp₁) > t₁_obs) · f_χ²(w) dw
-  # p₂ = ∫ P(t(df_d, ncp₂) < t₂_obs) · f_χ²(w) dw
-  pval_h01 <- numeric(n_quad)
-  pval_h02 <- numeric(n_quad)
-  
-  for (i in 1:n_quad) {
-    w <- chi2_quantiles[i]
-    s2_realized <- sigma2_mle * w / df_wR
-    s_realized <- sqrt(s2_realized)
-    
-    # Non-centrality: θ·(s_realized - σ_mle) / SE_d
-    # Under H01: T₁ = (d̂ + θ·s_realized)/SE_d ~ t(df_d, ncp₁)
-    ncp1 <- (true_mean_h01 + theta_s * s_realized) / se_d
-    # P(T₁ > t₁_obs | W=w) — probability of observing t₁ as extreme under H01
-    pval_h01[i] <- pt(t1_obs, df_d, ncp = ncp1, lower.tail = FALSE)
-    
-    # Under H02: T₂ = (d̂ - θ·s_realized)/SE_d ~ t(df_d, ncp₂)
-    ncp2 <- (true_mean_h02 - theta_s * s_realized) / se_d
-    # P(T₂ < t₂_obs | W=w) — probability of observing t₂ as extreme under H02
-    pval_h02[i] <- pt(t2_obs, df_d, ncp = ncp2, lower.tail = TRUE)
-  }
-  
-  # Integrate using trapezoidal rule: p = ∫ p(w) · f_χ²(w) dw
-  integrand_h01 <- pval_h01 * chi2_density
-  integrand_h02 <- pval_h02 * chi2_density
-  
-  p1_exact <- sum((integrand_h01[-1] + integrand_h01[-n_quad]) / 2 * dw)
-  p2_exact <- sum((integrand_h02[-1] + integrand_h02[-n_quad]) / 2 * dw)
-  
-  cat(sprintf("    Exact ncTOST p-values (numerical integration, %d quadrature points):\n", n_quad))
-  cat(sprintf("    p1_exact (lower test) = %.6f\n", p1_exact))
-  cat(sprintf("    p2_exact (upper test) = %.6f\n", p2_exact))
-  
-  # Also compute central-t approximation for comparison
-  p1_central <- 1 - pt(t1_obs, df_d)
-  p2_central <- pt(t2_obs, df_d)
-  cat(sprintf("    p1_central (approx) = %.6f, p2_central (approx) = %.6f\n", p1_central, p2_central))
-  
-  # Use exact p-values for the decision
-  p1 <- p1_exact
-  p2 <- p2_exact
-  
-  # RSABE demonstrated if both one-sided tests reject at α
-  rsabe_pass <- (p1 < alpha) && (p2 < alpha)
+  # Overall p-value = max of the two one-sided p-values
   overall_p <- max(p1, p2)
   
-  cat(sprintf("    max(p1, p2) = %.6f, α = %.3f → %s\n", 
-              overall_p, alpha, ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")))
+  cat(sprintf("    Lower test: %s, Upper test: %s\n",
+              ifelse(lower_pass, "PASS", "FAIL"),
+              ifelse(upper_pass, "PASS", "FAIL")))
+  cat(sprintf("    Overall p-value = max(p1, p2) = max(%.6f, %.6f) = %.6f\n", p1, p2, overall_p))
+  cat(sprintf("    → %s\n", ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")))
   
-  # Compute the (1-2α)% CI for display
+  # =========================================================================
+  # Compute display values: CI and scaled limits on ratio scale
+  # =========================================================================
+  
+  # Standard (1-2α)% CI for the treatment difference (from ANOVA, for display)
   t_crit <- qt(1 - alpha, df_d)
   ci_lower_log <- d_hat - t_crit * se_d
   ci_upper_log <- d_hat + t_crit * se_d
@@ -586,27 +778,38 @@ rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
   ci_upper_pct <- exp(ci_upper_log) * 100
   
   # Scaled limits on ratio scale
+  limit_upper <- theta_s * sw_R
+  limit_lower <- -theta_s * sw_R
   scaled_lower_pct <- exp(limit_lower) * 100
   scaled_upper_pct <- exp(limit_upper) * 100
   
   return(list(
     method = "Non-Central TOST (ncTOST) — Exact",
-    t1 = t1_obs,
-    t2 = t2_obs,
+    # ncTOST-specific results
+    d_index = d_index,
+    K = K,
+    cr = cr,
+    stat = stat,
+    ncp_lower = ncp_lower,
+    ncp_upper = ncp_upper,
+    p_lower_cdf = p_lower,
+    p_upper_cdf = p_upper,
+    # Standard reporting format
     p1 = p1,
     p2 = p2,
-    p1_central = p1_central,
-    p2_central = p2_central,
     overall_p = overall_p,
     rsabe_pass = rsabe_pass,
+    # Inputs
     d_hat = d_hat,
     se_d = se_d,
     df_d = df_d,
+    df_nct = df_nct,
     s2_wR = s2_wR,
     sw_R = sw_R,
     df_wR = df_wR,
     theta_s = theta_s,
     alpha = alpha,
+    # Display values
     limit_lower_log = limit_lower,
     limit_upper_log = limit_upper,
     ci_lower_log = ci_lower_log,
@@ -797,13 +1000,27 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
         # =====================================================================
         
         if (rsabe_method == "nctost") {
-          # ncTOST exact method
+          # ncTOST exact method — per Tóthfalusi & Endrényi (2016)
+          # Compute design-dependent constant K and degrees of freedom
+          K_result <- compute_K_constant(design_info, isc_result)
+          K_val <- K_result$K
+          df_nct_val <- K_result$df_nct
+          
+          # If K could not be computed from design structure, estimate from SE_d / s_wR
+          if (is.na(K_val)) {
+            K_val <- model_result$se_d / sqrt(isc_result$s2_wR)
+            cat(sprintf("    K estimated from SE_d/s_wR: %.6f / %.6f = %.6f\n",
+                        model_result$se_d, sqrt(isc_result$s2_wR), K_val))
+          }
+          
           rsabe_test <- rsabe_nctost_test(
             d_hat = model_result$d_hat,
             se_d = model_result$se_d,
             df_d = model_result$df_d,
             s2_wR = isc_result$s2_wR,
             df_wR = isc_result$df_wR,
+            K = K_val,
+            df_nct = df_nct_val,
             alpha = alpha,
             theta_s = theta_s
           )

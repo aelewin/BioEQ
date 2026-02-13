@@ -193,11 +193,7 @@ tagList(
                 helpText("BLQ values are always set to 0.")
               ),
               column(6,
-                h5(tags$strong("Optional PK Parameters"),
-                   help_icon("pk_parameters", "Configure optional pharmacokinetic parameters for specialized analysis", 
-                            "Optional PK Parameters", 
-                            "Most standard PK parameters (AUC0t, AUC0inf, Cmax, Tmax, t½, etc.) are calculated automatically. Use this section to configure partial AUC (pAUC) for early exposure assessment when required by regulatory guidelines.")
-                ),
+                h5(tags$strong("Optional PK Parameters")),
                 
                 div(style = "margin-left: 20px;",
                   # pAUC Configuration
@@ -348,10 +344,7 @@ tagList(
           fluidRow(
             # BE Analysis Type Selection — left column
             column(6,
-              h5("BE Analysis Type",
-                 help_icon("be_analysis_type", help_texts$be_analysis_type$tooltip, 
-                          help_texts$be_analysis_type$title, help_texts$be_analysis_type$content)
-              ),
+              h5("BE Analysis Type"),
               radioButtons("be_analysis_type", 
                 label = NULL,
                 choices = list(
@@ -397,32 +390,8 @@ tagList(
               conditionalPanel(
                 condition = "input.be_analysis_type == 'RSABE'",
                 h5("RSABE Statistical Method",
-                   help_icon("rsabe_method", "Select the RSABE statistical method",
-                            "RSABE Statistical Methods",
-                            div(
-                              tags$h6(tags$strong("FDA Linearized Scaled Criterion"), style = "margin-top: 10px;"),
-                              tags$ul(
-                                tags$li("Default FDA method using the Howe upper confidence bound"),
-                                tags$li("Tests the linearized criterion: ", tags$em("\u03B7 = d\u00B2 \u2212 \u03B8\u00B2\u209B \u00B7 s\u00B2", tags$sub("wR"))),
-                                tags$li("Approved in FDA guidance for HVD/HVDPs"),
-                                tags$li("95% UCB \u2264 0 demonstrates RSABE")
-                              ),
-                              tags$h6(tags$strong("Non-Central TOST (ncTOST)"), style = "margin-top: 15px;"),
-                              tags$ul(
-                                tags$li("Exact method per T\u00F3thfalusi & Endr\u00E9nyi (2016)"),
-                                tags$li("Two one-sided tests against scaled limits \u00B1\u03B8\u209B\u00B7s", tags$sub("wR")),
-                                tags$li("Generally agrees with linearized method"),
-                                tags$li("Accounts for uncertainty in variance estimation")
-                              ),
-                              tags$h6(tags$strong("Common Features"), style = "margin-top: 15px;"),
-                              tags$ul(
-                                tags$li("Scaling constant \u03B8\u209B = ln(1.25) \u2248 0.2231"),
-                                tags$li("Switching variability: CV", tags$sub("wR"), " > ~25.4%"),
-                                tags$li("FDA point estimate constraint: 80\u2013125%"),
-                                tags$li("Falls back to ABE when CV", tags$sub("wR"), " \u2264 ~25.4%")
-                              )
-                            )
-                   )
+                   help_icon("rsabe_method", help_texts$rsabe_method$tooltip,
+                            help_texts$rsabe_method$title, help_texts$rsabe_method$content)
                 ),
                 radioButtons("rsabe_method",
                   label = NULL,
@@ -446,26 +415,7 @@ tagList(
               # ABEL: Expanded limits scope selection
               conditionalPanel(
                 condition = "input.be_analysis_type == 'ABEL'",
-                h5("Expanded Limits Scope",
-                   help_icon("abel_scope", "Select which parameters may use expanded limits",
-                            "Regulatory Approaches for ABEL",
-                            div(
-                              tags$h6(tags$strong("EMA (European Medicines Agency)"), style = "margin-top: 10px;"),
-                              tags$ul(
-                                tags$li("Expanded limits apply to ", tags$strong("Cmax only")),
-                                tags$li("AUC parameters always use fixed 80.00%–125.00% limits"),
-                                tags$li("Cmax range may widen up to 69.84%–143.19% when CV", tags$sub("wR"), " > 30%"),
-                                tags$li("50% cap on scaling (reached at CV", tags$sub("wR"), " \u2248 50%)")
-                              ),
-                              tags$h6(tags$strong("Health Canada"), style = "margin-top: 15px;"),
-                              tags$ul(
-                                tags$li("Expanded limits apply to ", tags$strong("Cmax and AUC0-t")),
-                                tags$li("AUC0-\u221e always uses fixed 80.00%–125.00% limits"),
-                                tags$li("Cap at CV", tags$sub("wR"), " = 57.4% (limits: 66.7%–150.0%)")
-                              )
-                            )
-                   )
-                ),
+                h5("Expanded Limits Scope"),
                 radioButtons("abel_regulator",
                   label = NULL,
                   choices = list(
@@ -540,10 +490,7 @@ tagList(
           
           fluidRow(
             column(6,
-              h5("Analysis Model",
-                 help_icon("analysis_model", help_texts$analysis_model$tooltip, 
-                          help_texts$analysis_model$title, help_texts$analysis_model$content)
-              ),
+              h5("Analysis Model"),
               
               # ===============================================================
               # PARALLEL DESIGNS: Fixed effects only (all BE types)
@@ -692,10 +639,7 @@ tagList(
               )
             ),
             column(6,
-              h5("PK Parameters for Analysis",
-                 help_icon("pk_parameters", "Select which pharmacokinetic parameters to include in the ANOVA analysis. Both original and log-transformed versions will be analyzed automatically.", 
-                          "PK Parameter Selection", "Choose the pharmacokinetic parameters you want to analyze. Primary parameters (Cmax, AUC0-t) are pre-selected as they are typically required for bioequivalence assessment. AUC0-inf and other secondary parameters can be added as needed. The system will automatically include both the original parameter and its log-transformed version (e.g., selecting Cmax will analyze both Cmax and lnCmax).")
-              ),
+              h5("PK Parameters for Analysis"),
               
               fluidRow(
                 column(6,

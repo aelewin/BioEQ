@@ -440,6 +440,44 @@ help_texts <- list(
     )
   ),
   
+  rsabe_method = list(
+    tooltip = "Select the RSABE statistical method",
+    title = "RSABE Statistical Methods",
+    content = div(
+      tags$h6(tags$strong("FDA Linearized Scaled Criterion (Howe UCB)"), style = "margin-top: 10px;"),
+      tags$p("Linearizes the scaled BE criterion \u03B7 = d\u00B2 \u2212 \u03B8\u00B2\u209B\u00B7s\u00B2wR and tests whether its ",
+             "95% upper confidence bound (UCB) \u2264 0, using Howe\u2019s method for combining ",
+             "independent confidence intervals (Eq. 31 in T\u00F3thfalusi & Endr\u00E9nyi 2016). ",
+             "This is the default FDA-recommended method for highly variable drugs and drug products (HVDs/HVDPs)."),
+      tags$p(tags$em("Howe WG (1974). Approximate Confidence Limits on the Mean of X + Y ",
+                     "Where X and Y Are Two Tabled Independent Random Variables. "),
+             tags$em("Journal of the American Statistical Association"), ", 69, 789\u2013794.",
+             style = "font-size: 0.85em; color: #555;"),
+      tags$hr(style = "margin: 10px 0;"),
+      tags$h6(tags$strong("Non-Central TOST (ncTOST) \u2014 Exact Method"), style = "margin-top: 10px;"),
+      tags$p("Uses the noncentral t distribution directly to perform two one-sided tests ",
+             "against the scaled limits \u00B1\u03B8\u209B\u00B7\u03C3", tags$sub("wR"),
+             ". Computes the pivotal index d = d\u0302/s", tags$sub("wR"),
+             " (Glass\u2019s effect size), applies Hedges\u2019 bias correction c", tags$sub("r"),
+             "(df), and evaluates p-values from the noncentral t CDF with ",
+             "design-dependent constant K and noncentrality parameter \u00B1\u03B8/K."),
+      tags$p(tags$em("T\u00F3thfalusi L, Endr\u00E9nyi L (2016). An Exact Procedure for the ",
+                     "Evaluation of Reference-Scaled Average Bioequivalence. "),
+             tags$em("The AAPS Journal"), ", 18(2), 476\u2013489. DOI: 10.1208/s12248-016-9873-6.",
+             style = "font-size: 0.85em; color: #555;"),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("Common to both methods:"),
+        tags$ul(style = "margin-bottom: 0; margin-top: 5px;",
+          tags$li("Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924"),
+          tags$li("Switching variability: s\u00B2", tags$sub("w0"), " = 0.0625 (CV", tags$sub("wR"), " \u2248 25.4%)"),
+          tags$li("FDA point estimate constraint: 80\u2013125%"),
+          tags$li("Variance estimated via Intra-Subject Contrasts (ISC)")
+        )
+      )
+    )
+  ),
+
   welch_correction = list(
     tooltip = "Statistical method for t-tests in parallel group bioequivalence studies",
     title = "Welch Correction for Parallel Designs",

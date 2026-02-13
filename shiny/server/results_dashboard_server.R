@@ -376,11 +376,12 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
                 )
               )
             } else {
-              # ncTOST
+              # ncTOST — Exact method per Tóthfalusi & Endrényi (2016)
               tags$ul(
-                tags$li(sprintf("t\u2081: %.4f (p = %.4f)", rsabe_test$t1, rsabe_test$p1)),
-                tags$li(sprintf("t\u2082: %.4f (p = %.4f)", rsabe_test$t2, rsabe_test$p2)),
-                tags$li(sprintf("max(p): %.4f", rsabe_test$overall_p)),
+                tags$li(sprintf("d = d\u0302/s\u2080\u1d67\u1d3f = %.4f, K = %.6f", rsabe_test$d_index, rsabe_test$K)),
+                tags$li(sprintf("d/(K\u00B7c\u1d63) = %.4f (bias-corrected statistic)", rsabe_test$stat)),
+                tags$li(sprintf("p-values: p\u2081 = %.6f, p\u2082 = %.6f", rsabe_test$p1, rsabe_test$p2)),
+                tags$li(sprintf("max(p): %.6f", rsabe_test$overall_p)),
                 tags$li(sprintf("Scaled limits: [%.2f%%, %.2f%%]", rsabe_test$scaled_lower_pct, rsabe_test$scaled_upper_pct)),
                 tags$li(
                   class = if (rsabe_test$rsabe_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
