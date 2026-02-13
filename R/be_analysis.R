@@ -194,23 +194,26 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
   anova_model <- params$anova_model %||% "fixed"
   
   # Determine method and DF approximation
+  # replicateBE::method.B() option parameter:
+  #   1 = lmerTest with Satterthwaite DF
+  #   2 = nlme::lme (SAS DDFM=CONTAIN equivalent) — default
+  #   3 = lmerTest with Kenward-Roger DF
   if (anova_model == "fixed") {
     use_method_a <- TRUE
     method_label <- "Method A (ANOVA/Linear Model)"
     df_method <- NULL  # Not used for Method A
   } else {
     use_method_a <- FALSE
-    # Extract DF method from anova_model string
     if (grepl("satterthwaite", anova_model, ignore.case = TRUE)) {
-      df_method <- "satterthwaite"
-      method_label <- "Method B (Satterthwaite DF)"
+      df_method <- 1  # lmerTest Satterthwaite DF
+      method_label <- "Method B (Satterthwaite DF, option=1)"
     } else if (grepl("kenward", anova_model, ignore.case = TRUE)) {
-      df_method <- "kenward-roger"
-      method_label <- "Method B (Kenward-Roger DF)"
+      df_method <- 3  # lmerTest Kenward-Roger DF
+      method_label <- "Method B (Kenward-Roger DF, option=3)"
     } else {
       # Default for "nlme" or other mixed models
-      df_method <- "sas"
-      method_label <- "Method B (SAS default DF)"
+      df_method <- 2  # nlme::lme (SAS CONTAIN equivalent)
+      method_label <- "Method B (nlme, SAS CONTAIN DF, option=2)"
     }
   }
   
@@ -527,6 +530,10 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         })
       } else {
         # Method B: Mixed effects model with specified DF approximation
+        # NOTE: method.B() does NOT support 'adjust' (TIE adjustment) — only method.A() does.
+        # The 'option' parameter must be numeric: 1=Satterthwaite, 2=nlme/SAS, 3=Kenward-Roger
+        cat(sprintf("  - Method B option=%d (%s)\n", df_method,
+                    switch(as.character(df_method), "1"="Satterthwaite", "2"="nlme/SAS CONTAIN", "3"="Kenward-Roger")))
         abel_result <- tryCatch({
           replicateBE::method.B(
             path.in = temp_dir,
@@ -537,12 +544,12 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
             alpha = alpha,
             regulator = abel_regulator_code,  # Regulator: EMA, HC, or GCC
             logtrans = !data_is_logged,  # Only log-transform if data is NOT already logged
-            ola = df_method,             # DF approximation: "sas", "satterthwaite", "kenward-roger"
-            adjust = abel_adjust,        # TIE adjustment
-            fence = abel_fence           # Outlier detection fence (note: outlier detection in method.B uses ola for DF method)
+            option = df_method,          # DF approximation: 1=Satterthwaite, 2=nlme, 3=KR
+            ola = abel_ola,              # Outlier analysis (boolean)
+            fence = abel_fence           # Outlier detection fence
           )
         }, error = function(e) {
-          cat(sprintf("[ERROR] replicateBE::method.B(ola='%s') failed for %s: %s\n", df_method, param, e$message))
+          cat(sprintf("[ERROR] replicateBE::method.B(option=%d) failed for %s: %s\n", df_method, param, e$message))
           print(traceback())
           stop(e)
         })
@@ -629,8 +636,9 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         residual_mse = sw_r^2,
         residual_df = anova_df,
         n_observations = n_total * design_info$n_periods,
-        anova_method = if(use_method_a) "lm" else "nlme",
+        anova_method = if(use_method_a) "lm" else switch(as.character(df_method), "1"="lmerTest", "3"="lmerTest", "nlme"),
         df_method = if(use_method_a) NA else df_method,
+        df_method_label = if(use_method_a) NA else switch(as.character(df_method), "1"="Satterthwaite", "2"="nlme/SAS CONTAIN", "3"="Kenward-Roger"),
         cv_wr_percent = cv_wr,
         cv_wt_percent = cv_wt,
         replicatebe_output = abel_result[1, ],  # Store full replicateBE output row

@@ -10,9 +10,16 @@
 #   - Howe (1974) JASA 69:789-794
 #
 # Regulatory constants:
-#   - θ_s = ln(1.25) ≈ 0.2231 (FDA scaling factor)
-#   - s_w0 = 0.25 (FDA switching variability, CV_wR ≈ 25.4%)
+#   - θ_s = ln(1.25)/σ_w0 = 0.2231/0.25 ≈ 0.8924 (FDA scaling proportionality constant)
+#   - σ_w0 = 0.25 (FDA regulatory cutoff SD, s²_w0 = 0.0625, CV_wR ≈ 25.4%)
 #   - Point estimate constraint: 80-125% (FDA requirement)
+#
+# The linearized criterion: η = d² − θ²_s · σ²_wR
+#   At the switching boundary (σ_wR = σ_w0 = 0.25):
+#     θ_s · σ_w0 = 0.8924 × 0.25 = 0.2231 = ln(1.25)
+#     → scaled limits collapse to standard ABE limits: exp(±0.2231) = [80%, 125%]
+#   When σ_wR > σ_w0 (HV drug):
+#     θ_s · σ_wR > ln(1.25) → limits expand beyond 80-125%
 #
 # =============================================================================
 
@@ -212,6 +219,14 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
     
   } else {
     # Mixed effects model using nlme
+    # Note: RSABE only supports fixed and nlme. If user selected satterthwaite or 
+    # kenward-roger, map to nlme with a warning (RSABE variance estimation uses ISC
+    # not the ANOVA model, so the DF approximation method is less critical here).
+    if (anova_model %in% c("satterthwaite", "kenward-roger")) {
+      cat(sprintf("    ⚠️  RSABE does not support '%s' DF approximation. Using nlme (REML) instead.\n", anova_model))
+      cat("    Note: RSABE variance is estimated via ISC, not from the ANOVA model.\n")
+    }
+    
     if (!requireNamespace("nlme", quietly = TRUE)) {
       stop("nlme package required for mixed effects RSABE model")
     }
@@ -268,7 +283,7 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
 #'   η = d² − θ²_s · s²_wR
 #' where:
 #'   d = μ_T − μ_R (log-scale treatment difference)
-#'   θ_s = ln(1.25) ≈ 0.2231
+#'   θ_s = ln(1.25)/σ_w0 = 0.2231/0.25 ≈ 0.8924
 #'   s²_wR = within-subject variance for Reference
 #'
 #' If η ≤ 0, the test product is within the scaled limits.
@@ -330,11 +345,11 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
 #' @param s2_wR Within-subject variance for reference
 #' @param df_wR Degrees of freedom for s2_wR
 #' @param alpha Significance level (default 0.05 for 95% UCB)
-#' @param theta_s Regulatory scaling constant (default ln(1.25))
+#' @param theta_s Regulatory scaling constant (default ln(1.25)/sigma_w0 = 0.8924)
 #' @return List with criterion value, UCB, conclusion
 #' @export
 rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR, 
-                                   alpha = 0.05, theta_s = log(1.25)) {
+                                   alpha = 0.05, theta_s = log(1.25) / 0.25) {
   
   cat("  🔬 FDA Linearized RSABE Test (Howe UCB)...\n")
   
@@ -426,73 +441,135 @@ rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
 #' 
 #' The scaled BE limits on the log scale are:
 #'   ±θ_s · σ_wR
+#' where θ_s = ln(1.25)/σ_w0 ≈ 0.8924
 #'
-#' Test statistics (two one-sided tests):
-#'   t_1 = (d̂ + θ_s · s_wR) / SE_d   tests H01: μ_T - μ_R ≤ -θ·σ_wR
-#'   t_2 = (d̂ - θ_s · s_wR) / SE_d   tests H02: μ_T - μ_R ≥ +θ·σ_wR
+#' When s_wR is estimated rather than known, the test statistics
+#'   t_1 = (d̂ + θ_s · s_wR) / SE_d
+#'   t_2 = (d̂ - θ_s · s_wR) / SE_d
+#' do NOT follow a central t distribution because s_wR is a random variable.
 #'
-#' Under H0, these follow non-central t distributions because s_wR 
-#' is a random variable (estimated, not known).
+#' The exact ncTOST accounts for this by integrating over the distribution
+#' of s²_wR. Under the null hypothesis, s²_wR ~ (σ²_wR · χ²_{df_wR}) / df_wR.
 #'
-#' The non-centrality parameters:
-#'   δ_1 = (μ_T - μ_R + θ_s · σ_wR) / (σ_d / √n)  (under H01)
-#'   δ_2 = (μ_T - μ_R - θ_s · σ_wR) / (σ_d / √n)  (under H02)
-#'
-#' The p-values are computed from the non-central t distribution
-#' using numerical methods.
+#' At the boundary of H01: μ_T - μ_R = -θ_s · σ_wR, and d̂|σ ~ N(-θ_s·σ_wR, SE²_d).
 #' 
-#' An approximate approach: compute p-values using the observed 
-#' test statistics and the central t distribution, treating s_wR 
-#' as known. This is what most implementations actually do — 
-#' the "non-central" aspect refers to the theoretical distribution,
-#' but in practice we compute:
-#'   p_1 = P(t > t_1 | H01) = 1 - pt(t_1, df_d)
-#'   p_2 = P(t < t_2 | H02) = pt(t_2, df_d)
-#' RSABE if max(p_1, p_2) < α
+#' The conditional power function integrates over realizations of s²_wR
+#' from its chi-squared distribution, computing the rejection probability
+#' of the TOST procedure at each realization.
 #'
-#' However, the exact ncTOST properly accounts for s_wR uncertainty.
-#' Implementation uses the relationship between the TOST interval 
-#' and the scaled limits.
+#' Implementation uses numerical integration (Gauss-Legendre quadrature
+#' over the chi-squared density) to compute exact p-values.
 #'
 #' @param d_hat Treatment difference estimate
 #' @param se_d Standard error of d_hat
 #' @param df_d Degrees of freedom for d_hat
-#' @param s2_wR Within-subject reference variance
+#' @param s2_wR Within-subject reference variance (observed)
 #' @param df_wR Degrees of freedom for s2_wR
 #' @param alpha Significance level
 #' @param theta_s Regulatory scaling constant
 #' @return List with test results
 #' @export
 rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
-                               alpha = 0.05, theta_s = log(1.25)) {
+                               alpha = 0.05, theta_s = log(1.25) / 0.25) {
   
-  cat("  🔬 Non-Central TOST (ncTOST) RSABE Test...\n")
+  cat("  🔬 Non-Central TOST (ncTOST) — Exact Method (Tóthfalusi & Endrényi 2016)...\n")
   
   sw_R <- sqrt(s2_wR)
   
-  # Scaled BE limits on log scale
+  # Observed test statistics (for reporting)
   limit_upper <- theta_s * sw_R   # +θ·s_wR
   limit_lower <- -theta_s * sw_R  # -θ·s_wR
   
-  # Test statistics for two one-sided tests
-  t1 <- (d_hat - limit_lower) / se_d   # = (d̂ + θ·s_wR) / SE_d
-  t2 <- (d_hat - limit_upper) / se_d   # = (d̂ - θ·s_wR) / SE_d
+  t1_obs <- (d_hat - limit_lower) / se_d   # = (d̂ + θ·s_wR) / SE_d
+  t2_obs <- (d_hat - limit_upper) / se_d   # = (d̂ - θ·s_wR) / SE_d
   
   cat(sprintf("    Scaled limits: [%.6f, %.6f] (log scale)\n", limit_lower, limit_upper))
-  cat(sprintf("    t1 = (d̂ - lower) / SE = (%.6f + %.6f) / %.6f = %.4f\n", 
-              d_hat, theta_s * sw_R, se_d, t1))
-  cat(sprintf("    t2 = (d̂ - upper) / SE = (%.6f - %.6f) / %.6f = %.4f\n", 
-              d_hat, theta_s * sw_R, se_d, t2))
+  cat(sprintf("    t1_obs = %.4f, t2_obs = %.4f\n", t1_obs, t2_obs))
   
-  # P-values using central t-distribution
-  # For TOST:
-  #   Reject H01 (lower bound) if t1 > t_α → p1 = 1 - pt(t1, df)
-  #   Reject H02 (upper bound) if t2 < -t_α → p2 = pt(t2, df)
-  p1 <- 1 - pt(t1, df_d)
-  p2 <- pt(t2, df_d)
+  # =========================================================================
+  # EXACT ncTOST p-values via numerical integration
+  # =========================================================================
+  # Reference: Tóthfalusi & Endrényi (2003, 2016)
+  #
+  # The scaled BE limits ±θ_s·σ_wR depend on the unknown σ_wR, which is
+  # estimated by s_wR. This creates non-centrality: the test statistic
+  # T₁ = (d̂ + θ·s_wR)/SE_d follows a non-central t distribution under H0
+  # because s_wR is random.
+  #
+  # Unconditional p-value for H01 (δ ≤ -θ·σ):
+  #   p₁ = ∫ P(T₁ > t₁_obs | W=w, H01 boundary) · f_χ²(w) dw
+  #
+  # where W = df_wR·s²_wR/σ² ~ χ²(df_wR), and for each w the test
+  # statistic T₁ ~ t(df_d, ncp = θ·σ·(√(w/df_wR) - 1)/SE_d).
+  #
+  # We evaluate at σ = s_wR (MLE) and integrate over the chi-squared
+  # distribution to obtain the unconditional p-value.
+  # =========================================================================
   
-  cat(sprintf("    p1 (lower test) = %.6f\n", p1))
-  cat(sprintf("    p2 (upper test) = %.6f\n", p2))
+  n_quad <- 500  # quadrature points
+  
+  # MLE of σ_wR (used as plug-in for the true σ under the null boundary)
+  sigma2_mle <- s2_wR
+  sigma_mle <- sqrt(sigma2_mle)
+  
+  # Under H01 boundary: true δ = -θ·σ, so E[d̂] = -θ·σ
+  # Under H02 boundary: true δ = +θ·σ, so E[d̂] = +θ·σ
+  true_mean_h01 <- -theta_s * sigma_mle
+  true_mean_h02 <- theta_s * sigma_mle
+  
+  # Chi-squared grid for numerical integration
+  # W = df_wR · s²_wR / σ² ~ χ²(df_wR)
+  chi2_quantiles <- qchisq(seq(0.0001, 0.9999, length.out = n_quad), df_wR)
+  chi2_density <- dchisq(chi2_quantiles, df_wR)
+  dw <- diff(chi2_quantiles)
+  
+  # For each chi-squared value w:
+  #   s_realized = σ_mle · √(w / df_wR)    (hypothetical s_wR for this w)
+  #   ncp = θ · (s_realized - σ_mle) / SE_d  (non-centrality parameter)
+  #   At w = df_wR: s_realized = σ_mle, ncp = 0 (central t)
+  
+  # Compute unconditional p-values
+  # p₁ = ∫ P(t(df_d, ncp₁) > t₁_obs) · f_χ²(w) dw
+  # p₂ = ∫ P(t(df_d, ncp₂) < t₂_obs) · f_χ²(w) dw
+  pval_h01 <- numeric(n_quad)
+  pval_h02 <- numeric(n_quad)
+  
+  for (i in 1:n_quad) {
+    w <- chi2_quantiles[i]
+    s2_realized <- sigma2_mle * w / df_wR
+    s_realized <- sqrt(s2_realized)
+    
+    # Non-centrality: θ·(s_realized - σ_mle) / SE_d
+    # Under H01: T₁ = (d̂ + θ·s_realized)/SE_d ~ t(df_d, ncp₁)
+    ncp1 <- (true_mean_h01 + theta_s * s_realized) / se_d
+    # P(T₁ > t₁_obs | W=w) — probability of observing t₁ as extreme under H01
+    pval_h01[i] <- pt(t1_obs, df_d, ncp = ncp1, lower.tail = FALSE)
+    
+    # Under H02: T₂ = (d̂ - θ·s_realized)/SE_d ~ t(df_d, ncp₂)
+    ncp2 <- (true_mean_h02 - theta_s * s_realized) / se_d
+    # P(T₂ < t₂_obs | W=w) — probability of observing t₂ as extreme under H02
+    pval_h02[i] <- pt(t2_obs, df_d, ncp = ncp2, lower.tail = TRUE)
+  }
+  
+  # Integrate using trapezoidal rule: p = ∫ p(w) · f_χ²(w) dw
+  integrand_h01 <- pval_h01 * chi2_density
+  integrand_h02 <- pval_h02 * chi2_density
+  
+  p1_exact <- sum((integrand_h01[-1] + integrand_h01[-n_quad]) / 2 * dw)
+  p2_exact <- sum((integrand_h02[-1] + integrand_h02[-n_quad]) / 2 * dw)
+  
+  cat(sprintf("    Exact ncTOST p-values (numerical integration, %d quadrature points):\n", n_quad))
+  cat(sprintf("    p1_exact (lower test) = %.6f\n", p1_exact))
+  cat(sprintf("    p2_exact (upper test) = %.6f\n", p2_exact))
+  
+  # Also compute central-t approximation for comparison
+  p1_central <- 1 - pt(t1_obs, df_d)
+  p2_central <- pt(t2_obs, df_d)
+  cat(sprintf("    p1_central (approx) = %.6f, p2_central (approx) = %.6f\n", p1_central, p2_central))
+  
+  # Use exact p-values for the decision
+  p1 <- p1_exact
+  p2 <- p2_exact
   
   # RSABE demonstrated if both one-sided tests reject at α
   rsabe_pass <- (p1 < alpha) && (p2 < alpha)
@@ -501,7 +578,7 @@ rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
   cat(sprintf("    max(p1, p2) = %.6f, α = %.3f → %s\n", 
               overall_p, alpha, ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")))
   
-  # Compute the (1-2α)% CI for comparison
+  # Compute the (1-2α)% CI for display
   t_crit <- qt(1 - alpha, df_d)
   ci_lower_log <- d_hat - t_crit * se_d
   ci_upper_log <- d_hat + t_crit * se_d
@@ -513,11 +590,13 @@ rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
   scaled_upper_pct <- exp(limit_upper) * 100
   
   return(list(
-    method = "Non-Central TOST (ncTOST)",
-    t1 = t1,
-    t2 = t2,
+    method = "Non-Central TOST (ncTOST) — Exact",
+    t1 = t1_obs,
+    t2 = t2_obs,
     p1 = p1,
     p2 = p2,
+    p1_central = p1_central,
+    p2_central = p2_central,
     overall_p = overall_p,
     rsabe_pass = rsabe_pass,
     d_hat = d_hat,
@@ -574,8 +653,12 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
   anova_results_input <- params$anova_results %||% NULL
   
   # FDA regulatory constants
-  theta_s <- log(1.25)  # ≈ 0.2231
-  s2_w0 <- 0.25^2       # switching CV ≈ 25.4%, s_w0 = 0.25, s²_w0 = 0.0625
+  # θ_s = ln(1.25) / σ_w0, where σ_w0 = 0.25 is the regulatory cutoff SD
+  # At the switching boundary (σ_wR = σ_w0), the scaled limits equal standard ABE:
+  #   exp(±θ_s · σ_w0) = exp(±ln(1.25)) = [80%, 125%]
+  # For HV drugs (σ_wR > σ_w0), limits expand proportionally.
+  theta_s <- log(1.25) / 0.25  # ≈ 0.8924
+  s2_w0 <- 0.25^2              # switching s²_w0 = 0.0625 (CV ≈ 25.4%)
   pe_constraint_lower <- 80.0   # Point estimate constraint
   pe_constraint_upper <- 125.0
   

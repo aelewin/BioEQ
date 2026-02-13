@@ -245,10 +245,10 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
           tags$ul(
             tags$li(sprintf("Design: %s", rbe_output$Design)),
             tags$li(sprintf("Method: %s", rbe_output$Method)),
-            tags$li(sprintf("Total Subjects: %d", rbe_output$n)),
-            tags$li(sprintf("Test Subjects: %d", rbe_output$nTT)),
-            tags$li(sprintf("Reference Subjects: %d", rbe_output$nRR)),
-            tags$li(sprintf("Degrees of Freedom: %d", rbe_output$DF))
+            tags$li(sprintf("Total Subjects: %g", rbe_output$n)),
+            tags$li(sprintf("Test Subjects: %g", rbe_output$nTT)),
+            tags$li(sprintf("Reference Subjects: %g", rbe_output$nRR)),
+            tags$li(sprintf("Degrees of Freedom: %.1f", rbe_output$DF))
           )
         ),
         div(class = "col-md-4",
@@ -285,7 +285,15 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
     p(paste0(
       "This analysis was performed using the replicateBE package (EMA ABEL). ",
       "The package implements ", 
-      if(rbe_output$Method == "A") "Method A (Linear Model/ANOVA)" else sprintf("Method B (Mixed Model with %s DF approximation)", be_res$df_approximation %||% "default"),
+      if(rbe_output$Method == "A") "Method A (Linear Model/ANOVA)" else {
+        df_label <- switch(as.character(be_res$df_approximation %||% 2),
+          "1" = "Satterthwaite",
+          "2" = "nlme/SAS CONTAIN",
+          "3" = "Kenward-Roger",
+          "default"
+        )
+        sprintf("Method B (Mixed Model, %s DF approximation)", df_label)
+      },
       ". Results include within-subject variability estimates and scaled bioequivalence limits."
     ))
   )
@@ -322,9 +330,9 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
           tags$ul(
             tags$li(sprintf("ANOVA Method: %s", 
                     if (param_result$anova_method == "fixed") "Fixed Effects" else "Mixed Effects (nlme)")),
-            tags$li(sprintf("Observations: %d", param_result$n_observations)),
+            tags$li(sprintf("Observations: %g", param_result$n_observations)),
             tags$li(sprintf("Residual MSE: %.6f", param_result$residual_mse)),
-            tags$li(sprintf("Residual DF: %d", param_result$residual_df)),
+            tags$li(sprintf("Residual DF: %.1f", param_result$residual_df)),
             tags$li(sprintf("Treatment Diff (d\u0302): %.6f", param_result$treatment_coef)),
             tags$li(sprintf("SE(d\u0302): %.6f", param_result$treatment_se))
           )
@@ -333,11 +341,11 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
         div(class = "col-md-4",
           h6("Variance Components (ISC):"),
           tags$ul(
-            tags$li(sprintf("s\u00B2_wR: %.6f (df = %d)", param_result$s2_wR, param_result$df_wR)),
+            tags$li(sprintf("s\u00B2_wR: %.6f (df = %g)", param_result$s2_wR, param_result$df_wR)),
             tags$li(sprintf("CV_wR: %.2f%%", param_result$cv_wr_percent)),
             if (!is.na(param_result$s2_wT %||% NA)) {
               tagList(
-                tags$li(sprintf("s\u00B2_wT: %.6f (df = %d)", param_result$s2_wT, param_result$df_wT)),
+                tags$li(sprintf("s\u00B2_wT: %.6f (df = %g)", param_result$s2_wT, param_result$df_wT)),
                 tags$li(sprintf("CV_wT: %.2f%%", param_result$cv_wt_percent %||% NA))
               )
             } else {
@@ -402,7 +410,7 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
     h6(icon("info-circle"), " About RSABE Analysis"),
     p(sprintf("Analysis performed using %s with Intra-Subject Contrasts (ISC) for variance estimation. ", method_display),
       "ISC avoids convergence issues with mixed models by computing within-subject differences directly. ",
-      sprintf("Regulatory constants: \u03B8\u209B = ln(1.25) \u2248 0.2231, switching s\u00B2_w0 = 0.0625 (CV \u2248 25.4%%). "),
+      sprintf("Regulatory constants: \u03B8\u209B = ln(1.25)/\u03C3\u2080 = 0.2231/0.25 \u2248 0.8924, switching s\u00B2_w0 = 0.0625 (CV \u2248 25.4%%). "),
       "FDA requires point estimate within 80-125% regardless of scaling decision."
     )
   )
@@ -431,11 +439,11 @@ format_simple_anova_results <- function(param_result, param_name) {
               sprintf("ANOVA Method: %s", 
                 if (param_result$anova_method == "mixed") "Mixed Effects Model (REML)" else "Fixed Effects Model")
             ),
-            tags$li(sprintf("Observations: %d", param_result$n_observations)),
+            tags$li(sprintf("Observations: %g", param_result$n_observations)),
             tags$li(sprintf("R-squared: %.4f", param_result$r_squared)),
             if (!is.null(param_result$adj_r_squared)) tags$li(sprintf("Adj R-squared: %.4f", param_result$adj_r_squared)),
             tags$li(sprintf("Residual MSE: %.6f", param_result$residual_mse)),
-            tags$li(sprintf("Residual DF: %d", param_result$residual_df))
+            tags$li(sprintf("Residual DF: %.1f", param_result$residual_df))
           )
         ),
         div(class = "col-md-4",
@@ -1539,7 +1547,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                 strong("RSABE Method: "), method_display,
                 br(),
                 tags$small(
-                  "Scaling constant \u03B8\u209B = ln(1.25) \u2248 0.2231 | ",
+                  "Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924 | ",
                   "Switching CV: ~25.4% | ",
                   "Point estimate constraint: 80\u2013125% | ",
                   "Variance estimation: Intra-Subject Contrasts (ISC)"

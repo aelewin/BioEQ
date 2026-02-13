@@ -612,8 +612,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             cat(sprintf("  📋 Crossover design model: %s\n", formula_str))
           }
           model_formula <- as.formula(formula_str)
-          formula_str <- sprintf("%s ~ seq + prd + drug + %s", param, random_effects)
-          model_formula <- as.formula(formula_str)
           
           # Fit model
           model <- lmerTest::lmer(model_formula, data = complete_data, na.action = na.omit)

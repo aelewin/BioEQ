@@ -58,6 +58,43 @@ output$is_parallel_design <- reactive({
 })
 outputOptions(output, "is_parallel_design", suspendWhenHidden = FALSE)
 
+# Check if the current design is NOT a replicate (for RSABE/ABEL compatibility warnings)
+output$is_non_replicate_design <- reactive({
+  design <- input$study_design
+  if (is.null(design)) return(TRUE)
+  
+  # If explicitly selected as replicate, it's fine
+  if (design %in% c("2x2x3", "2x2x4")) return(FALSE)
+  
+  # If parallel or 2x2x2, it's non-replicate
+  if (design %in% c("parallel", "2x2x2")) return(TRUE)
+  
+  # If auto-detect, check from data
+  if (design == "auto" && !is.null(values$uploaded_data)) {
+    tryCatch({
+      data <- values$uploaded_data
+      n_treatments <- length(unique(data$Treatment))
+      treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
+      is_crossover <- all(treatments_per_subject == n_treatments)
+      
+      if (!is_crossover) return(TRUE)  # parallel
+      
+      # Check periods to distinguish 2x2x2 from replicate
+      if ("Period" %in% names(data)) {
+        n_periods <- length(unique(data$Period))
+        if (n_periods <= 2) return(TRUE)  # 2x2x2
+        return(FALSE)  # replicate (3+ periods)
+      }
+      return(TRUE)  # conservative: assume non-replicate if no Period info
+    }, error = function(e) {
+      return(TRUE)
+    })
+  }
+  
+  return(TRUE)
+})
+outputOptions(output, "is_non_replicate_design", suspendWhenHidden = FALSE)
+
 # Check if groups are detected in the data
 output$groups_detected <- reactive({
   if (is.null(values$uploaded_data)) return(FALSE)
@@ -280,11 +317,11 @@ observe({
 output$settings_summary <- renderUI({
   
   study_design <- if (!is.null(input$study_design)) input$study_design else "auto"
-  confidence <- if (!is.null(input$confidence_level)) input$confidence_level else 90
-  be_lower <- if (!is.null(input$be_lower)) input$be_lower else 80
-  be_upper <- if (!is.null(input$be_upper)) input$be_upper else 125
-  log_transform <- if (!is.null(input$log_transform)) input$log_transform else TRUE
-  ref_scaling <- if (!is.null(input$reference_scaling)) input$reference_scaling else FALSE
+  confidence <- 90  # Fixed: 90% CI standard for BE (corresponds to alpha=0.05 two one-sided)
+  be_lower <- 80    # Standard ABE lower limit (%)
+  be_upper <- 125   # Standard ABE upper limit (%)
+  log_transform <- TRUE  # Log transformation always applied per regulatory requirements
+  ref_scaling <- FALSE   # Reference scaling handled by RSABE/ABEL analysis types
   
   # Data type specific settings
   data_type <- values$data_type %||% "concentration"
@@ -490,15 +527,21 @@ observeEvent(input$run_analysis, {
     auc_method = input$auc_method %||% "mixed",
     lambda_z_method = input$lambda_z_method %||% "aic",
     lambda_z_points = input$lambda_z_points %||% 3,
-    confidence_level = input$confidence_level %||% 90,
-    alpha_level = input$alpha_level %||% 0.05,
-    # BE limits: top-level for backward compatibility + per-parameter for regulatory correctness
-    be_limits = list(
-      lower = if((input$be_analysis_type %||% "ABE") == "ABE") (input$be_lower %||% 80) else 80, 
-      upper = if((input$be_analysis_type %||% "ABE") == "ABE") (input$be_upper %||% 125) else 125
-    ),
-    be_lower = if((input$be_analysis_type %||% "ABE") == "ABE") (input$be_lower %||% 80) else 80,
-    be_upper = if((input$be_analysis_type %||% "ABE") == "ABE") (input$be_upper %||% 125) else 125,
+    confidence_level = 90,  # Standard 90% CI for BE (alpha=0.05 two one-sided)
+    alpha_level = {
+      be_type <- input$be_analysis_type %||% "ABE"
+      if (be_type == "RSABE") {
+        input$alpha_level_rsabe %||% 0.05
+      } else if (be_type == "ABEL") {
+        input$alpha_level_abel %||% 0.05
+      } else {
+        input$alpha_level %||% 0.05
+      }
+    },
+    # BE limits: standard 80-125% (per-parameter overrides below for ABE)
+    be_limits = list(lower = 80, upper = 125),
+    be_lower = 80,
+    be_upper = 125,
     # Per-parameter BE limits (for ABE advanced options)
     be_limits_per_param = list(
       Cmax = list(lower = input$be_lower_cmax %||% 80, upper = input$be_upper_cmax %||% 125),
@@ -532,7 +575,7 @@ observeEvent(input$run_analysis, {
       
       combined_params
     },
-    outlier_test = input$outlier_test %||% TRUE,
+    outlier_test = TRUE,  # Outlier detection always enabled (ABEL has its own toggle)
     # pAUC configuration - automatically enable if pAUC is in selected parameters
     calculate_pAUC = {
       manual_pAUC <- isTRUE(input$calculate_pAUC)
@@ -543,18 +586,18 @@ observeEvent(input$run_analysis, {
     },
     pAUC_start = input$pAUC_start %||% 0,
     pAUC_end = input$pAUC_end %||% 2,
-    log_transform = input$log_transform %||% TRUE,
-    model_effects = input$model_effects %||% c("sequence", "period", "treatment", "subject"),
+    log_transform = TRUE,  # Always TRUE — log transformation per regulatory requirements
+    model_effects = c("sequence", "period", "treatment", "subject"),  # Standard ANOVA model terms
     missing_data_middle = input$missing_data_middle %||% "complete",
     missing_data_terminal = input$missing_data_terminal %||% "complete",
-    reference_scaling = input$reference_scaling %||% FALSE,
-    scaling_threshold = input$scaling_threshold %||% 30,
-    scaling_cap = c(input$scaling_cap_lower %||% 0.8, input$scaling_cap_upper %||% 1.25),
+    reference_scaling = FALSE,  # Handled by RSABE/ABEL analysis types
+    scaling_threshold = 30,     # CVwR threshold for reference scaling (%)
+    scaling_cap = c(0.8, 1.25), # Scaling cap limits (ratio)
     # ICH M13A Carryover Detection
     test_carryover = input$test_carryover %||% FALSE,
     carryover_threshold = input$carryover_threshold %||% 5,
     exclude_carryover_subjects = input$exclude_carryover_subjects %||% TRUE,
-    extrap_limit = input$extrap_limit %||% 20
+    extrap_limit = 20  # AUC extrapolation limit (%)
   )
   
   # Store configuration for results display
@@ -967,26 +1010,74 @@ observeEvent(input$run_analysis, {
     # For demonstration, create enhanced mock results that reflect the configuration
     values$analysis_complete <- TRUE
     
-    # FIXED: Use real NCA results instead of mock data
-    # The nca_results already contains all 19 parameters calculated correctly
+    # Build NCA results structure from real computed data
+    # Compute real summary statistics from subject-level NCA results
+    nca_summary <- tryCatch({
+      # Core PK parameters to summarize (if present in the data)
+      summary_params <- c("AUC0t", "AUC0inf", "Cmax", "Tmax", "t_half")
+      available_params <- intersect(summary_params, colnames(nca_results))
+      
+      if (length(available_params) > 0 && "Treatment" %in% colnames(nca_results)) {
+        summary_rows <- lapply(available_params, function(param) {
+          vals <- nca_results[[param]]
+          if (!is.numeric(vals)) return(NULL)
+          
+          test_vals <- vals[nca_results$Treatment == "Test"]
+          ref_vals <- vals[nca_results$Treatment == "Reference"]
+          
+          test_vals <- test_vals[!is.na(test_vals)]
+          ref_vals <- ref_vals[!is.na(ref_vals)]
+          
+          if (length(test_vals) == 0 || length(ref_vals) == 0) return(NULL)
+          
+          # Compute %CV from pooled data
+          all_vals <- c(test_vals, ref_vals)
+          cv_pct <- if (mean(all_vals) != 0) (sd(all_vals) / mean(all_vals)) * 100 else NA
+          
+          # Determine method label
+          method_label <- if (param %in% c("Tmax")) {
+            "Non-parametric"
+          } else if (param %in% c("AUC0t", "AUC0inf")) {
+            analysis_config$auc_method %||% "Linear-Log Trapezoidal"
+          } else if (param == "t_half") {
+            analysis_config$lambda_z_method %||% "OLS"
+          } else {
+            "Standard"
+          }
+          
+          data.frame(
+            Parameter = param,
+            Test_Mean = round(mean(test_vals), 4),
+            Reference_Mean = round(mean(ref_vals), 4),
+            CV_percent = round(cv_pct, 1),
+            Method = method_label,
+            stringsAsFactors = FALSE
+          )
+        })
+        
+        summary_rows <- summary_rows[!sapply(summary_rows, is.null)]
+        if (length(summary_rows) > 0) do.call(rbind, summary_rows) else NULL
+      } else {
+        NULL
+      }
+    }, error = function(e) {
+      cat(sprintf("[WARNING] Could not compute NCA summary statistics: %s\n", e$message))
+      NULL
+    })
+    
     values$nca_results <- list(
-      # Use real NCA results data  
-      subject_data = nca_results,  # This contains all 19 parameters
+      # Real NCA results data (all 19 parameters)
+      subject_data = nca_results,
       
-      # Keep summary stats if needed for other parts of the app
-      summary = data.frame(
-        Parameter = c("AUC0t", "AUC0inf", "Cmax", "Tmax", "t_half"),
-        Test_Mean = c(12250, 12680, 1625, 2.1, 3.8),
-        Reference_Mean = c(12450, 12890, 1689, 2.0, 3.9),
-        CV_percent = c(18.5, 19.2, 24.1, 35.2, 15.8),
-        Method = c(analysis_config$auc_method, analysis_config$auc_method, 
-                  analysis_config$auc_method, "Non-parametric", analysis_config$lambda_z_method)
-      ),
+      # Alias for subject_data (referenced as fallback in some server modules)
+      parameters = nca_results,
       
-      # Method information from real analysis
+      # Real computed summary statistics (NULL if computation fails)
+      summary = nca_summary,
+      
+      # Method information from real analysis config
       lambda_z_method = analysis_config$lambda_z_method,
-      auc_method = analysis_config$auc_method,
-      extrap_percent = if(!is.null(nca_results$AUC_percent_extrap)) nca_results$AUC_percent_extrap else round(runif(nrow(nca_results), min = 5, max = 20), 1)
+      auc_method = analysis_config$auc_method
     )
     
     # =======================================================================
