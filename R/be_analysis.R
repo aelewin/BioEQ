@@ -137,26 +137,43 @@ perform_average_be <- function(data, design = "auto", params = list()) {
 
 #' Perform RSABE analysis
 #' 
-#' FDA Reference Scaled Average Bioequivalence - PLACEHOLDER
-#' This requires a different implementation than replicateBE (which is EMA-only)
+#' FDA Reference Scaled Average Bioequivalence
+#' Supports two methods:
+#'   - FDA Linearized Scaled Criterion (Howe UCB) — default
+#'   - Non-Central TOST (ncTOST) — exact method
 #' 
 #' @param data Data frame with PK parameters
 #' @param design Study design
-#' @param params Analysis parameters
+#' @param params Analysis parameters (includes rsabe_method: "fda_linearized" or "nctost")
 #' @return RSABE analysis results
 #' @export
 perform_rsabe_placeholder <- function(data, design = "auto", params = list()) {
   
-  cat("🔬 RSABE Analysis - NOT YET IMPLEMENTED\n")
-  cat("⚠️  FDA Reference Scaled Average Bioequivalence requires:\n")
-  cat("    - Different statistical methodology than EMA ABEL\n")
-  cat("    - Implementation using FDA-approved methods\n")
-  cat("    - Currently evaluating appropriate R packages\n")
-  cat("\n")
-  cat("📋 For now, please use ABEL (EMA method) which provides similar reference scaling.\n")
-  cat("📋 Or perform RSABE analysis using SAS or other validated software.\n")
+  # Source the RSABE analysis module if perform_rsabe is not yet available
+  if (!exists("perform_rsabe", mode = "function")) {
+    # Try multiple paths (from different working directories)
+    possible_paths <- c(
+      "R/rsabe_analysis.R",
+      "../R/rsabe_analysis.R",
+      file.path(getwd(), "R", "rsabe_analysis.R")
+    )
+    
+    sourced <- FALSE
+    for (path in possible_paths) {
+      if (file.exists(path)) {
+        source(path)
+        sourced <- TRUE
+        break
+      }
+    }
+    
+    if (!sourced) {
+      stop("RSABE analysis module not found. Expected at: R/rsabe_analysis.R")
+    }
+  }
   
-  stop("RSABE analysis not yet implemented. Please use ABEL or conventional ABE for now.")
+  # Delegate to the RSABE engine
+  perform_rsabe(data, design, params)
 }
 
 #' Perform ABEL analysis

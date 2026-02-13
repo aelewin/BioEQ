@@ -81,6 +81,7 @@ tryCatch({
 source("../R/bioeq_main.R", local = TRUE)
 source("../R/nca_functions.R", local = TRUE)
 source("../R/be_analysis.R", local = TRUE)
+source("../R/rsabe_analysis.R", local = TRUE)  # RSABE analysis (FDA linearized + ncTOST)
 source("../R/simple_anova.R", local = TRUE)  # Simple ANOVA using lm()
 source("../R/statistics.R", local = TRUE)
 source("../R/utils.R", local = TRUE)

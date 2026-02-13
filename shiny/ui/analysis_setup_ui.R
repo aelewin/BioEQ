@@ -529,15 +529,52 @@ tagList(
                 )
               ),
               
-              # RSABE: Coming soon notice
+              # RSABE: Method selector
               conditionalPanel(
                 condition = "input.be_analysis_type == 'RSABE'",
-                div(style = "border: 1px solid #ffc107; padding: 15px; border-radius: 5px; background: #fff8e1; margin-top: 10px;",
-                  h5(icon("exclamation-triangle", style = "color: #f57f17;"), " RSABE - Coming Soon", style = "color: #f57f17; margin-top: 0;"),
-                  p(style = "color: #666; margin-bottom: 0;",
-                    "FDA Reference-Scaled Average Bioequivalence is not yet implemented. ",
-                    "RSABE requires FDA-specific statistical methodology distinct from EMA ABEL. ",
-                    "Please use ABEL (EMA/Health Canada method) or standard ABE."
+                h5("RSABE Statistical Method",
+                   help_icon("rsabe_method", "Select the RSABE statistical method",
+                            "RSABE Statistical Methods",
+                            div(
+                              tags$h6(tags$strong("FDA Linearized Scaled Criterion"), style = "margin-top: 10px;"),
+                              tags$ul(
+                                tags$li("Default FDA method using the Howe upper confidence bound"),
+                                tags$li("Tests the linearized criterion: ", tags$em("\u03B7 = d\u00B2 \u2212 \u03B8\u00B2\u209B \u00B7 s\u00B2", tags$sub("wR"))),
+                                tags$li("Approved in FDA guidance for HVD/HVDPs"),
+                                tags$li("95% UCB \u2264 0 demonstrates RSABE")
+                              ),
+                              tags$h6(tags$strong("Non-Central TOST (ncTOST)"), style = "margin-top: 15px;"),
+                              tags$ul(
+                                tags$li("Exact method per T\u00F3thfalusi & Endr\u00E9nyi (2016)"),
+                                tags$li("Two one-sided tests against scaled limits \u00B1\u03B8\u209B\u00B7s", tags$sub("wR")),
+                                tags$li("Generally agrees with linearized method"),
+                                tags$li("Accounts for uncertainty in variance estimation")
+                              ),
+                              tags$h6(tags$strong("Common Features"), style = "margin-top: 15px;"),
+                              tags$ul(
+                                tags$li("Scaling constant \u03B8\u209B = ln(1.25) \u2248 0.2231"),
+                                tags$li("Switching variability: CV", tags$sub("wR"), " > ~25.4%"),
+                                tags$li("FDA point estimate constraint: 80\u2013125%"),
+                                tags$li("Falls back to ABE when CV", tags$sub("wR"), " \u2264 ~25.4%")
+                              )
+                            )
+                   )
+                ),
+                radioButtons("rsabe_method",
+                  label = NULL,
+                  choices = list(
+                    "FDA Linearized Scaled Criterion (Howe UCB)" = "fda_linearized",
+                    "Non-Central TOST (ncTOST)" = "nctost"
+                  ),
+                  selected = "fda_linearized",
+                  inline = FALSE
+                ),
+                div(style = "padding: 10px; background-color: #e3f2fd; border-left: 3px solid #1976d2; border-radius: 4px; margin-top: 10px;",
+                  tags$small(style = "color: #1565c0;",
+                    icon("info-circle"), " ",
+                    "RSABE uses intra-subject contrasts (ISC) for variance estimation. ",
+                    "Requires replicate design (2\u00D72\u00D73 or 2\u00D72\u00D74). ",
+                    "Parameters with CV", tags$sub("wR"), " \u2264 ~25.4% use standard ABE limits."
                   )
                 )
               ),
@@ -758,32 +795,14 @@ tagList(
         )
       ), # Close Analysis Parameters box
       
-      # Analysis run button - disabled for RSABE
+      # Analysis run button
       div(style = "text-align: center; padding: 20px; margin-top: 20px;",
-        conditionalPanel(
-          condition = "input.be_analysis_type != 'RSABE'",
-          actionButton(
-            "run_analysis", 
-            "Run Bioequivalence Analysis",
-            class = "btn btn-success btn-lg",
-            icon = icon("calculator"),
-            style = "font-size: 18px; padding: 15px 30px;"
-          )
-        ),
-        conditionalPanel(
-          condition = "input.be_analysis_type == 'RSABE'",
-          div(
-            tags$button(
-              type = "button",
-              class = "btn btn-secondary btn-lg",
-              disabled = "disabled",
-              style = "font-size: 18px; padding: 15px 30px; cursor: not-allowed;",
-              icon("calculator"), " Run Bioequivalence Analysis"
-            ),
-            div(style = "margin-top: 8px; color: #6c757d; font-style: italic;",
-              "RSABE is not yet available. Please select ABE or ABEL."
-            )
-          )
+        actionButton(
+          "run_analysis", 
+          "Run Bioequivalence Analysis",
+          class = "btn btn-success btn-lg",
+          icon = icon("calculator"),
+          style = "font-size: 18px; padding: 15px 30px;"
         )
       )
     ) # Close main configuration column

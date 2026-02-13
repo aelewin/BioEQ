@@ -297,6 +297,119 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
   ))
 }
 
+# Format RSABE ANOVA results for display
+format_rsabe_anova_results <- function(param_result, param_name, be_res) {
+  
+  rsabe_details <- be_res$rsabe_details[[param_name]]
+  isc <- if (!is.null(rsabe_details)) rsabe_details$isc_result else NULL
+  rsabe_test <- if (!is.null(rsabe_details)) rsabe_details$rsabe_test else NULL
+  is_hv <- if (!is.null(rsabe_details)) rsabe_details$is_hv else FALSE
+  rsabe_method <- be_res$rsabe_method %||% "fda_linearized"
+  
+  # Summary card
+  summary_card <- div(class = "card mb-3",
+    div(class = "card-header bg-primary text-white",
+      h5(class = "card-title mb-0",
+        icon("flask"),
+        sprintf(" RSABE ANOVA Results for %s", param_name)
+      )
+    ),
+    div(class = "card-body",
+      div(class = "row",
+        # Model summary
+        div(class = "col-md-4",
+          h6("Model Summary:"),
+          tags$ul(
+            tags$li(sprintf("ANOVA Method: %s", 
+                    if (param_result$anova_method == "fixed") "Fixed Effects" else "Mixed Effects (nlme)")),
+            tags$li(sprintf("Observations: %d", param_result$n_observations)),
+            tags$li(sprintf("Residual MSE: %.6f", param_result$residual_mse)),
+            tags$li(sprintf("Residual DF: %d", param_result$residual_df)),
+            tags$li(sprintf("Treatment Diff (d\u0302): %.6f", param_result$treatment_coef)),
+            tags$li(sprintf("SE(d\u0302): %.6f", param_result$treatment_se))
+          )
+        ),
+        # Variance components (ISC)
+        div(class = "col-md-4",
+          h6("Variance Components (ISC):"),
+          tags$ul(
+            tags$li(sprintf("s\u00B2_wR: %.6f (df = %d)", param_result$s2_wR, param_result$df_wR)),
+            tags$li(sprintf("CV_wR: %.2f%%", param_result$cv_wr_percent)),
+            if (!is.na(param_result$s2_wT %||% NA)) {
+              tagList(
+                tags$li(sprintf("s\u00B2_wT: %.6f (df = %d)", param_result$s2_wT, param_result$df_wT)),
+                tags$li(sprintf("CV_wT: %.2f%%", param_result$cv_wt_percent %||% NA))
+              )
+            } else {
+              tags$li("s\u00B2_wT: Not estimable (partial replicate)")
+            },
+            tags$li(style = if (is_hv) "color: #e65100; font-weight: bold;" else "color: #2e7d32; font-weight: bold;",
+              if (is_hv) "HIGH VARIABILITY \u2014 Scaled limits" else "Low variability \u2014 Fixed ABE limits"
+            )
+          )
+        ),
+        # RSABE criterion / decision
+        div(class = "col-md-4",
+          h6("RSABE Assessment:"),
+          if (is_hv && !is.null(rsabe_test)) {
+            if (rsabe_method == "fda_linearized") {
+              tags$ul(
+                tags$li(sprintf("\u03B8\u00B2\u209B: %.6f", rsabe_test$theta_sq)),
+                tags$li(sprintf("\u03B7\u0302 (point est): %.6f", rsabe_test$eta_hat)),
+                tags$li(sprintf("UCB (95%%): %.6f", rsabe_test$ucb)),
+                tags$li(sprintf("Scaled limits: [%.2f%%, %.2f%%]", rsabe_test$scaled_lower, rsabe_test$scaled_upper)),
+                tags$li(
+                  class = if (rsabe_test$rsabe_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
+                  sprintf("Scaling criterion: %s", ifelse(rsabe_test$rsabe_pass, "PASS (UCB \u2264 0)", "FAIL (UCB > 0)"))
+                ),
+                tags$li(
+                  class = if (rsabe_details$pe_constraint_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
+                  sprintf("PE constraint (80-125%%): %s", ifelse(rsabe_details$pe_constraint_pass, "PASS", "FAIL"))
+                )
+              )
+            } else {
+              # ncTOST
+              tags$ul(
+                tags$li(sprintf("t\u2081: %.4f (p = %.4f)", rsabe_test$t1, rsabe_test$p1)),
+                tags$li(sprintf("t\u2082: %.4f (p = %.4f)", rsabe_test$t2, rsabe_test$p2)),
+                tags$li(sprintf("max(p): %.4f", rsabe_test$overall_p)),
+                tags$li(sprintf("Scaled limits: [%.2f%%, %.2f%%]", rsabe_test$scaled_lower_pct, rsabe_test$scaled_upper_pct)),
+                tags$li(
+                  class = if (rsabe_test$rsabe_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
+                  sprintf("ncTOST: %s", ifelse(rsabe_test$rsabe_pass, "PASS", "FAIL"))
+                ),
+                tags$li(
+                  class = if (rsabe_details$pe_constraint_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
+                  sprintf("PE constraint (80-125%%): %s", ifelse(rsabe_details$pe_constraint_pass, "PASS", "FAIL"))
+                )
+              )
+            }
+          } else {
+            tags$ul(
+              tags$li("Using standard ABE (80-125%)"),
+              tags$li(sprintf("CV_wR (%.1f%%) \u2264 switching CV (~25.4%%)", param_result$cv_wr_percent)),
+              tags$li("RSABE scaling not required")
+            )
+          }
+        )
+      )
+    )
+  )
+  
+  # Method note
+  method_display <- if (rsabe_method == "nctost") "Non-Central TOST (ncTOST)" else "FDA Linearized Scaled Criterion (Howe UCB)"
+  info_note <- div(class = "alert alert-info",
+    h6(icon("info-circle"), " About RSABE Analysis"),
+    p(sprintf("Analysis performed using %s with Intra-Subject Contrasts (ISC) for variance estimation. ", method_display),
+      "ISC avoids convergence issues with mixed models by computing within-subject differences directly. ",
+      sprintf("Regulatory constants: \u03B8\u209B = ln(1.25) \u2248 0.2231, switching s\u00B2_w0 = 0.0625 (CV \u2248 25.4%%). "),
+      "FDA requires point estimate within 80-125% regardless of scaling decision."
+    )
+  )
+  
+  return(tagList(summary_card, info_note))
+}
+
 # Format simple ANOVA results for display
 format_simple_anova_results <- function(param_result, param_name) {
   
@@ -1417,11 +1530,20 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           div(class = "well", style = "background-color: #f8f9fa; border: 1px solid #dee2e6;",
             h4(icon("chart-line"), paste("Analysis Type:", be_method), style = "color: #495057; margin-bottom: 10px;"),
             if (analysis_type == "RSABE") {
-              # RSABE is not implemented - show placeholder
+              # RSABE analysis details
+              rsabe_method_label <- be_res$rsabe_method %||% "fda_linearized"
+              method_display <- if (rsabe_method_label == "nctost") "Non-Central TOST (ncTOST)" else "FDA Linearized Scaled Criterion (Howe UCB)"
+              
               div(class = "alert alert-info", style = "margin-bottom: 0;",
-                icon("info-circle"), " ",
-                strong("Note: "), "RSABE analysis requested but currently using ABE methodology.",
-                br(), "Full RSABE implementation coming soon."
+                icon("flask"), " ",
+                strong("RSABE Method: "), method_display,
+                br(),
+                tags$small(
+                  "Scaling constant \u03B8\u209B = ln(1.25) \u2248 0.2231 | ",
+                  "Switching CV: ~25.4% | ",
+                  "Point estimate constraint: 80\u2013125% | ",
+                  "Variance estimation: Intra-Subject Contrasts (ISC)"
+                )
               )
             } else if (analysis_type == "ABEL") {
               # ABEL is implemented - show info about regulator
@@ -2001,6 +2123,9 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         if (!is.null(param_result$replicatebe_output)) {
           # Format replicateBE ANOVA results
           return(format_replicatebe_anova_results(param_result, param, be_res))
+        } else if (!is.null(param_result$s2_wR)) {
+          # RSABE result — has ISC variance components
+          return(format_rsabe_anova_results(param_result, param, be_res))
         } else {
           # Format simple ANOVA results for display
           return(format_simple_anova_results(param_result, param))

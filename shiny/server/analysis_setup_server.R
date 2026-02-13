@@ -7,6 +7,9 @@ source("utils/help_utils.R", local = TRUE)
 # Source simple ANOVA functions
 source("../R/simple_anova.R", local = TRUE)
 
+# Source RSABE analysis functions
+source("../R/rsabe_analysis.R", local = TRUE)
+
 # Helper function for null coalescing
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
@@ -501,6 +504,8 @@ observeEvent(input$run_analysis, {
       Cmax = list(lower = input$be_lower_cmax %||% 80, upper = input$be_upper_cmax %||% 125),
       AUC  = list(lower = input$be_lower_auc  %||% 80, upper = input$be_upper_auc  %||% 125)
     ),
+    # RSABE method selection
+    rsabe_method = input$rsabe_method %||% "fda_linearized",
     # ABEL regulatory authority
     abel_regulator = input$abel_regulator %||% "EMA",
     pk_parameters = all_pk_params,
@@ -872,18 +877,21 @@ observeEvent(input$run_analysis, {
       is_replicate_design <- detected_study_design %in% c("2x2x3", "2x2x4", "replicate") || 
                             grepl("replicate", detected_study_design, ignore.case = TRUE)
       is_abel_analysis <- analysis_config$be_analysis_type == "ABEL"
+      is_rsabe_analysis <- analysis_config$be_analysis_type == "RSABE"
       
-      if (is_replicate_design && is_abel_analysis) {
-        cat("[INFO] ⏭️  Skipping separate ANOVA for replicate design with ABEL\n")
+      if (is_replicate_design && (is_abel_analysis || is_rsabe_analysis)) {
+        cat(sprintf("[INFO] ⏭️  Skipping separate ANOVA for replicate design with %s\n", analysis_config$be_analysis_type))
         cat(sprintf("[INFO]    Design: %s, BE Type: %s\n", detected_study_design, analysis_config$be_analysis_type))
-        cat("[INFO]    replicateBE will perform integrated ANOVA + BE analysis\n")
+        cat(sprintf("[INFO]    %s will perform integrated ANOVA + BE analysis\n", analysis_config$be_analysis_type))
         
         # Create placeholder ANOVA results structure
         anova_results <- list(
           anova_results = list(),  # Empty - will be populated by replicateBE
           design = detected_study_design,
           parameters = available_selected_params,
-          note = "ANOVA performed by replicateBE during ABEL analysis"
+          note = sprintf("ANOVA performed by %s during %s analysis", 
+                        if (is_rsabe_analysis) "RSABE engine" else "replicateBE",
+                        analysis_config$be_analysis_type)
         )
         
       } else if (length(numeric_params) > 0) {
@@ -946,8 +954,8 @@ observeEvent(input$run_analysis, {
       }
     }
     
-    # Store ANOVA results (but NOT if we're doing ABEL - it will be populated later from replicateBE)
-    if (!(is_replicate_design && is_abel_analysis)) {
+    # Store ANOVA results (but NOT if we're doing ABEL/RSABE - they populate their own)
+    if (!(is_replicate_design && (is_abel_analysis || is_rsabe_analysis))) {
       values$anova_results <- anova_results
     }
     
@@ -1207,20 +1215,22 @@ observeEvent(input$run_analysis, {
           abel_upper_cap = if (!is.null(input$abel_upper_cap)) input$abel_upper_cap else "50",
           abel_adjust_tie = if (!is.null(input$abel_adjust_tie)) input$abel_adjust_tie else FALSE,
           abel_outlier_analysis = if (!is.null(input$abel_outlier_analysis)) input$abel_outlier_analysis else FALSE,
-          abel_outlier_fence = if (!is.null(input$abel_outlier_fence)) input$abel_outlier_fence else 2
+          abel_outlier_fence = if (!is.null(input$abel_outlier_fence)) input$abel_outlier_fence else 2,
+          # RSABE-specific parameters
+          rsabe_method = analysis_config$rsabe_method %||% "fda_linearized"
         )
       )
       
       # Store the real BE analysis results and merge ANOVA results
       values$be_results <- be_analysis_result
       
-      # For ABEL with replicate designs, ANOVA results come from replicateBE
+      # For ABEL/RSABE with replicate designs, ANOVA results come from the BE analysis
       # For other designs, use the separate ANOVA results
-      if (analysis_config$be_analysis_type == "ABEL" && !is.null(be_analysis_result$anova_results) && length(be_analysis_result$anova_results) > 0) {
-        # replicateBE provides ANOVA results - already in proper nested structure
-        # Do NOT re-wrap - just use directly
+      if (analysis_config$be_analysis_type %in% c("ABEL", "RSABE") && !is.null(be_analysis_result$anova_results) && length(be_analysis_result$anova_results) > 0) {
+        # ABEL/RSABE provides ANOVA results - already in proper nested structure
         values$anova_results <- be_analysis_result$anova_results
-        cat(sprintf("[INFO] ✅ Using ANOVA results from replicateBE (%d parameters)\n", 
+        cat(sprintf("[INFO] ✅ Using ANOVA results from %s (%d parameters)\n", 
+                    analysis_config$be_analysis_type,
                     length(be_analysis_result$anova_results$anova_results)))
       } else {
         # For ABE or when ABEL has no ANOVA results, use the separate ANOVA results
