@@ -124,7 +124,8 @@ calculate_pk_comparison <- function(nca_data, param_name) {
         Missing_Test = replace_na(T_n < periods_per_subject / 2, FALSE),
         Missing_Ref = replace_na(R_n < periods_per_subject / 2, FALSE),
         Subject = as.character(Subject)
-      )
+      ) %>%
+      arrange(as.numeric(Subject))
     
     # Calculate summary statistics for each ratio type
     calc_stats <- function(values, label) {
@@ -172,7 +173,8 @@ calculate_pk_comparison <- function(nca_data, param_name) {
       mutate(
         Ratio = Test / Reference,
         Subject = as.character(Subject)
-      )
+      ) %>%
+      arrange(as.numeric(Subject))
     
     # Calculate summary statistics
     valid_ratios <- comparison_data$Ratio[!is.na(comparison_data$Ratio) & !is.infinite(comparison_data$Ratio)]
@@ -1097,6 +1099,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         }
         
         # Create enhanced DataTable with better functionality
+        # Sort by Subject numerically if present
+        if ("Subject" %in% names(display_data)) {
+          display_data <- display_data[order(as.numeric(as.character(display_data$Subject))), ]
+        }
+        
         DT::datatable(
           display_data,
           options = list(

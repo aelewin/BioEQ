@@ -1127,6 +1127,8 @@ plot_subject_comparison_static <- function(data, log_scale = FALSE, facet_wrap =
     )
   
   if (facet_wrap) {
+    subject_levels <- sort(as.numeric(unique(data$Subject)))
+    data$Subject <- factor(data$Subject, levels = subject_levels)
     p <- p + facet_wrap(~ paste("Subject", Subject), ncol = ncol, scales = "free_y")
   }
   
@@ -1159,7 +1161,7 @@ plot_subject_comparison_interactive <- function(data, log_scale = FALSE, facet_w
     # This avoids complex subplot issues while maintaining functionality
     p <- plot_ly()
     
-    for (subj in unique(data$Subject)) {
+    for (subj in sort(as.numeric(unique(data$Subject)))) {
       for (form in unique(data$Treatment)) {
         subj_data <- data[data$Subject == subj & data$Treatment == form, ]
         if (nrow(subj_data) > 0) {
@@ -2590,7 +2592,7 @@ create_lambda_z_regression_plots <- function(conc_data, nca_subject_data,
   
   p <- p +
     scale_y_log10() +
-    facet_wrap(~ Profile, scales = "free", ncol = ncol) +
+    facet_wrap(~ factor(Profile, levels = unique(Profile)), scales = "free", ncol = ncol) +
     labs(x = "Time", y = "Concentration (log scale)") +
     theme_bw(base_size = 10) +
     theme(

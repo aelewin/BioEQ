@@ -443,9 +443,9 @@ results_dashboard_ui <- function(id) {
                   fluidRow(
                     column(12,
                       br(),
+                      actionButton(ns("reset_default_cols"), "Default Selections", class = "btn-sm btn-info"),
                       actionButton(ns("select_all_cols"), "Select All", class = "btn-sm btn-primary"),
-                      actionButton(ns("deselect_all_cols"), "Clear All", class = "btn-sm btn-warning"),
-                      actionButton(ns("reset_default_cols"), "Default Selections", class = "btn-sm btn-info")
+                      actionButton(ns("deselect_all_cols"), "Clear All", class = "btn-sm btn-warning")
                     )
                   )
                 ),

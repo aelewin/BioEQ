@@ -659,8 +659,8 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       
       # Get subject choices from the data
       conc_data <- plot_data$data
-      test_subjects <- sort(unique(conc_data$Subject[conc_data$Treatment == "Test"]))
-      ref_subjects <- sort(unique(conc_data$Subject[conc_data$Treatment == "Reference"]))
+      test_subjects <- sort(as.numeric(unique(conc_data$Subject[conc_data$Treatment == "Test"])))
+      ref_subjects <- sort(as.numeric(unique(conc_data$Subject[conc_data$Treatment == "Reference"])))
       
       div(class = "plot-card",
         div(class = "plot-card-header",
@@ -1279,7 +1279,8 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       nca_res <- nca_results()
       subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
       req(subject_data)
-      sort(unique(as.character(subject_data$Subject)))
+      subjects <- unique(as.character(subject_data$Subject))
+      subjects[order(as.numeric(subjects))]
     })
     
     # Reactive: current page of subjects
@@ -1372,7 +1373,8 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       # Determine subjects to show based on filter
       filter_val <- input$lambda_z_subject_filter
       if (is.null(filter_val) || filter_val == "all") {
-        all_subjects <- sort(unique(as.character(subject_data$Subject)))
+        all_subjects <- unique(as.character(subject_data$Subject))
+        all_subjects <- all_subjects[order(as.numeric(all_subjects))]
       } else {
         all_subjects <- filter_val
       }
@@ -1431,6 +1433,9 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       } else {
         page_subject_data <- subject_data
       }
+      
+      # Sort by numeric Subject
+      page_subject_data <- page_subject_data[order(as.numeric(as.character(page_subject_data$Subject))), ]
       
       # Apply pagination
       n_profiles <- nrow(page_subject_data)
