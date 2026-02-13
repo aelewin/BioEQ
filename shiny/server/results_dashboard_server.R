@@ -18,7 +18,6 @@ log_param_to_display_name <- function(log_param_name) {
     "lnAUC0inf" = "AUC0-∞",
     "lnAUClast" = "AUClast",
     "lnpAUC" = "pAUC",
-    "lnTmax" = "Tmax",
     "lnT12" = "T½",
     "lnkel" = "kel"
   )
@@ -651,12 +650,12 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       column_selection$subject_info <- input$subject_info_cols
     })
     
-    observeEvent(input$primary_pk_cols, {
-      column_selection$primary_pk <- input$primary_pk_cols
+    observeEvent(input$pk_cols, {
+      column_selection$pk <- input$pk_cols
     })
     
-    observeEvent(input$secondary_pk_cols, {
-      column_selection$secondary_pk <- input$secondary_pk_cols
+    observeEvent(input$pk_cols_2, {
+      column_selection$pk_2 <- input$pk_cols_2
     })
     
     observeEvent(input$log_pk_cols, {
@@ -695,20 +694,17 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         subject_choices <- c("Subject", "Treatment", "Period", "Sequence", "dose")
         updateCheckboxGroupInput(session, "subject_info_cols", selected = subject_choices)
         
-        # Primary PK parameters  
-        primary_choices <- c("Cmax", "AUC0t", "AUC0inf")
+        # PK parameters
+        pk_choices <- c("Cmax", "AUC0t", "AUC0inf", "Tmax", "t_half", "Tlast", "Clast", "AUC_percent_extrap")
         if ("pAUC" %in% available_cols) {
-          primary_choices <- c(primary_choices, "pAUC")
+          pk_choices <- c(pk_choices, "pAUC")
         }
-        updateCheckboxGroupInput(session, "primary_pk_cols", selected = primary_choices)
-        
-        # Secondary PK parameters (including pAUC if not in primary)
-        secondary_choices <- c("Tmax", "t_half", "Tlast", "Clast", "CL_F", "Vd_F", "MRT", "AUC_percent_extrap")
-        if ("pAUC" %in% available_cols && !"pAUC" %in% primary_choices) {
-          secondary_choices <- c(secondary_choices, "pAUC")
-        }
-        available_secondary <- intersect(secondary_choices, available_cols)
-        updateCheckboxGroupInput(session, "secondary_pk_cols", selected = available_secondary)
+        n <- length(pk_choices)
+        mid <- ceiling(n / 2)
+        col1_vals <- pk_choices[1:mid]
+        col2_vals <- pk_choices[(mid + 1):n]
+        updateCheckboxGroupInput(session, "pk_cols", selected = intersect(col1_vals, available_cols))
+        updateCheckboxGroupInput(session, "pk_cols_2", selected = intersect(col2_vals, available_cols))
         
         # Lambda z statistics
         lambda_choices <- c("lambda_z", "lambda_z_r_squared", "lambda_z_p_value", "lambda_z_points", "lambda_z_method")
@@ -717,7 +713,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         
         # Log-transformed parameters
         log_choices <- c("lnCmax", "lnAUC0t", "lnAUC0inf")
-        if ("lnTmax" %in% available_cols) log_choices <- c(log_choices, "lnTmax")
         if ("lnpAUC" %in% available_cols) log_choices <- c(log_choices, "lnpAUC")
         updateCheckboxGroupInput(session, "log_pk_cols", selected = log_choices)
         
@@ -728,22 +723,22 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
     
     observeEvent(input$deselect_all_cols, {
       updateCheckboxGroupInput(session, "subject_info_cols", selected = character(0))
-      updateCheckboxGroupInput(session, "primary_pk_cols", selected = character(0))
-      updateCheckboxGroupInput(session, "secondary_pk_cols", selected = character(0))
+      updateCheckboxGroupInput(session, "pk_cols", selected = character(0))
+      updateCheckboxGroupInput(session, "pk_cols_2", selected = character(0))
       updateCheckboxGroupInput(session, "lambda_z_cols", selected = character(0))
       updateCheckboxGroupInput(session, "log_pk_cols", selected = character(0))
     })
     
     observeEvent(input$reset_default_cols, {
-      updateCheckboxGroupInput(session, "subject_info_cols", selected = c("Subject", "Treatment"))
-      updateCheckboxGroupInput(session, "primary_pk_cols", selected = c("Cmax", "AUC0t", "AUC0inf"))
-      updateCheckboxGroupInput(session, "secondary_pk_cols", selected = c("Tmax", "t_half"))
-      updateCheckboxGroupInput(session, "lambda_z_cols", selected = c("lambda_z", "lambda_z_points"))
+      updateCheckboxGroupInput(session, "subject_info_cols", selected = c("Subject", "Treatment", "Period", "Sequence"))
+      updateCheckboxGroupInput(session, "pk_cols", selected = c("Cmax", "AUC0t"))
+      updateCheckboxGroupInput(session, "pk_cols_2", selected = character(0))
+      updateCheckboxGroupInput(session, "lambda_z_cols", selected = character(0))
       updateCheckboxGroupInput(session, "log_pk_cols", selected = c("lnCmax", "lnAUC0t", "lnAUC0inf"))
     })
     
-    # Dynamic UI for Primary PK Parameters - only show calculated parameters
-    output$primary_pk_cols_ui <- renderUI({
+    # Dynamic UI for PK Parameters - two-column layout
+    output$pk_cols_ui <- renderUI({
       req(results_available())
       
       tryCatch({
@@ -757,32 +752,53 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         } else if (!is.null(nca_res$parameters)) {
           data <- nca_res$parameters
         } else {
-          # Fallback if no valid data found
           stop("No valid NCA data found")
         }
         
-        # Standard primary parameters always available
-        primary_choices <- list(
+        # Build combined PK parameter choices
+        pk_choices <- list(
           "Cmax" = "Cmax",
           "AUC0-t" = "AUC0t",
-          "AUC0-inf" = "AUC0inf"
+          "AUC0-inf" = "AUC0inf",
+          "Tmax" = "Tmax",
+          "Half-life" = "t_half",
+          "Tlast" = "Tlast",
+          "Clast" = "Clast",
+          "AUC % Extrapolated" = "AUC_percent_extrap"
         )
         
         # Optional parameters - only show if calculated
         if ("pAUC" %in% names(data)) {
-          primary_choices[["pAUC"]] <- "pAUC"
+          pk_choices[["pAUC"]] <- "pAUC"
         }
         
-        checkboxGroupInput(
-          session$ns("primary_pk_cols"),
-          label = NULL,
-          choices = primary_choices,
-          selected = character(0)
+        # Split into two columns for compact layout
+        n <- length(pk_choices)
+        mid <- ceiling(n / 2)
+        col1_choices <- pk_choices[1:mid]
+        col2_choices <- pk_choices[(mid + 1):n]
+        
+        fluidRow(
+          column(6,
+            checkboxGroupInput(
+              session$ns("pk_cols"),
+              label = NULL,
+              choices = col1_choices,
+              selected = character(0)
+            )
+          ),
+          column(6,
+            checkboxGroupInput(
+              session$ns("pk_cols_2"),
+              label = NULL,
+              choices = col2_choices,
+              selected = character(0)
+            )
+          )
         )
       }, error = function(e) {
-        # Fallback to default choices
         checkboxGroupInput(
-          session$ns("primary_pk_cols"),
+          session$ns("pk_cols"),
           label = NULL,
           choices = list(
             "Cmax" = "Cmax",
@@ -790,57 +806,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             "AUC0-inf" = "AUC0inf"
           ),
           selected = character(0)
-        )
-      })
-    })
-    
-    # Dynamic UI for Secondary PK Parameters
-    output$secondary_pk_cols_ui <- renderUI({
-      req(results_available())
-      
-      tryCatch({
-        nca_res <- nca_results()
-        
-        # Use consistent data source - prioritize subject_data
-        if (is.data.frame(nca_res)) {
-          data <- nca_res
-        } else if (!is.null(nca_res$subject_data)) {
-          data <- nca_res$subject_data
-        } else if (!is.null(nca_res$parameters)) {
-          data <- nca_res$parameters
-        } else {
-          # Fallback if no valid data found
-          stop("No valid NCA data found")
-        }
-        
-        secondary_choices <- list(
-          "Tmax" = "Tmax",
-          "Half-life" = "t_half",
-          "Tlast" = "Tlast",
-          "Clast" = "Clast",
-          "CL/F" = "CL_F",
-          "Vd/F" = "Vd_F",
-          "MRT" = "MRT",
-          "AUC Extrap %" = "AUC_percent_extrap"
-        )
-        
-        # Add pAUC to secondary parameters if available
-        if ("pAUC" %in% names(data)) {
-          secondary_choices[["pAUC"]] <- "pAUC"
-        }
-        
-        checkboxGroupInput(
-          session$ns("secondary_pk_cols"),
-          label = NULL,
-          choices = secondary_choices,
-          selected = character(0)
-        )
-      }, error = function(e) {
-        checkboxGroupInput(
-          session$ns("secondary_pk_cols"),
-          label = NULL,
-          choices = list(),
-          selected = NULL
         )
       })
     })
@@ -880,9 +845,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         }
         
         # Optional log parameters - only if calculated
-        if ("lnTmax" %in% names(data)) {
-          log_choices[["ln(Tmax)"]] <- "lnTmax"
-        }
         if ("lnpAUC" %in% names(data)) {
           log_choices[["ln(pAUC)"]] <- "lnpAUC"
         }
@@ -1019,16 +981,15 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         # Get selected columns from new UI structure - prefer direct input over reactive values
         input_selected_cols <- c(
           input$subject_info_cols,
-          input$primary_pk_cols,
-          input$secondary_pk_cols,
+          input$pk_cols,
+          input$pk_cols_2,
           input$lambda_z_cols,
           input$log_pk_cols
         )
         
         reactive_selected_cols <- c(
           column_selection$subject_info,
-          column_selection$primary_pk,
-          column_selection$secondary_pk,
+          column_selection$pk,
           column_selection$lambda_z,
           column_selection$log_pk
         )
@@ -1100,7 +1061,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           "CL_F" = "CL/F",
           "Vd_F" = "Vd/F", 
           "MRT" = "MRT (h)",
-          "AUC_percent_extrap" = "AUC Extrap (%)",
+          "AUC_percent_extrap" = "AUC % Extrapolated",
+          "pAUC" = "pAUC",
+          "lnCmax" = "ln(Cₘₐₓ)",
+          "lnAUC0t" = "ln(AUC₀₋ₜ)",
+          "lnAUC0inf" = "ln(AUC₀₋∞)",
+          "lnpAUC" = "ln(pAUC)",
+          "lambda_z_points" = "λz Points",
+          "lambda_z_method" = "λz Method",
           "dose" = "Dose",
           "analysis_time" = "Analysis Time"
         )

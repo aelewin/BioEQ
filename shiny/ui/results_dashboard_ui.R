@@ -291,7 +291,7 @@ results_dashboard_ui <- function(id) {
             fluidRow(
               column(12,
                 div(class = "summary-card",
-                  h4("🎯 Bioequivalence Results & Conclusion"),
+                  h4("Bioequivalence Results & Conclusion"),
                   uiOutput(ns("be_conclusions"))
                 )
               )
@@ -300,7 +300,7 @@ results_dashboard_ui <- function(id) {
             fluidRow(
               column(12,
                 div(class = "summary-card",
-                  h4("� Missing Data Summary"),
+                  h4("Missing Data Summary"),
                   uiOutput(ns("missing_data_summary"))
                 )
               )
@@ -309,7 +309,7 @@ results_dashboard_ui <- function(id) {
             fluidRow(
               column(12,
                 div(class = "summary-card",
-                  h4("�📋 Carryover Assessment Summary"),
+                  h4("Carryover Assessment Summary"),
                   uiOutput(ns("carryover_summary"))
                 )
               )
@@ -399,10 +399,10 @@ results_dashboard_ui <- function(id) {
                 
                 # Comprehensive column selection UI
                 wellPanel(
-                  h4("📊 Select Columns to Display"),
+                  h4("Select Columns to Display"),
                   fluidRow(
                     column(2,
-                      h5("Subject Information"),
+                      h5("Subject Information", style = "text-align: center;"),
                       checkboxGroupInput(
                         ns("subject_info_cols"),
                         label = NULL,
@@ -416,16 +416,12 @@ results_dashboard_ui <- function(id) {
                         selected = character(0)
                       )
                     ),
-                    column(3,
-                      h5("Primary PK Parameters"),
-                      uiOutput(ns("primary_pk_cols_ui"))
+                    column(4,
+                      h5("PK Parameters", style = "text-align: center;"),
+                      uiOutput(ns("pk_cols_ui"))
                     ),
                     column(3,
-                      h5("Secondary PK Parameters"),
-                      uiOutput(ns("secondary_pk_cols_ui"))
-                    ),
-                    column(2,
-                      h5("Lambda-z Statistics"),
+                      h5("Terminal Phase Diagnostics", style = "text-align: center;"),
                       checkboxGroupInput(
                         ns("lambda_z_cols"),
                         label = NULL,
@@ -439,8 +435,8 @@ results_dashboard_ui <- function(id) {
                         selected = character(0)
                       )
                     ),
-                    column(2,
-                      h5("Log-Transformed Parameters"),
+                    column(3,
+                      h5("Log-Transformed Parameters", style = "text-align: center;"),
                       uiOutput(ns("log_pk_cols_ui"))
                     )
                   ),
@@ -460,7 +456,7 @@ results_dashboard_ui <- function(id) {
           ),
           
           # ANOVA Results Tab - Fifth tab
-          tabPanel("� ANOVA Results",
+          tabPanel(tags$span(icon("table"), " ANOVA Results"),
             value = "anova_results",
             br(),
             fluidRow(
