@@ -148,7 +148,7 @@ tagList(
                     "AIC (Akaike Information Criterion)" = "aic",
                     "TTT (Two-Times-Tmax)" = "ttt"
                   ),
-                  selected = "manual"
+                  selected = "ttt"
                 ),
                 
                 # Conditional input for manual point selection
@@ -168,31 +168,6 @@ tagList(
                   )
                 ),
 
-                h5(tags$strong("Missing Data Handling")),
-                tags$label("Middle Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
-                selectInput(
-                  "missing_data_middle",
-                  label = NULL,
-                  choices = list(
-                    "Exclude point" = "complete",
-                    "Linear interpolation" = "interpolate",
-                    "Last observation carried forward" = "locf"
-                  ),
-                  selected = "complete"
-                ),
-                tags$label("Terminal Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
-                selectInput(
-                  "missing_data_terminal",
-                  label = NULL,
-                  choices = list(
-                    "Exclude point" = "complete",
-                    "Last observation carried forward" = "locf"
-                  ),
-                  selected = "complete"
-                ),
-                helpText("BLQ values are always set to 0.")
-              ),
-              column(6,
                 h5(tags$strong("Optional PK Parameters")),
                 
                 div(style = "margin-left: 20px;",
@@ -232,9 +207,34 @@ tagList(
                       )
                     )
                   )
+                )
+              ),
+              column(6,
+                h5(tags$strong("Missing Data Handling")),
+                tags$label("Middle Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
+                selectInput(
+                  "missing_data_middle",
+                  label = NULL,
+                  choices = list(
+                    "Exclude point" = "complete",
+                    "Linear interpolation" = "interpolate",
+                    "Last observation carried forward" = "locf"
+                  ),
+                  selected = "complete"
                 ),
+                tags$label("Terminal Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
+                selectInput(
+                  "missing_data_terminal",
+                  label = NULL,
+                  choices = list(
+                    "Exclude point" = "complete",
+                    "Last observation carried forward" = "locf"
+                  ),
+                  selected = "complete"
+                ),
+                helpText("BLQ values are always set to 0."),
                 
-                # Carryover Detection section - aligned with Optional PK Parameters heading
+                # Carryover Detection section
                 div(
                   # Add conditional styling for parallel designs
                   style = "transition: all 0.3s ease;",
@@ -287,7 +287,7 @@ tagList(
                       checkboxInput(
                         "test_carryover",
                         "Perform carryover assessment",
-                        value = TRUE
+                        value = FALSE
                       ),
                       
                       conditionalPanel(

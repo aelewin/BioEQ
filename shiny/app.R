@@ -1022,7 +1022,6 @@ server <- function(input, output, session) {
   local({
     source("server/data_upload_server.R", local = environment())
     source("server/analysis_setup_server.R", local = environment()) 
-    source("server/results_server.R", local = environment())
     source("server/sample_size_server.R", local = environment())
   })
   
