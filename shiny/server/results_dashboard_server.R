@@ -2337,15 +2337,15 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       # Get available parameters from subject data
       data <- nca_res$subject_data
       
-      # Define parameter categories
-      primary_params <- c("Cmax", "AUC0t", "AUC0inf", "pAUC")
-      secondary_params <- c("Tmax", "t_half", "Tlast", "Clast", "CL_F", "Vd_F", "MRT", "AUC_percent_extrap")
-      log_params <- names(data)[grepl("^(log|ln)", names(data))]
+      # Define parameter categories (aligned with Subject Data tab)
+      primary_params <- c("Cmax", "AUC0t")
+      secondary_params <- c("AUC0inf", "pAUC", "t_half", "AUC_percent_extrap")
+      log_params <- c("lnCmax", "lnAUC0t", "lnAUC0inf")
       
       # Filter for available parameters
       available_primary <- intersect(primary_params, names(data))
       available_secondary <- intersect(secondary_params, names(data))
-      available_log <- log_params
+      available_log <- intersect(log_params, names(data))
       
       # Create grouped choices
       choices <- list()
