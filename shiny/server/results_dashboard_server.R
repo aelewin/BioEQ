@@ -17,7 +17,6 @@ log_param_to_display_name <- function(log_param_name) {
     "lnAUC0t" = "AUC0-t", 
     "lnAUC0inf" = "AUC0-∞",
     "lnAUClast" = "AUClast",
-    "lnAUC072" = "AUC0-72h",
     "lnpAUC" = "pAUC",
     "lnTmax" = "Tmax",
     "lnT12" = "T½",
@@ -701,9 +700,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         if ("pAUC" %in% available_cols) {
           primary_choices <- c(primary_choices, "pAUC")
         }
-        if ("AUC072" %in% available_cols) {
-          primary_choices <- c(primary_choices, "AUC072")
-        }
         updateCheckboxGroupInput(session, "primary_pk_cols", selected = primary_choices)
         
         # Secondary PK parameters (including pAUC if not in primary)
@@ -723,7 +719,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         log_choices <- c("lnCmax", "lnAUC0t", "lnAUC0inf")
         if ("lnTmax" %in% available_cols) log_choices <- c(log_choices, "lnTmax")
         if ("lnpAUC" %in% available_cols) log_choices <- c(log_choices, "lnpAUC")
-        if ("lnAUC072" %in% available_cols) log_choices <- c(log_choices, "lnAUC072")
         updateCheckboxGroupInput(session, "log_pk_cols", selected = log_choices)
         
       }, error = function(e) {
@@ -776,9 +771,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         # Optional parameters - only show if calculated
         if ("pAUC" %in% names(data)) {
           primary_choices[["pAUC"]] <- "pAUC"
-        }
-        if ("AUC072" %in% names(data)) {
-          primary_choices[["AUC0-72"]] <- "AUC072"
         }
         
         checkboxGroupInput(
@@ -894,9 +886,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         if ("lnpAUC" %in% names(data)) {
           log_choices[["ln(pAUC)"]] <- "lnpAUC"
         }
-        if ("lnAUC072" %in% names(data)) {
-          log_choices[["ln(AUC0-72)"]] <- "lnAUC072"
-        }
         
         checkboxGroupInput(
           session$ns("log_pk_cols"),
@@ -962,7 +951,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         }
         
         # Log-transformed parameters
-        log_params <- c("lnCmax", "lnAUC0t", "lnAUC0inf", "lnTmax", "lnpAUC", "lnAUC072")
+        log_params <- c("lnCmax", "lnAUC0t", "lnAUC0inf", "lnTmax", "lnpAUC")
         available_log <- intersect(log_params, available_params)
         if (length(available_log) > 0) {
           anova_choices[["--- Log-Transformed Parameters ---"]] <- ""
@@ -973,7 +962,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               "lnAUC0inf" = "ln(AUC0-inf)",
               "lnTmax" = "ln(Tmax)",
               "lnpAUC" = "ln(pAUC)",
-              "lnAUC072" = "ln(AUC0-72)",
               param
             )
             anova_choices[[display_name]] <- param
@@ -981,16 +969,12 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         }
         
         # Secondary parameters
-        secondary_params <- c("Tmax", "pAUC", "AUC072")
+        secondary_params <- c("Tmax", "pAUC")
         available_secondary <- intersect(secondary_params, available_params)
         if (length(available_secondary) > 0) {
           anova_choices[["--- Secondary Parameters ---"]] <- ""
           for (param in available_secondary) {
-            display_name <- switch(param,
-              "AUC072" = "AUC0-72",
-              param
-            )
-            anova_choices[[display_name]] <- param
+            anova_choices[[param]] <- param
           }
         }
         

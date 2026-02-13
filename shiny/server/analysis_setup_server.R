@@ -302,13 +302,6 @@ output$settings_summary <- renderUI({
       optional_params <- c(optional_params, "pAUC")
     }
     
-    # Handle long half-life drug option
-    if (isTRUE(input$truncated_auc_72h)) {
-      # For now, keep AUC0inf but note this feature needs implementation
-      # TODO: Implement AUC72h and lnAUC72h calculation in NCA functions
-      cat("⚠️ AUC72h feature selected but not yet implemented. Using AUC0inf.\n")
-    }
-    
     all_pk_params <- c(standard_params, optional_params)
     pk_params <- length(all_pk_params)
   } else {
@@ -483,13 +476,6 @@ observeEvent(input$run_analysis, {
   # Add pAUC if selected with time points
   if (isTRUE(input$calculate_pAUC)) {
     optional_params <- c(optional_params, "pAUC")
-  }
-  
-  # Handle long half-life drug option
-  if (isTRUE(input$truncated_auc_72h)) {
-    # For now, keep AUC0inf but note this feature needs implementation
-    # TODO: Implement AUC72h and lnAUC72h calculation in NCA functions
-    cat("⚠️ AUC72h feature selected but not yet implemented. Using AUC0inf.\n")
   }
   
   all_pk_params <- c(standard_params, optional_params)
@@ -810,8 +796,7 @@ observeEvent(input$run_analysis, {
         "AUC0t" = c("AUC0t", "lnAUC0t"),
         "AUC0inf" = c("AUC0inf", "lnAUC0inf"),
         "Tmax" = c("Tmax", "lnTmax"),  # Now includes log-transformed Tmax
-        "pAUC" = c("pAUC", "lnpAUC"),  # pAUC and its log version
-        "AUC072" = c("AUC072", "lnAUC072")  # AUC072 and its log version
+        "pAUC" = c("pAUC", "lnpAUC")  # pAUC and its log version
       )
       
       # Determine which parameters to analyze based on user selection and availability
@@ -1123,8 +1108,7 @@ observeEvent(input$run_analysis, {
         "AUC0t" = c("AUC0t", "lnAUC0t"),
         "AUC0inf" = c("AUC0inf", "lnAUC0inf"),
         "Tmax" = c("Tmax", "lnTmax"),
-        "pAUC" = c("pAUC", "lnpAUC"),
-        "AUC072" = c("AUC072", "lnAUC072")
+        "pAUC" = c("pAUC", "lnpAUC")
       )
       
       # Expand selected parameters to include their log-transformed versions

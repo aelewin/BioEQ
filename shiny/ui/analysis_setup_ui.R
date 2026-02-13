@@ -235,19 +235,6 @@ tagList(
                         )
                       )
                     )
-                  ),
-                  
-                  # Special case for long half-life drugs
-                  div(style = "margin-top: 20px; padding-top: 15px; border-top: 1px solid #dee2e6;",
-                    checkboxInput(
-                      "truncated_auc_72h",
-                      "Use AUC(0-72h) for long half-life drugs",
-                      value = FALSE
-                    ),
-                    conditionalPanel(
-                      condition = "input.truncated_auc_72h",
-                      div(style = "margin-left: 20px; color: #666; font-size: 0.9em;")
-                    )
                   )
                 ),
                 
@@ -456,7 +443,7 @@ tagList(
             column(6,
               h5("PK Parameters for Analysis",
                  help_icon("pk_parameters", "Select which pharmacokinetic parameters to include in the ANOVA analysis. Both original and log-transformed versions will be analyzed automatically.", 
-                          "PK Parameter Selection", "Choose the pharmacokinetic parameters you want to analyze. Primary parameters (Cmax, AUC0-t, AUC0-inf) are pre-selected as they are typically required for bioequivalence assessment. The system will automatically include both the original parameter and its log-transformed version (e.g., selecting Cmax will analyze both Cmax and lnCmax).")
+                          "PK Parameter Selection", "Choose the pharmacokinetic parameters you want to analyze. Primary parameters (Cmax, AUC0-t) are pre-selected as they are typically required for bioequivalence assessment. AUC0-inf and other secondary parameters can be added as needed. The system will automatically include both the original parameter and its log-transformed version (e.g., selecting Cmax will analyze both Cmax and lnCmax).")
               ),
               
               fluidRow(
@@ -467,10 +454,9 @@ tagList(
                     label = NULL,
                     choices = list(
                       "Cmax" = "Cmax",
-                      "AUC0-t" = "AUC0t",
-                      "AUC0-inf" = "AUC0inf"
+                      "AUC0-t" = "AUC0t"
                     ),
-                    selected = c("Cmax", "AUC0t", "AUC0inf")
+                    selected = c("Cmax", "AUC0t")
                   )
                 ),
                 column(6,
@@ -479,9 +465,9 @@ tagList(
                     "secondary_pk_params",
                     label = NULL,
                     choices = list(
-                      "Tmax" = "Tmax",
+                      "AUC0-inf" = "AUC0inf",
                       "pAUC" = "pAUC",
-                      "AUC0-72" = "AUC072"
+                      "Tmax" = "Tmax"
                     ),
                     selected = NULL
                   )

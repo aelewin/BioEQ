@@ -323,67 +323,6 @@ estimate_lambda_z <- function(time, conc, method = "aic", n_points = 3, tmax = N
   ))
 }
 
-#' Calculate AUC to a specific time point
-#'
-#' @param time Vector of time points
-#' @param conc Vector of concentrations  
-#' @param target_time Target time for AUC calculation
-#' @param method Method for AUC calculation
-#' @return List with AUC value and method used
-#' @export
-calculate_auc_to_time <- function(time, conc, target_time, method = "mixed") {
-  # Remove NA values and sort by time
-  valid_idx <- !is.na(time) & !is.na(conc) & conc >= 0
-  time <- time[valid_idx]
-  conc <- conc[valid_idx]
-  
-  if (length(time) < 2) {
-    return(list(auc = NA, method = "insufficient_data"))
-  }
-  
-  # Sort by time
-  order_idx <- order(time)
-  time <- time[order_idx]
-  conc <- conc[order_idx]
-  
-  # Find the index for target_time
-  if (target_time <= max(time)) {
-    # Target time is within data range
-    if (target_time %in% time) {
-      # Exact time point exists
-      target_idx <- which(time == target_time)
-      return(list(
-        auc = calculate_auc_linear(time[1:target_idx], conc[1:target_idx], method = method),
-        method = paste0(method, "_exact")
-      ))
-    } else {
-      # Need to interpolate
-      upper_idx <- which(time > target_time)[1]
-      if (is.na(upper_idx) || upper_idx == 1) {
-        return(list(auc = NA, method = "interpolation_failed"))
-      }
-      
-      lower_idx <- upper_idx - 1
-      
-      # Linear interpolation for concentration at target_time
-      time_diff <- time[upper_idx] - time[lower_idx]
-      conc_diff <- conc[upper_idx] - conc[lower_idx]
-      target_conc <- conc[lower_idx] + (target_time - time[lower_idx]) * conc_diff / time_diff
-      
-      # Calculate AUC to interpolated point
-      time_subset <- c(time[1:lower_idx], target_time)
-      conc_subset <- c(conc[1:lower_idx], target_conc)
-      
-      return(list(
-        auc = calculate_auc_linear(time_subset, conc_subset, method = method),
-        method = paste0(method, "_interpolated")
-      ))
-    }
-  } else {
-    # Target time is beyond data range
-    return(list(auc = NA, method = "beyond_data_range"))
-  }
-}
 
 #' Calculate Pharmacokinetic Parameters
 #'
@@ -446,12 +385,6 @@ calculate_pk_parameters <- function(time, conc, dose = 1, lambda_z_method = "man
     pk_params$pAUC_start <- pAUC_start
     pk_params$pAUC_end <- pAUC_end
   }
-  
-  # Calculate AUC0-72 for long half-life drugs
-  # Always calculate this as it may be needed for ANOVA
-  auc072_result <- calculate_auc_to_time(time_clean, conc_clean, target_time = 72, method = auc_method)
-  pk_params$AUC072 <- auc072_result$auc
-  pk_params$AUC072_method <- auc072_result$method
   
   # Lambda_z estimation
   # Find Tmax for TTT method
@@ -569,13 +502,6 @@ calculate_pk_parameters <- function(time, conc, dose = 1, lambda_z_method = "man
     pk_params$lnpAUC <- log(pk_params$pAUC)
   } else {
     pk_params$lnpAUC <- NA
-  }
-  
-  # lnAUC072 - Always calculate since AUC072 is always calculated
-  if (!is.na(pk_params$AUC072) && pk_params$AUC072 > 0) {
-    pk_params$lnAUC072 <- log(pk_params$AUC072)
-  } else {
-    pk_params$lnAUC072 <- NA
   }
   
   return(pk_params)

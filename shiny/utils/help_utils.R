@@ -209,7 +209,7 @@ help_texts <- list(
       div(
         style = "margin-top: 10px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
         tags$strong("Long Half-life Drugs:"),
-        " When AUC is truncated at 72 hours, AUC(0-72h) becomes the primary parameter and AUC(0-inf), AUC(0-t)/AUC(0-inf), kel, and t1/2 are not required."
+        " For drugs with long half-lives, AUC0-t automatically reflects the last sampling time (e.g., AUC0-72h if sampling ends at 72 hours). AUC0-inf may not be reliably estimated and can be excluded from BE assessment."
       ),
       
       div(
