@@ -1041,105 +1041,575 @@ server <- function(input, output, session) {
                uploaded_data = reactive(values$uploaded_data),
                validation_result = reactive(values$validation_result))
   
-  # Exports & Reports server logic
-  # Results availability check for exports view
+  # =======================================================================
+  # EXPORTS & REPORTS SERVER LOGIC
+  # =======================================================================
+  
+  # Gate: show exports when at least NCA or BE results are available
+  output$export_data_available <- reactive({
+    !is.null(values$nca_results) || !is.null(values$be_results)
+  })
+  outputOptions(output, "export_data_available", suspendWhenHidden = FALSE)
+  
+  # Also keep results_available for legacy compatibility with results dashboard
   output$results_available <- reactive({
     !is.null(values$be_results) && !is.null(values$nca_results)
   })
   outputOptions(output, "results_available", suspendWhenHidden = FALSE)
   
-  # Download handlers for data exports
-  output$download_pk_data <- downloadHandler(
-    filename = function() {
-      paste0("pk_results_", Sys.Date(), ".csv")
-    },
+  # Helper: write CSV with optional metadata header
+  write_export_csv <- function(df, file, metadata_lines = NULL) {
+    include_meta <- isTRUE(input$export_include_metadata) && !is.null(metadata_lines)
+    if (include_meta) {
+      meta_text <- paste0("# ", metadata_lines)
+      con <- file(file, "w")
+      writeLines(meta_text, con)
+      writeLines("", con)  # blank separator line
+      close(con)
+      # Append CSV data
+      write.table(df, file, sep = ",", row.names = FALSE, col.names = TRUE,
+                  append = TRUE, quote = TRUE)
+    } else {
+      write.csv(df, file, row.names = FALSE)
+    }
+  }
+  
+  # Helper: standard metadata lines
+  build_metadata <- function(export_type) {
+    design <- values$be_results$design %||% values$analysis_config$detected_design %||% "Unknown"
+    n_subj <- values$be_results$n_subjects %||% "Unknown"
+    alpha <- values$analysis_config$alpha_level %||% 0.05
+    c(
+      paste0("BioEQ Export: ", export_type),
+      paste0("Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+      paste0("Study Design: ", design),
+      paste0("N Subjects: ", n_subj),
+      paste0("Alpha: ", alpha),
+      paste0("Confidence Level: ", round((1 - alpha * 2) * 100), "%")
+    )
+  }
+  
+  # ── 1. NCA Subject-Level Data ──
+  output$download_nca_subject_data <- downloadHandler(
+    filename = function() paste0("nca_subject_data_", Sys.Date(), ".csv"),
     content = function(file) {
       req(values$nca_results)
-      if (is.data.frame(values$nca_results)) {
-        write.csv(values$nca_results, file, row.names = FALSE)
-      } else if (!is.null(values$nca_results$subject_data)) {
-        write.csv(values$nca_results$subject_data, file, row.names = FALSE)
-      }
-      showNotification("PK data exported successfully!", type = "message")
+      nca <- values$nca_results
+      df <- if (is.data.frame(nca)) nca else nca$subject_data %||% nca$parameters
+      req(df)
+      meta <- build_metadata("NCA Subject-Level Data")
+      auc_method <- values$nca_results$auc_method %||% "Unknown"
+      lz_method <- values$nca_results$lambda_z_method %||% "Unknown"
+      meta <- c(meta, paste0("AUC Method: ", auc_method), paste0("Lambda_z Method: ", lz_method))
+      write_export_csv(df, file, meta)
+      showNotification("NCA subject-level data exported.", type = "message")
     }
   )
   
-  output$download_anova_data <- downloadHandler(
-    filename = function() {
-      paste0("anova_results_", Sys.Date(), ".csv")
-    },
+  # ── 2. NCA Summary Statistics ──
+  output$download_nca_summary <- downloadHandler(
+    filename = function() paste0("nca_summary_", Sys.Date(), ".csv"),
+    content = function(file) {
+      req(values$nca_results)
+      nca <- values$nca_results
+      
+      # Use pre-computed summary if available
+      summary_df <- nca$summary
+      
+      # Fallback: compute from subject_data
+      if (is.null(summary_df)) {
+        sd <- if (is.data.frame(nca)) nca else nca$subject_data
+        req(sd)
+        
+        pk_cols <- setdiff(names(sd), c("Subject", "Treatment", "Period", "Sequence",
+                                        "Time", "Concentration", "Group"))
+        pk_cols <- pk_cols[sapply(pk_cols, function(col) is.numeric(sd[[col]]))]
+        
+        rows <- lapply(pk_cols, function(param) {
+          test_vals <- sd[[param]][sd$Treatment %in% c("T", "Test")]
+          ref_vals <- sd[[param]][sd$Treatment %in% c("R", "Reference")]
+          test_vals <- test_vals[!is.na(test_vals)]
+          ref_vals <- ref_vals[!is.na(ref_vals)]
+          
+          test_mean <- if (length(test_vals) > 0) mean(test_vals) else NA
+          ref_mean <- if (length(ref_vals) > 0) mean(ref_vals) else NA
+          test_sd <- if (length(test_vals) > 1) sd(test_vals) else NA
+          ref_sd <- if (length(ref_vals) > 1) sd(ref_vals) else NA
+          test_geo <- if (length(test_vals) > 0 && all(test_vals > 0)) exp(mean(log(test_vals))) else NA
+          ref_geo <- if (length(ref_vals) > 0 && all(ref_vals > 0)) exp(mean(log(ref_vals))) else NA
+          ratio <- if (!is.na(test_geo) && !is.na(ref_geo) && ref_geo > 0) test_geo / ref_geo * 100 else NA
+          all_vals <- c(test_vals, ref_vals)
+          cv_pct <- if (length(all_vals) > 1 && mean(all_vals) > 0) sd(all_vals) / mean(all_vals) * 100 else NA
+          
+          data.frame(
+            Parameter = param,
+            N_Test = length(test_vals),
+            N_Reference = length(ref_vals),
+            Test_Mean = round(test_mean, 6),
+            Test_SD = round(test_sd, 6),
+            Test_GeoMean = round(test_geo, 6),
+            Reference_Mean = round(ref_mean, 6),
+            Reference_SD = round(ref_sd, 6),
+            Reference_GeoMean = round(ref_geo, 6),
+            Ratio_Percent = round(ratio, 4),
+            CV_Percent = round(cv_pct, 2),
+            stringsAsFactors = FALSE
+          )
+        })
+        summary_df <- do.call(rbind, rows)
+      }
+      
+      meta <- build_metadata("NCA Summary Statistics")
+      write_export_csv(summary_df, file, meta)
+      showNotification("NCA summary statistics exported.", type = "message")
+    }
+  )
+  
+  # ── 3. ANOVA Results (SAS/Phoenix-style stacked tables) ──
+  output$download_anova_results <- downloadHandler(
+    filename = function() paste0("anova_results_", Sys.Date(), ".csv"),
     content = function(file) {
       req(values$be_results)
-      if (!is.null(values$be_results$anova_results)) {
-        # Convert ANOVA results to a simple data frame
-        anova_summary <- data.frame(
-          Parameter = names(values$be_results$anova_results$anova_results),
-          Analysis_Complete = "Yes",
-          Timestamp = Sys.time()
-        )
-        write.csv(anova_summary, file, row.names = FALSE)
+      be_res <- values$be_results
+      
+      all_rows <- list()
+      
+      # ── Case A: Parallel design (no ANOVA, t-test results) ──
+      if (identical(be_res$design, "parallel") || !is.null(be_res$statistical_results)) {
+        for (param in names(be_res$statistical_results)) {
+          st <- be_res$statistical_results[[param]]
+          ci <- be_res$confidence_intervals[[param]]
+          all_rows[[length(all_rows) + 1]] <- data.frame(
+            Parameter = param,
+            Table_Type = "Parallel_T_Test",
+            Source = "Treatment",
+            DF = st$degrees_freedom %||% ci$df %||% NA,
+            Sum_Sq = NA_real_,
+            Mean_Sq = NA_real_,
+            F_Value = NA_real_,
+            t_Value = ci$t_statistic %||% NA,
+            Pr = ci$p_value %||% st$p_value %||% NA,
+            Method = st$method %||% "t-test",
+            N_Test = st$n_test %||% NA,
+            N_Reference = st$n_ref %||% NA,
+            Residual_MSE = NA_real_,
+            Residual_DF = NA_real_,
+            Treatment_Coef = ci$log_difference %||% NA,
+            Treatment_SE = ci$standard_error %||% NA,
+            Treatment_Pval = ci$p_value %||% st$p_value %||% NA,
+            CV_Percent = NA_real_,
+            R_Squared = NA_real_,
+            stringsAsFactors = FALSE
+          )
+        }
       }
-      showNotification("ANOVA data exported successfully!", type = "message")
+      
+      # ── Case B: Has ANOVA results (crossover, RSABE, ABEL) ──
+      if (!is.null(be_res$anova_results) && !is.null(be_res$anova_results$anova_results)) {
+        anova_data <- be_res$anova_results$anova_results
+        
+        for (param in names(anova_data)) {
+          pr <- anova_data[[param]]
+          if ("error" %in% names(pr)) next
+          
+          # ── ABEL (replicateBE) ──
+          if (!is.null(pr$replicatebe_output)) {
+            rbe <- pr$replicatebe_output
+            all_rows[[length(all_rows) + 1]] <- data.frame(
+              Parameter = param,
+              Table_Type = "ABEL_Summary",
+              Source = "replicateBE",
+              DF = rbe$DF,
+              Sum_Sq = NA_real_,
+              Mean_Sq = NA_real_,
+              F_Value = NA_real_,
+              t_Value = NA_real_,
+              Pr = NA_real_,
+              Method = paste0("Method ", rbe$Method),
+              N_Test = rbe$nTT,
+              N_Reference = rbe$nRR,
+              Residual_MSE = NA_real_,
+              Residual_DF = rbe$DF,
+              Treatment_Coef = NA_real_,
+              Treatment_SE = NA_real_,
+              Treatment_Pval = NA_real_,
+              CV_Percent = NA_real_,
+              R_Squared = NA_real_,
+              stringsAsFactors = FALSE
+            )
+            # Add variability rows
+            all_rows[[length(all_rows) + 1]] <- data.frame(
+              Parameter = param, Table_Type = "ABEL_Variability",
+              Source = "CVwR", DF = NA, Sum_Sq = NA, Mean_Sq = NA,
+              F_Value = NA, t_Value = NA, Pr = rbe$`CVwR(%)`,
+              Method = NA, N_Test = NA, N_Reference = NA,
+              Residual_MSE = NA, Residual_DF = NA,
+              Treatment_Coef = NA, Treatment_SE = NA, Treatment_Pval = NA,
+              CV_Percent = rbe$`CVwR(%)`, R_Squared = NA,
+              stringsAsFactors = FALSE
+            )
+            all_rows[[length(all_rows) + 1]] <- data.frame(
+              Parameter = param, Table_Type = "ABEL_Variability",
+              Source = "CVwT", DF = NA, Sum_Sq = NA, Mean_Sq = NA,
+              F_Value = NA, t_Value = NA, Pr = rbe$`CVwT(%)`,
+              Method = NA, N_Test = NA, N_Reference = NA,
+              Residual_MSE = NA, Residual_DF = NA,
+              Treatment_Coef = NA, Treatment_SE = NA, Treatment_Pval = NA,
+              CV_Percent = rbe$`CVwT(%)`, R_Squared = NA,
+              stringsAsFactors = FALSE
+            )
+            all_rows[[length(all_rows) + 1]] <- data.frame(
+              Parameter = param, Table_Type = "ABEL_Variability",
+              Source = "swR", DF = NA, Sum_Sq = rbe$swR, Mean_Sq = NA,
+              F_Value = NA, t_Value = NA, Pr = NA,
+              Method = NA, N_Test = NA, N_Reference = NA,
+              Residual_MSE = NA, Residual_DF = NA,
+              Treatment_Coef = NA, Treatment_SE = NA, Treatment_Pval = NA,
+              CV_Percent = NA, R_Squared = NA,
+              stringsAsFactors = FALSE
+            )
+            all_rows[[length(all_rows) + 1]] <- data.frame(
+              Parameter = param, Table_Type = "ABEL_Variability",
+              Source = "swT", DF = NA, Sum_Sq = rbe$swT, Mean_Sq = NA,
+              F_Value = NA, t_Value = NA, Pr = NA,
+              Method = NA, N_Test = NA, N_Reference = NA,
+              Residual_MSE = NA, Residual_DF = NA,
+              Treatment_Coef = NA, Treatment_SE = NA, Treatment_Pval = NA,
+              CV_Percent = NA, R_Squared = NA,
+              stringsAsFactors = FALSE
+            )
+            next
+          }
+          
+          # ── RSABE ──
+          if (!is.null(pr$s2_wR)) {
+            # Model summary row
+            all_rows[[length(all_rows) + 1]] <- data.frame(
+              Parameter = param,
+              Table_Type = "RSABE_Model_Summary",
+              Source = "Model",
+              DF = pr$residual_df,
+              Sum_Sq = NA_real_,
+              Mean_Sq = pr$residual_mse,
+              F_Value = NA_real_,
+              t_Value = NA_real_,
+              Pr = NA_real_,
+              Method = if (pr$anova_method == "fixed") "Fixed Effects" else "Mixed Effects (nlme)",
+              N_Test = NA_real_,
+              N_Reference = NA_real_,
+              Residual_MSE = pr$residual_mse,
+              Residual_DF = pr$residual_df,
+              Treatment_Coef = pr$treatment_coef,
+              Treatment_SE = pr$treatment_se,
+              Treatment_Pval = NA_real_,
+              CV_Percent = pr$cv_wr_percent,
+              R_Squared = NA_real_,
+              stringsAsFactors = FALSE
+            )
+            
+            # RSABE ANOVA table rows (from anova(model))
+            if (!is.null(pr$anova)) {
+              anova_df <- tryCatch(as.data.frame(pr$anova), error = function(e) NULL)
+              if (!is.null(anova_df) && nrow(anova_df) > 0) {
+                for (i in 1:nrow(anova_df)) {
+                  row_source <- rownames(anova_df)[i]
+                  all_rows[[length(all_rows) + 1]] <- data.frame(
+                    Parameter = param,
+                    Table_Type = "RSABE_ANOVA",
+                    Source = row_source,
+                    DF = if ("numDF" %in% names(anova_df)) anova_df[i, "numDF"] else if ("Df" %in% names(anova_df)) anova_df[i, "Df"] else NA,
+                    Sum_Sq = if ("Sum Sq" %in% names(anova_df)) anova_df[i, "Sum Sq"] else NA,
+                    Mean_Sq = if ("Mean Sq" %in% names(anova_df)) anova_df[i, "Mean Sq"] else NA,
+                    F_Value = if ("F-value" %in% names(anova_df)) anova_df[i, "F-value"] else if ("F value" %in% names(anova_df)) anova_df[i, "F value"] else NA,
+                    t_Value = NA_real_,
+                    Pr = if ("p-value" %in% names(anova_df)) anova_df[i, "p-value"] else if ("Pr(>F)" %in% names(anova_df)) anova_df[i, "Pr(>F)"] else NA,
+                    Method = NA_character_,
+                    N_Test = NA_real_, N_Reference = NA_real_,
+                    Residual_MSE = NA_real_, Residual_DF = if ("denDF" %in% names(anova_df)) anova_df[i, "denDF"] else if ("DenDF" %in% names(anova_df)) anova_df[i, "DenDF"] else NA,
+                    Treatment_Coef = NA_real_, Treatment_SE = NA_real_, Treatment_Pval = NA_real_,
+                    CV_Percent = NA_real_, R_Squared = NA_real_,
+                    stringsAsFactors = FALSE
+                  )
+                }
+              }
+            }
+            
+            # ISC variance rows
+            all_rows[[length(all_rows) + 1]] <- data.frame(
+              Parameter = param, Table_Type = "RSABE_Variance",
+              Source = "s2_wR", DF = pr$df_wR, Sum_Sq = pr$s2_wR, Mean_Sq = NA,
+              F_Value = NA, t_Value = NA, Pr = NA, Method = NA,
+              N_Test = NA, N_Reference = NA, Residual_MSE = NA, Residual_DF = NA,
+              Treatment_Coef = NA, Treatment_SE = NA, Treatment_Pval = NA,
+              CV_Percent = pr$cv_wr_percent, R_Squared = NA,
+              stringsAsFactors = FALSE
+            )
+            if (!is.na(pr$s2_wT %||% NA)) {
+              all_rows[[length(all_rows) + 1]] <- data.frame(
+                Parameter = param, Table_Type = "RSABE_Variance",
+                Source = "s2_wT", DF = pr$df_wT, Sum_Sq = pr$s2_wT, Mean_Sq = NA,
+                F_Value = NA, t_Value = NA, Pr = NA, Method = NA,
+                N_Test = NA, N_Reference = NA, Residual_MSE = NA, Residual_DF = NA,
+                Treatment_Coef = NA, Treatment_SE = NA, Treatment_Pval = NA,
+                CV_Percent = pr$cv_wt_percent %||% NA, R_Squared = NA,
+                stringsAsFactors = FALSE
+              )
+            }
+            next
+          }
+          
+          # ── ABE Crossover (standard ANOVA) ──
+          anova_method_label <- if ((pr$anova_method %||% "fixed") == "fixed") "Fixed Effects" else "Mixed Effects (nlme)"
+          
+          # Model summary row
+          all_rows[[length(all_rows) + 1]] <- data.frame(
+            Parameter = param,
+            Table_Type = "Model_Summary",
+            Source = "Model",
+            DF = pr$residual_df,
+            Sum_Sq = NA_real_,
+            Mean_Sq = pr$residual_mse,
+            F_Value = NA_real_,
+            t_Value = NA_real_,
+            Pr = NA_real_,
+            Method = anova_method_label,
+            N_Test = NA_real_,
+            N_Reference = NA_real_,
+            Residual_MSE = pr$residual_mse,
+            Residual_DF = pr$residual_df,
+            Treatment_Coef = pr$treatment_coef,
+            Treatment_SE = pr$treatment_se,
+            Treatment_Pval = pr$treatment_pval %||% NA,
+            CV_Percent = pr$cv_percent %||% NA,
+            R_Squared = pr$r_squared %||% NA,
+            stringsAsFactors = FALSE
+          )
+          
+          # Type I SS rows
+          if (!is.null(pr$anova)) {
+            type1 <- tryCatch(as.data.frame(pr$anova), error = function(e) NULL)
+            if (!is.null(type1) && nrow(type1) > 0) {
+              for (i in 1:nrow(type1)) {
+                all_rows[[length(all_rows) + 1]] <- data.frame(
+                  Parameter = param,
+                  Table_Type = "Type_I_SS",
+                  Source = rownames(type1)[i],
+                  DF = if ("Df" %in% names(type1)) type1[i, "Df"] else NA,
+                  Sum_Sq = if ("Sum Sq" %in% names(type1)) type1[i, "Sum Sq"] else NA,
+                  Mean_Sq = if ("Mean Sq" %in% names(type1)) type1[i, "Mean Sq"] else NA,
+                  F_Value = if ("F value" %in% names(type1)) type1[i, "F value"] else NA,
+                  t_Value = NA_real_,
+                  Pr = if ("Pr(>F)" %in% names(type1)) type1[i, "Pr(>F)"] else NA,
+                  Method = NA_character_,
+                  N_Test = NA_real_, N_Reference = NA_real_,
+                  Residual_MSE = NA_real_, Residual_DF = NA_real_,
+                  Treatment_Coef = NA_real_, Treatment_SE = NA_real_, Treatment_Pval = NA_real_,
+                  CV_Percent = NA_real_, R_Squared = NA_real_,
+                  stringsAsFactors = FALSE
+                )
+              }
+            }
+          }
+          
+          # Type III SS rows
+          if (!is.null(pr$type3_ss)) {
+            type3 <- tryCatch(as.data.frame(pr$type3_ss), error = function(e) NULL)
+            if (!is.null(type3) && nrow(type3) > 0) {
+              for (i in 1:nrow(type3)) {
+                all_rows[[length(all_rows) + 1]] <- data.frame(
+                  Parameter = param,
+                  Table_Type = "Type_III_SS",
+                  Source = rownames(type3)[i],
+                  DF = if ("Df" %in% names(type3)) type3[i, "Df"] else NA,
+                  Sum_Sq = if ("Sum Sq" %in% names(type3)) type3[i, "Sum Sq"] else NA,
+                  Mean_Sq = if ("Mean Sq" %in% names(type3)) type3[i, "Mean Sq"] else NA,
+                  F_Value = if ("F value" %in% names(type3)) type3[i, "F value"] else NA,
+                  t_Value = NA_real_,
+                  Pr = if ("Pr(>F)" %in% names(type3)) type3[i, "Pr(>F)"] else NA,
+                  Method = NA_character_,
+                  N_Test = NA_real_, N_Reference = NA_real_,
+                  Residual_MSE = NA_real_, Residual_DF = NA_real_,
+                  Treatment_Coef = NA_real_, Treatment_SE = NA_real_, Treatment_Pval = NA_real_,
+                  CV_Percent = NA_real_, R_Squared = NA_real_,
+                  stringsAsFactors = FALSE
+                )
+              }
+            }
+          }
+          
+          # Comprehensive ANOVA (Model/Error/Corrected Total)
+          if (!is.null(pr$anova_comprehensive)) {
+            comp <- tryCatch(as.data.frame(pr$anova_comprehensive), error = function(e) NULL)
+            if (!is.null(comp) && nrow(comp) > 0) {
+              for (i in 1:nrow(comp)) {
+                src <- if ("Source" %in% names(comp)) comp$Source[i] else rownames(comp)[i]
+                all_rows[[length(all_rows) + 1]] <- data.frame(
+                  Parameter = param,
+                  Table_Type = "Comprehensive",
+                  Source = src,
+                  DF = if ("Df" %in% names(comp)) comp[i, "Df"] else NA,
+                  Sum_Sq = if ("Sum Sq" %in% names(comp)) comp[i, "Sum Sq"] else NA,
+                  Mean_Sq = if ("Mean Sq" %in% names(comp)) comp[i, "Mean Sq"] else NA,
+                  F_Value = if ("F value" %in% names(comp)) comp[i, "F value"] else NA,
+                  t_Value = NA_real_,
+                  Pr = if ("Pr(>F)" %in% names(comp)) comp[i, "Pr(>F)"] else NA,
+                  Method = NA_character_,
+                  N_Test = NA_real_, N_Reference = NA_real_,
+                  Residual_MSE = NA_real_, Residual_DF = NA_real_,
+                  Treatment_Coef = NA_real_, Treatment_SE = NA_real_, Treatment_Pval = NA_real_,
+                  CV_Percent = NA_real_, R_Squared = NA_real_,
+                  stringsAsFactors = FALSE
+                )
+              }
+            }
+          }
+        }
+      }
+      
+      if (length(all_rows) == 0) {
+        # Fallback: no ANOVA data available
+        all_rows[[1]] <- data.frame(
+          Parameter = "No ANOVA results", Table_Type = NA, Source = NA,
+          DF = NA, Sum_Sq = NA, Mean_Sq = NA, F_Value = NA, t_Value = NA, Pr = NA,
+          Method = NA, N_Test = NA, N_Reference = NA,
+          Residual_MSE = NA, Residual_DF = NA,
+          Treatment_Coef = NA, Treatment_SE = NA, Treatment_Pval = NA,
+          CV_Percent = NA, R_Squared = NA,
+          stringsAsFactors = FALSE
+        )
+      }
+      
+      result_df <- do.call(rbind, all_rows)
+      meta <- build_metadata("ANOVA Results (SAS-Style)")
+      be_type <- be_res$analysis_type %||% "ABE"
+      meta <- c(meta, paste0("Analysis Type: ", be_type))
+      write_export_csv(result_df, file, meta)
+      showNotification("ANOVA results exported.", type = "message")
     }
   )
   
-  output$download_subject_data <- downloadHandler(
-    filename = function() {
-      paste0("subject_data_", Sys.Date(), ".csv")
-    },
+  # ── 4. BE Assessment Results ──
+  output$download_be_results <- downloadHandler(
+    filename = function() paste0("be_results_", Sys.Date(), ".csv"),
+    content = function(file) {
+      req(values$be_results)
+      be_res <- values$be_results
+      req(be_res$confidence_intervals)
+      
+      ci_results <- be_res$confidence_intervals
+      be_conclusions <- be_res$be_conclusions %||% list()
+      analysis_type <- be_res$analysis_type %||% "ABE"
+      
+      rows <- lapply(names(ci_results), function(param) {
+        ci <- ci_results[[param]]
+        if (is.null(ci) || is.na(ci$point_estimate %||% NA)) return(NULL)
+        
+        is_be <- be_conclusions[[param]]
+        
+        # Limits
+        lower_limit <- 80
+        upper_limit <- 125
+        limit_type <- "fixed"
+        if (!is.null(ci$limits_used)) {
+          lower_limit <- ci$limits_used$lower %||% 80
+          upper_limit <- ci$limits_used$upper %||% 125
+          limit_type <- ci$limits_used$type %||% "fixed"
+        }
+        
+        base_row <- data.frame(
+          Parameter = param,
+          Analysis_Type = analysis_type,
+          Point_Estimate_Pct = round(ci$point_estimate, 4),
+          CI_Lower_Pct = round(ci$ci_lower, 4),
+          CI_Upper_Pct = round(ci$ci_upper, 4),
+          Confidence_Level = ci$confidence_level %||% 90,
+          Geometric_Mean_Ratio = round(ci$geometric_mean_ratio %||% (ci$point_estimate / 100), 6),
+          BE_Lower_Limit = lower_limit,
+          BE_Upper_Limit = upper_limit,
+          Limit_Type = limit_type,
+          Degrees_Freedom = ci$degrees_freedom %||% NA,
+          N_Subjects = ci$n_subjects %||% be_res$n_subjects %||% NA,
+          Within_Limits = ci$within_limits %||% NA,
+          BE_Conclusion = if (is.na(is_be %||% NA)) "Unknown" else if (is_be) "Bioequivalent" else "Not Bioequivalent",
+          Log_Difference = ci$log_difference %||% NA,
+          Log_CI_Lower = ci$log_ci_lower %||% NA,
+          Log_CI_Upper = ci$log_ci_upper %||% NA,
+          Standard_Error = ci$standard_error %||% NA,
+          MSE = ci$mse %||% NA,
+          t_Critical = ci$t_critical %||% NA,
+          stringsAsFactors = FALSE
+        )
+        
+        # RSABE-specific columns
+        if (analysis_type == "RSABE") {
+          rsabe_det <- be_res$rsabe_details[[param]]
+          rsabe_test <- if (!is.null(rsabe_det)) rsabe_det$rsabe_test else NULL
+          base_row$CV_wR_Pct <- ci$cv_wr %||% NA
+          base_row$s2_wR <- ci$s2_wR %||% NA
+          base_row$Is_HV <- if (!is.null(rsabe_det)) rsabe_det$is_hv else NA
+          base_row$RSABE_Method <- be_res$rsabe_method %||% NA
+          base_row$Scaling_Pass <- if (!is.null(rsabe_test)) rsabe_test$rsabe_pass else NA
+          base_row$PE_Constraint_Pass <- if (!is.null(rsabe_det)) rsabe_det$pe_constraint_pass else NA
+          if (!is.null(rsabe_test)) {
+            base_row$UCB <- rsabe_test$ucb %||% NA
+            base_row$Scaled_Lower <- rsabe_test$scaled_lower %||% rsabe_test$scaled_lower_pct %||% NA
+            base_row$Scaled_Upper <- rsabe_test$scaled_upper %||% rsabe_test$scaled_upper_pct %||% NA
+          }
+        }
+        
+        # ABEL-specific columns
+        if (analysis_type == "ABEL") {
+          base_row$CV_wR_Pct <- ci$cv_wr %||% NA
+          base_row$CV_wT_Pct <- ci$cv_wt %||% NA
+          base_row$Scaled_Lower <- ci$scaled_lower_limit %||% NA
+          base_row$Scaled_Upper <- ci$scaled_upper_limit %||% NA
+          base_row$Regulator <- ci$regulator %||% be_res$regulator %||% NA
+          base_row$sw_Reference <- ci$sw_reference %||% NA
+          base_row$sw_Test <- ci$sw_test %||% NA
+          base_row$sw_Ratio <- ci$sw_ratio %||% NA
+        }
+        
+        base_row
+      })
+      
+      rows <- rows[!sapply(rows, is.null)]
+      
+      if (length(rows) == 0) {
+        result_df <- data.frame(Note = "No BE results available", stringsAsFactors = FALSE)
+      } else {
+        # rbind with fill for differing columns across params
+        all_cols <- unique(unlist(lapply(rows, names)))
+        rows_filled <- lapply(rows, function(r) {
+          missing_cols <- setdiff(all_cols, names(r))
+          for (mc in missing_cols) r[[mc]] <- NA
+          r[all_cols]
+        })
+        result_df <- do.call(rbind, rows_filled)
+      }
+      
+      meta <- build_metadata("BE Assessment Results")
+      meta <- c(meta, paste0("Analysis Type: ", analysis_type),
+                paste0("BE Method: ", be_res$be_method %||% be_res$analysis_method %||% analysis_type))
+      write_export_csv(result_df, file, meta)
+      showNotification("BE assessment results exported.", type = "message")
+    }
+  )
+  
+  # ── 5. Raw Uploaded Data ──
+  output$download_raw_data <- downloadHandler(
+    filename = function() paste0("raw_uploaded_data_", Sys.Date(), ".csv"),
     content = function(file) {
       req(values$uploaded_data)
-      write.csv(values$uploaded_data, file, row.names = FALSE)
-      showNotification("Subject data exported successfully!", type = "message")
-    }
-  )
-  
-  output$download_summary_report <- downloadHandler(
-    filename = function() {
-      paste0("bioequivalence_summary_", Sys.Date(), ".html")
-    },
-    content = function(file) {
-      # Create a simple HTML summary report
-      html_content <- paste0(
-        "<html><head><title>Bioequivalence Analysis Summary</title></head><body>",
-        "<h1>Bioequivalence Analysis Summary</h1>",
-        "<p>Generated on: ", Sys.time(), "</p>",
-        "<h2>Analysis Status</h2>",
-        "<p>Analysis Complete: ", ifelse(values$analysis_complete, "Yes", "No"), "</p>",
-        "<p>Subjects Analyzed: ", ifelse(!is.null(values$nca_results), 
-                                        ifelse(is.data.frame(values$nca_results), nrow(values$nca_results), "Available"), 
-                                        "No data"), "</p>",
-        "</body></html>"
+      meta <- c(
+        "BioEQ Export: Raw Uploaded Data",
+        paste0("Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+        paste0("Rows: ", nrow(values$uploaded_data)),
+        paste0("Columns: ", paste(names(values$uploaded_data), collapse = ", "))
       )
-      writeLines(html_content, file)
-      showNotification("Summary report generated successfully!", type = "message")
+      write_export_csv(values$uploaded_data, file, meta)
+      showNotification("Raw data exported.", type = "message")
     }
   )
-  
-  observeEvent(input$test_nca_data, {
-    if (!is.null(values$nca_results)) {
-      showNotification("NCA data is available and accessible.", type = "message")
-    } else {
-      showNotification("No NCA data available. Please run analysis first.", type = "warning")
-    }
-  })
-  
-  # Report generation placeholders
-  output$report_options_ui <- renderUI({
-    div(
-      h5("Report Options"),
-      p("Comprehensive report generation features coming soon."),
-      p("Available formats: PDF, Word, Excel"),
-      p("Customizable sections: Methods, Results, Statistical Analysis, Plots")
-    )
-  })
-  
-  output$show_report_downloads <- reactive(FALSE)
-  outputOptions(output, "show_report_downloads", suspendWhenHidden = FALSE)
-  
-  output$report_download_ui <- renderUI({
-    div("Report downloads will appear here after generation.")
-  })
   
   # Validation test runner
   observeEvent(input$run_validation, {
