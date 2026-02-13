@@ -336,9 +336,9 @@ help_texts <- list(
       ),
       
       div(
-        style = "margin-top: 15px; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;",
-        tags$strong(icon("info-circle"), " Note:"), br(),
-        "Health Canada's approach (57.4% cap, limits 66.7%-150.0%) is not currently supported by the replicateBE package."
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 4px;",
+        tags$strong(icon("info-circle"), " Health Canada:"), br(),
+        "Cap at CVwR = 57.4% (limits: 66.7%–150.0%). Applied automatically when the Health Canada scope is selected."
       )
     )
   ),

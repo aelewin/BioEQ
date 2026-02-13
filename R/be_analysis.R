@@ -114,10 +114,13 @@ perform_average_be <- function(data, design = "auto", params = list()) {
   anova_results <- params$anova_results %||% NULL
   welch_correction <- params$welch_correction %||% TRUE
   
+  # Extract per-parameter BE limits (from ABE Advanced Options)
+  be_limits_per_param <- params$be_limits_per_param %||% NULL
+  
   # Use existing BE analysis functions
   results <- switch(design,
-    "2x2x2" = be_crossover_2x2x2(data, alpha, be_limits, parameters, anova_model, anova_results),
-    "parallel" = be_parallel(data, alpha, be_limits, parameters, welch_correction),
+    "2x2x2" = be_crossover_2x2x2(data, alpha, be_limits, parameters, anova_model, anova_results, be_limits_per_param),
+    "parallel" = be_parallel(data, alpha, be_limits, parameters, welch_correction, be_limits_per_param),
     "replicate" = be_replicate(data, alpha, be_limits, parameters),
     "2x2x3" = be_replicate(data, alpha, be_limits, parameters, design = "2x2x3"),
     "2x2x4" = be_replicate(data, alpha, be_limits, parameters, design = "2x2x4"),
@@ -200,6 +203,30 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
   # Extract parameters
   alpha <- params$alpha_level %||% 0.05
   parameters <- params$pk_parameters %||% c("Cmax", "AUC0t", "AUC0inf")
+  
+  # Regulatory authority determines which parameters get expanded limits
+  abel_authority <- params$abel_regulator %||% "EMA"
+  cat(sprintf("   Regulatory Authority: %s\n", abel_authority))
+  
+  # Helper: determine if a parameter is eligible for ABEL scaling
+  # EMA: Only Cmax gets expanded limits
+  # HC (Health Canada): Cmax and AUC0t (steady-state) get expanded limits
+  is_abel_eligible <- function(param_name, regulator) {
+    # Normalize: strip ln/log prefix to get base parameter
+    base <- sub("^(ln|log)", "", param_name, ignore.case = TRUE)
+    base_upper <- toupper(base)
+    
+    if (regulator == "EMA") {
+      # EMA: Only Cmax
+      return(grepl("^CMAX$", base_upper))
+    } else if (regulator == "HC") {
+      # Health Canada: Cmax and AUC0t (AUCss for steady-state)
+      return(grepl("^CMAX$", base_upper) || grepl("^AUC0T$", base_upper) || grepl("^AUCSS$", base_upper))
+    } else {
+      # Default (GCC etc.): Same as EMA
+      return(grepl("^CMAX$", base_upper))
+    }
+  }
   
   # Detect replicate design
   design_info <- detect_replicate_design(data)
@@ -297,6 +324,105 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     # Mark this base parameter as processed
     processed_params <- c(processed_params, base_param_name)
     
+    # =====================================================================
+    # Per-parameter routing: Determine if this param gets ABEL or fixed ABE
+    # =====================================================================
+    use_abel_for_param <- is_abel_eligible(base_param_name, abel_authority)
+    
+    if (!use_abel_for_param) {
+      # ---------------------------------------------------------------
+      # NON-ELIGIBLE: Use standard ABE with fixed 80-125% limits
+      # (e.g., AUC parameters under EMA, AUC0inf under HC)
+      # ---------------------------------------------------------------
+      cat(sprintf("  📋 %s: Not eligible for ABEL scaling under %s — using fixed ABE limits (80-125%%)\n",
+                  base_param_name, abel_authority))
+      
+      tryCatch({
+        # Use the ANOVA results already computed for this parameter
+        anova_res_for_param <- params$anova_results
+        
+        # Try to find results for this param (log-transformed)
+        ln_param <- paste0("ln", base_param_name)
+        param_anova <- NULL
+        if (!is.null(anova_res_for_param)) {
+          if (!is.null(anova_res_for_param[[ln_param]])) {
+            param_anova <- anova_res_for_param[[ln_param]]
+          } else if (!is.null(anova_res_for_param[[base_param_name]])) {
+            param_anova <- anova_res_for_param[[base_param_name]]
+          }
+        }
+        
+        if (!is.null(param_anova) && !is.null(param_anova$pe_estimate)) {
+          # Extract from existing ANOVA results
+          pe <- param_anova$pe_estimate
+          ci_lo_val <- param_anova$ci_lower
+          ci_hi_val <- param_anova$ci_upper
+          df_val <- param_anova$residual_df
+          
+          # Fixed limits for non-scaling parameters
+          fixed_lower <- 80.0
+          fixed_upper <- 125.0
+          
+          be_pass <- (ci_lo_val >= fixed_lower) && (ci_hi_val <= fixed_upper)
+          
+          ci_list[[base_param_name]] <- list(
+            parameter = base_param_name,
+            point_estimate = pe,
+            ci_lower = ci_lo_val,
+            ci_upper = ci_hi_val,
+            confidence_level = (1 - alpha) * 100,
+            geometric_mean_ratio = pe / 100,
+            within_limits = be_pass,
+            # Fixed limits - no scaling
+            cv_wr = NA,
+            scaled_lower_limit = fixed_lower,
+            scaled_upper_limit = fixed_upper,
+            limits_used = list(lower = fixed_lower, upper = fixed_upper, type = "fixed"),
+            method = paste0("ABE (fixed limits, ", abel_authority, " guidance)"),
+            regulator = abel_authority,
+            degrees_freedom = df_val,
+            cv_wt = NA,
+            n_subjects = length(unique(data$Subject)),
+            sw_test = NA,
+            sw_reference = NA,
+            sw_ratio = NA
+          )
+          
+          all_results[[base_param_name]] <- list(
+            model = NULL,
+            anova = param_anova$anova,
+            treatment_coef = param_anova$treatment_coef,
+            treatment_se = param_anova$treatment_se,
+            residual_mse = param_anova$residual_mse,
+            residual_df = df_val,
+            n_observations = param_anova$n_observations,
+            anova_method = param_anova$anova_method %||% "fixed",
+            cv_wr_percent = NA,
+            cv_wt_percent = NA,
+            data_was_logged = TRUE,
+            abel_routing = "fixed_abe"
+          )
+          
+          conclusion_list[[base_param_name]] <- be_pass
+          
+          cat(sprintf("  ✓ %s (ABE): PE=%.2f%%, CI [%.2f%%, %.2f%%], Limits [%.1f%%, %.1f%%], BE=%s\n",
+                      base_param_name, pe, ci_lo_val, ci_hi_val, fixed_lower, fixed_upper,
+                      ifelse(be_pass, "Pass", "Fail")))
+        } else {
+          cat(sprintf("  ⚠️  %s: No ANOVA results available, skipping\n", base_param_name))
+        }
+      }, error = function(e) {
+        cat(sprintf("  ❌ Error processing %s (ABE fallback): %s\n", base_param_name, e$message))
+      })
+      
+      next  # Skip to next parameter
+    }
+    
+    # =====================================================================
+    # ABEL-ELIGIBLE: Route through replicateBE for scaled limits
+    # =====================================================================
+    cat(sprintf("  📋 %s: Eligible for ABEL scaling under %s\n", base_param_name, abel_authority))
+    
     tryCatch({
       # Prepare data for replicateBE (expects lowercase: subject, period, sequence, treatment, PK)
       replicate_data <- data.frame(
@@ -339,22 +465,26 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       abel_cap_input <- if (!is.null(params$abel_upper_cap)) params$abel_upper_cap else "50"
       
       # Map to replicateBE regulator parameter
-      # "none" = no cap (not directly supported by replicateBE, will use EMA without enforcement)
-      # "50" = 50% cap (EMA standard: 69.84% - 143.19%)
-      # "fixed" = fixed widened limits (GCC: 75% - 133.33%)
-      abel_regulator <- switch(abel_cap_input,
-        "none" = "EMA",   # Use EMA but with very high cap (effectively no cap)
-        "50" = "EMA",     # EMA with 50% cap (69.84% - 143.19%)
-        "fixed" = "GCC",  # GCC with fixed widened limits (75% - 133.33%)
-        "EMA"             # Default to EMA for backward compatibility
-      )
+      # Health Canada uses "HC" regulator code in replicateBE (cap at CVwR = 57.4%)
+      # EMA uses "EMA" regulator code (50% cap: 69.84% - 143.19%)
+      # GCC uses "GCC" regulator code (fixed widened limits: 75% - 133.33%)
+      if (abel_authority == "HC") {
+        abel_regulator_code <- "HC"  # Health Canada: cap at CVwR = 57.4% (limits: 66.7% - 150.0%)
+      } else {
+        abel_regulator_code <- switch(abel_cap_input,
+          "none" = "EMA",   # Use EMA but effectively no cap
+          "50" = "EMA",     # EMA with 50% cap (69.84% - 143.19%)
+          "fixed" = "GCC",  # GCC with fixed widened limits (75% - 133.33%)
+          "EMA"             # Default to EMA
+        )
+      }
       
       abel_adjust <- if (!is.null(params$abel_adjust_tie)) params$abel_adjust_tie else FALSE
       abel_ola <- if (!is.null(params$abel_outlier_analysis)) params$abel_outlier_analysis else FALSE
       abel_fence <- if (!is.null(params$abel_outlier_fence)) params$abel_outlier_fence else 2
       
-      cat(sprintf("  - ABEL Settings: Cap=%s -> Regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
-                  abel_cap_input, abel_regulator, abel_adjust, abel_ola, abel_fence))
+      cat(sprintf("  - ABEL Settings: Authority=%s, Cap=%s -> Regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
+                  abel_authority, abel_cap_input, abel_regulator_code, abel_adjust, abel_ola, abel_fence))
       
       # Call appropriate replicateBE method based on ANOVA model selection
       if (use_method_a) {
@@ -367,7 +497,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
             print = FALSE,
             details = TRUE,
             alpha = alpha,
-            regulator = abel_regulator,  # User-selected regulator
+            regulator = abel_regulator_code,  # Regulator: EMA, HC, or GCC
             logtrans = !data_is_logged,  # Only log-transform if data is NOT already logged
             adjust = abel_adjust,        # TIE adjustment
             ola = abel_ola,              # Outlier analysis
@@ -388,7 +518,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
             print = FALSE,
             details = TRUE,
             alpha = alpha,
-            regulator = abel_regulator,  # User-selected regulator
+            regulator = abel_regulator_code,  # Regulator: EMA, HC, or GCC
             logtrans = !data_is_logged,  # Only log-transform if data is NOT already logged
             ola = df_method,             # DF approximation: "sas", "satterthwaite", "kenward-roger"
             adjust = abel_adjust,        # TIE adjustment
@@ -454,8 +584,9 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         cv_wr = cv_wr,  # Within-subject CV for reference
         scaled_lower_limit = scaled_lower,  # Scaled lower limit (%)
         scaled_upper_limit = scaled_upper,  # Scaled upper limit (%)
+        limits_used = list(lower = scaled_lower, upper = scaled_upper, type = "scaled"),
         method = method_label,
-        regulator = "EMA",
+        regulator = abel_authority,
         # ANOVA-related fields from replicateBE
         degrees_freedom = anova_df,
         cv_wt = cv_wt,  # CV for test
@@ -527,13 +658,14 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     n_subjects = length(unique(data$Subject)),
     n_periods = design_info$n_periods,
     analysis_type = "ABEL",  # CRITICAL: Required for UI to recognize ABEL analysis
-    analysis_method = sprintf("ABEL %s (EMA)", method_label),
-    be_method = sprintf("Average Bioequivalence with Expanding Limits (ABEL) - %s", method_label),
+    analysis_method = sprintf("ABEL %s (%s)", method_label, abel_authority),
+    be_method = sprintf("Average Bioequivalence with Expanding Limits (ABEL) - %s [%s]", method_label, abel_authority),
     anova_model = anova_model,
     replicatebe_method = if(use_method_a) "A" else "B",
     df_approximation = if(use_method_a) NA else df_method,
     alpha_level = alpha,
-    limits_justification = "Average Bioequivalence with Expanding Limits"
+    regulator = abel_authority,
+    limits_justification = sprintf("ABEL per %s guidance: scaled limits for eligible parameters, fixed 80-125%% for others", abel_authority)
   )
   
   cat("✅ ABEL analysis completed!\n")
@@ -550,7 +682,8 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
 #' @export
 be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25), 
                                parameters = c("lnAUC0t", "lnAUC0inf", "lnCmax"),
-                               anova_model = "fixed", anova_results = NULL) {
+                               anova_model = "fixed", anova_results = NULL,
+                               be_limits_per_param = NULL) {
   
   cat("🔬 Analyzing 2x2x2 crossover bioequivalence study...\n")
   
@@ -571,7 +704,7 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
               length(pk_params), paste(pk_params, collapse = ", ")))
   
   # Extract BE results from ANOVA
-  be_results <- extract_be_from_anova(anova_results, alpha, be_limits)
+  be_results <- extract_be_from_anova(anova_results, alpha, be_limits, be_limits_per_param)
   
   # Instead of filtering based on input parameters, use all parameters that were successfully analyzed
   # This ensures that all user-selected parameters that had valid ANOVA results are included
@@ -589,7 +722,7 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
     stop("No valid confidence intervals available for the requested parameters")
   }
   
-  # Generate bioequivalence conclusions
+  # Generate bioequivalence conclusions (uses limits_used from each CI)
   be_conclusions <- evaluate_bioequivalence(filtered_ci, be_limits)
   
   # Compile results
@@ -628,7 +761,8 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
 #' @export
 be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25), 
                        parameters = c("AUC0t", "AUC0inf", "Cmax"), 
-                       welch_correction = TRUE) {
+                       welch_correction = TRUE,
+                       be_limits_per_param = NULL) {
   
   cat("🔬 Analyzing parallel group bioequivalence study...\n")
   
@@ -674,7 +808,27 @@ be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
       param_results <- analyze_parallel_parameter(data, param, alpha, welch_correction)
       
       if (!is.null(param_results)) {
-        confidence_intervals[[param]] <- param_results$ci
+        ci <- param_results$ci
+        
+        # Add per-parameter limits_used metadata
+        if (!is.null(be_limits_per_param)) {
+          param_upper_name <- toupper(param)
+          if (grepl("CMAX", param_upper_name) && !is.null(be_limits_per_param$Cmax)) {
+            ci$limits_used <- list(
+              lower = be_limits_per_param$Cmax$lower %||% 80,
+              upper = be_limits_per_param$Cmax$upper %||% 125,
+              type = "fixed"
+            )
+          } else if (grepl("AUC|AUMC", param_upper_name) && !is.null(be_limits_per_param$AUC)) {
+            ci$limits_used <- list(
+              lower = be_limits_per_param$AUC$lower %||% 80,
+              upper = be_limits_per_param$AUC$upper %||% 125,
+              type = "fixed"
+            )
+          }
+        }
+        
+        confidence_intervals[[param]] <- ci
         statistical_results[[param]] <- param_results$stats
         
         cat("    ", param, ": ", sprintf("%.2f%% (%.2f%% - %.2f%%)", 
@@ -809,9 +963,35 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
 #' @param alpha Significance level (default 0.05) 
 #' @param be_limits Bioequivalence limits (default c(0.8, 1.25))
 #' @return BE analysis results extracted from ANOVA
-extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8, 1.25)) {
+extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8, 1.25), be_limits_per_param = NULL) {
   
   cat("🔗 Extracting bioequivalence results from ANOVA analysis...\n")
+  
+  # Helper: resolve BE limits for a specific parameter
+  # Maps parameter names like lnCmax -> Cmax category, lnAUC0t -> AUC category
+  resolve_param_limits <- function(param_name, global_limits, per_param) {
+    if (is.null(per_param)) return(global_limits)
+    
+    # Determine category: Cmax or AUC
+    param_upper <- toupper(param_name)
+    if (grepl("CMAX", param_upper)) {
+      cat_limits <- per_param$Cmax
+    } else if (grepl("AUC|AUMC", param_upper)) {
+      cat_limits <- per_param$AUC
+    } else {
+      # Unknown parameter category — use global limits
+      return(global_limits)
+    }
+    
+    if (is.null(cat_limits)) return(global_limits)
+    
+    lower <- (cat_limits$lower %||% 80) / 100
+    upper <- (cat_limits$upper %||% 125) / 100
+    
+    # Only use per-param limits if they differ from default 80/125
+    # (i.e. user actually changed them in Advanced Options)
+    return(c(lower, upper))
+  }
   
   # Filter to only log-transformed parameters for BE analysis
   log_params <- names(anova_results)[grepl("^ln", names(anova_results))]
@@ -985,28 +1165,31 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     ci_lower <- exp(ci_lower_log) * 100
     ci_upper <- exp(ci_upper_log) * 100
     
-    # Check for invalid values before evaluating bioequivalence
+    # Resolve per-parameter limits (falls back to global be_limits)
+    param_be_limits <- resolve_param_limits(param, be_limits, be_limits_per_param)
+    
+    # Pre-compute limits for storage regardless of CI validity
+    if (is.null(param_be_limits) || length(param_be_limits) < 2 || 
+        is.na(param_be_limits[1]) || is.na(param_be_limits[2])) {
+      lower_limit <- 80.0
+      upper_limit <- 125.0
+    } else {
+      # Convert decimal limits to percentage if needed
+      if (max(param_be_limits, na.rm = TRUE) <= 10) {
+        lower_limit <- param_be_limits[1] * 100
+        upper_limit <- param_be_limits[2] * 100
+      } else {
+        lower_limit <- param_be_limits[1]
+        upper_limit <- param_be_limits[2]
+      }
+    }
+    
+    cat(sprintf("  📏 %s limits: %.2f%% - %.2f%%\n", param, lower_limit, upper_limit))
+    
     if (is.na(ci_lower) || is.na(ci_upper) || is.infinite(ci_lower) || is.infinite(ci_upper)) {
       cat(sprintf("  ⚠️  Warning: Invalid confidence interval values for %s - skipping BE evaluation\n", param))
       within_limits <- FALSE
     } else {
-      # Validate BE limits before evaluation
-      if (is.null(be_limits) || length(be_limits) < 2 || 
-          is.na(be_limits[1]) || is.na(be_limits[2])) {
-        cat(sprintf("  ⚠️  Warning: Invalid BE limits - using default 80-125%%\n"))
-        lower_limit <- 80.0
-        upper_limit <- 125.0
-      } else {
-        # Convert decimal limits to percentage if needed
-        if (max(be_limits, na.rm = TRUE) <= 10) {
-          lower_limit <- be_limits[1] * 100
-          upper_limit <- be_limits[2] * 100
-        } else {
-          lower_limit <- be_limits[1]
-          upper_limit <- be_limits[2]
-        }
-      }
-      
       # Evaluate bioequivalence with robust error handling
       tryCatch({
         condition1 <- ci_lower >= lower_limit
@@ -1037,6 +1220,8 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
       standard_error = treatment_se,            # Corrected: SE from ANOVA model
       degrees_freedom = df,
       within_limits = within_limits,
+      # Per-parameter limits used for this evaluation
+      limits_used = list(lower = lower_limit, upper = upper_limit, type = "fixed"),
       # Additional BE-specific information
       geometric_mean_ratio = exp(treatment_diff),  # Raw GMR (not as percentage)
       mse = mse,                            # MSE from ANOVA
@@ -1580,6 +1765,15 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
   for (param in names(confidence_intervals)) {
     ci <- confidence_intervals[[param]]
     
+    # Use per-parameter limits_used if already set on the CI result (from extract_be_from_anova)
+    if (!is.null(ci$limits_used)) {
+      param_lower <- ci$limits_used$lower %||% lower_limit
+      param_upper <- ci$limits_used$upper %||% upper_limit
+    } else {
+      param_lower <- lower_limit
+      param_upper <- upper_limit
+    }
+    
     # Handle different CI structure possibilities
     ci_lower <- NULL
     ci_upper <- NULL
@@ -1619,16 +1813,16 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
     
     # Evaluate bioequivalence with robust error handling
     # Validate all values before logical operations
-    if (is.null(lower_limit) || is.null(upper_limit) || is.na(lower_limit) || is.na(upper_limit)) {
+    if (is.null(param_lower) || is.null(param_upper) || is.na(param_lower) || is.na(param_upper)) {
       cat(sprintf("  ⚠️ Invalid BE limits for %s: lower=%s, upper=%s\n", 
-                  param, lower_limit, upper_limit))
+                  param, param_lower, param_upper))
       be_conclusions[[param]] <- NA
       next
     }
     
     tryCatch({
-      condition1 <- ci_lower >= lower_limit
-      condition2 <- ci_upper <= upper_limit
+      condition1 <- ci_lower >= param_lower
+      condition2 <- ci_upper <= param_upper
       
       if (is.na(condition1) || is.na(condition2)) {
         cat(sprintf("  ⚠️ NA conditions in BE evaluation for %s\n", param))
@@ -1638,7 +1832,7 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
       }
       
       cat(sprintf("  ✅ %s: CI [%.1f%%, %.1f%%] vs Limits [%.1f%%, %.1f%%] → %s\n", 
-                  param, ci_lower, ci_upper, lower_limit, upper_limit,
+                  param, ci_lower, ci_upper, param_lower, param_upper,
                   ifelse(is_be, "Bioequivalent", "Not Bioequivalent")))
       
     }, error = function(e) {

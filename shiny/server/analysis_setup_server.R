@@ -175,10 +175,9 @@ outputOptions(output, "detected_design_type", suspendWhenHidden = FALSE)
 
 # Dynamic alpha display text based on BE analysis type
 output$alpha_display_text <- renderText({
-  req(input$alpha_level)
-  alpha <- input$alpha_level
+  alpha <- input$alpha_level %||% 0.05
   ci <- (1 - 2 * alpha) * 100
-  sprintf("%.0f%% CI (α = %.2f one-sided for TOST)", ci, alpha)
+  sprintf("%.0f%% CI (\u03b1 = %.2f one-sided for TOST)", ci, alpha)
 })
 
 # Available PK parameters UI for pk_parameters data type
@@ -504,10 +503,20 @@ observeEvent(input$run_analysis, {
     lambda_z_points = input$lambda_z_points %||% 3,
     confidence_level = input$confidence_level %||% 90,
     alpha_level = input$alpha_level %||% 0.05,
+    # BE limits: top-level for backward compatibility + per-parameter for regulatory correctness
     be_limits = list(
       lower = if((input$be_analysis_type %||% "ABE") == "ABE") (input$be_lower %||% 80) else 80, 
       upper = if((input$be_analysis_type %||% "ABE") == "ABE") (input$be_upper %||% 125) else 125
     ),
+    be_lower = if((input$be_analysis_type %||% "ABE") == "ABE") (input$be_lower %||% 80) else 80,
+    be_upper = if((input$be_analysis_type %||% "ABE") == "ABE") (input$be_upper %||% 125) else 125,
+    # Per-parameter BE limits (for ABE advanced options)
+    be_limits_per_param = list(
+      Cmax = list(lower = input$be_lower_cmax %||% 80, upper = input$be_upper_cmax %||% 125),
+      AUC  = list(lower = input$be_lower_auc  %||% 80, upper = input$be_upper_auc  %||% 125)
+    ),
+    # ABEL regulatory authority
+    abel_regulator = input$abel_regulator %||% "EMA",
     pk_parameters = all_pk_params,
     # ANOVA Configuration
     anova_model = input$anova_model %||% "fixed",
@@ -901,6 +910,8 @@ observeEvent(input$run_analysis, {
         tryCatch({
           
           # Use the ANOVA function with the selected model type and random effects
+          # alpha for ANOVA CI: for TOST alpha=0.05 (one-sided) -> CI alpha=0.10 (two-sided 90% CI)
+          anova_alpha <- (analysis_config$alpha_level %||% 0.05) * 2
           simple_anova_results <- perform_simple_anova(
             nca_results, 
             numeric_params,  # Use validated numeric parameters
@@ -908,7 +919,8 @@ observeEvent(input$run_analysis, {
             analysis_config$random_effects,
             analysis_config$include_group_fixed,
             analysis_config$include_group_random,
-            analysis_config$include_group_treatment_interaction
+            analysis_config$include_group_treatment_interaction,
+            alpha = anova_alpha
           )
           
           cat(sprintf("[INFO] ✅ ANOVA completed for %d parameters\n", length(simple_anova_results)))
@@ -994,12 +1006,13 @@ observeEvent(input$run_analysis, {
       # Determine study design
       study_design <- analysis_config$detected_design %||% analysis_config$study_design
       
-      # Get BE limits
-      be_limits <- c(analysis_config$be_lower / 100, analysis_config$be_upper / 100)
-      # Alpha for two-sided confidence interval
-      # For 90% CI, alpha = 0.05 (5% in each tail)
-      # For 95% CI, alpha = 0.025 (2.5% in each tail)
-      alpha <- (100 - analysis_config$confidence_level) / 200
+      # Get BE limits from config (with proper fallback)
+      cfg_be_lower <- analysis_config$be_limits$lower %||% (analysis_config$be_lower %||% 80)
+      cfg_be_upper <- analysis_config$be_limits$upper %||% (analysis_config$be_upper %||% 125)
+      be_limits <- c(cfg_be_lower / 100, cfg_be_upper / 100)
+      # Alpha (one-sided) from user input
+      # For TOST: alpha = 0.05 -> 90% CI, alpha = 0.025 -> 95% CI
+      alpha <- analysis_config$alpha_level %||% 0.05
       
       # Prepare data for BE analysis 
       # For PK parameter data, uploaded_data already contains everything we need
@@ -1199,12 +1212,14 @@ observeEvent(input$run_analysis, {
         params = list(
           alpha_level = alpha,
           be_limits = list(lower = be_limits[1] * 100, upper = be_limits[2] * 100),
+          be_limits_per_param = analysis_config$be_limits_per_param,
           pk_parameters = valid_params,
-          confidence_level = analysis_config$confidence_level,
+          confidence_level = (1 - alpha * 2) * 100,
           anova_model = analysis_config$anova_model,
           welch_correction = analysis_config$welch_correction,
           anova_results = anova_results$anova_results,  # Pass the ANOVA results
           # ABEL-specific parameters
+          abel_regulator = analysis_config$abel_regulator %||% "EMA",
           abel_upper_cap = if (!is.null(input$abel_upper_cap)) input$abel_upper_cap else "50",
           abel_adjust_tie = if (!is.null(input$abel_adjust_tie)) input$abel_adjust_tie else FALSE,
           abel_outlier_analysis = if (!is.null(input$abel_outlier_analysis)) input$abel_outlier_analysis else FALSE,

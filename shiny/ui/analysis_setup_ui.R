@@ -530,41 +530,63 @@ tagList(
             
             # Analysis configuration (moved to right column)
             column(6,
-              h5("Alpha Level (α)",
-                 help_icon("alpha_level", help_texts$confidence_level$tooltip, 
-                          help_texts$confidence_level$title, help_texts$confidence_level$content)
-              ),
-              numericInput(
-                "alpha_level",
-                label = NULL,
-                value = 0.05,
-                min = 0.01,
-                max = 0.20,
-                step = 0.01
-              ),
-              div(id = "confidence_display", style = "margin-bottom: 15px; color: #6c757d;",
-                uiOutput("alpha_display_text")
-              ),
-              
-              # Conditional panel for ABE limits (moved here)
+
+              # ABE acceptance limits (fixed)
               conditionalPanel(
                 condition = "input.be_analysis_type == 'ABE'",
-                h5("Bioequivalence Limits (%)",
-                   help_icon("be_limits", help_texts$be_limits$tooltip, 
-                            help_texts$be_limits$title, help_texts$be_limits$content)
-                ),
-                div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
-                  fluidRow(
-                    column(6,
-                      numericInput("be_lower", "Lower (%)", value = 80, min = 70, max = 90, step = 1)
-                    ),
-                    column(6,
-                      numericInput("be_upper", "Upper (%)", value = 125, min = 110, max = 140, step = 1)
-                    )
-                  ),
-                  div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
-                    "• Standard: 80.00% - 125.00% for most drugs"
+                div(style = "padding: 10px; background-color: #e8f5e9; border-left: 3px solid #28a745; border-radius: 4px; margin-top: 10px;",
+                  tags$small(style = "color: #2e7d32;",
+                    icon("check-circle"), " ",
+                    tags$strong("Acceptance Limits: "),
+                    "80.00% \u2013 125.00% (regulatory standard for all parameters)"
                   )
+                )
+              ),
+              
+              # RSABE: Coming soon notice
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'RSABE'",
+                div(style = "border: 1px solid #ffc107; padding: 15px; border-radius: 5px; background: #fff8e1; margin-top: 10px;",
+                  h5(icon("exclamation-triangle", style = "color: #f57f17;"), " RSABE - Coming Soon", style = "color: #f57f17; margin-top: 0;"),
+                  p(style = "color: #666; margin-bottom: 0;",
+                    "FDA Reference-Scaled Average Bioequivalence is not yet implemented. ",
+                    "RSABE requires FDA-specific statistical methodology distinct from EMA ABEL. ",
+                    "Please use ABEL (EMA/Health Canada method) or standard ABE."
+                  )
+                )
+              ),
+              
+              # ABEL: Expanded limits scope selection
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'ABEL'",
+                h5("Expanded Limits Scope",
+                   help_icon("abel_scope", "Select which parameters may use expanded limits",
+                            "Regulatory Approaches for ABEL",
+                            div(
+                              tags$h6(tags$strong("EMA (European Medicines Agency)"), style = "margin-top: 10px;"),
+                              tags$ul(
+                                tags$li("Expanded limits apply to ", tags$strong("Cmax only")),
+                                tags$li("AUC parameters always use fixed 80.00%–125.00% limits"),
+                                tags$li("Cmax range may widen up to 69.84%–143.19% when CV", tags$sub("wR"), " > 30%"),
+                                tags$li("50% cap on scaling (reached at CV", tags$sub("wR"), " \u2248 50%)")
+                              ),
+                              tags$h6(tags$strong("Health Canada"), style = "margin-top: 15px;"),
+                              tags$ul(
+                                tags$li("Expanded limits apply to ", tags$strong("Cmax and AUC0-t")),
+                                tags$li("AUC0-\u221e always uses fixed 80.00%–125.00% limits"),
+                                tags$li("Cap at CV", tags$sub("wR"), " = 57.4% (limits: 66.7%–150.0%)")
+                              )
+                            )
+                   )
+                ),
+                radioButtons("abel_regulator",
+                  label = NULL,
+                  choices = list(
+                    "Cmax only \u2014 AUC uses fixed 80\u2013125% limits" = "EMA",
+                    "Cmax + AUC0-t" = "HC"
+                  ),
+                  selected = "EMA",
+                  inline = FALSE
                 )
               ),
               
@@ -576,20 +598,25 @@ tagList(
                             help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content)
                 ),
                 div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
-                  selectInput(
-                    "abel_upper_cap",
-                    label = NULL,
-                    choices = list(
-                      "None (no cap)" = "none",
-                      "50% cap (limits: 69.84% - 143.19%)" = "50",
-                      "Fixed widened limits (75.00% - 133.33%)" = "fixed"
-                    ),
-                    selected = "50"
+                  # Show different cap options based on regulator
+                  conditionalPanel(
+                    condition = "input.abel_regulator == 'EMA' || !input.abel_regulator",
+                    selectInput(
+                      "abel_upper_cap",
+                      label = NULL,
+                      choices = list(
+                        "None (no cap)" = "none",
+                        "50% cap (limits: 69.84% - 143.19%)" = "50",
+                        "Fixed widened limits (75.00% - 133.33%)" = "fixed"
+                      ),
+                      selected = "50"
+                    )
                   ),
-                  div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
-                    "• EMA: 50% cap (69.84% - 143.19%)",
-                    tags$br(),
-                    "• GCC: Fixed widened limits (75.00% - 133.33%)"
+                  conditionalPanel(
+                    condition = "input.abel_regulator == 'HC'",
+                    div(style = "color: #6c757d; font-size: 0.9em;",
+                      "Cap applied automatically at CVwR = 57.4% (limits: 66.7% \u2013 150.0%)."
+                    )
                   )
                 )
               ),
@@ -620,7 +647,7 @@ tagList(
           )
         ),
         
-        # Advanced Options Section
+        # Advanced Options Section (ABE)
         conditionalPanel(
           condition = "input.be_analysis_type == 'ABE'",
           div(
@@ -634,24 +661,53 @@ tagList(
             conditionalPanel(
               condition = "input.enable_advanced_options",
               div(style = "margin-top: 15px; padding: 15px; background-color: #e8f4fd; border-radius: 5px;",
-                h6("Experimental Reference Scaling"),
-                p("Note: Advanced reference scaling features are experimental"),
-                checkboxInput(
-                  "reference_scaling",
-                  "Enable experimental reference scaling",
-                  value = FALSE
+                h6("Alpha Level (\u03b1)",
+                   help_icon("alpha_level", help_texts$confidence_level$tooltip, 
+                            help_texts$confidence_level$title, help_texts$confidence_level$content),
+                   style = "font-weight: bold; color: #2c3e50;"
                 ),
-                conditionalPanel(
-                  condition = "input.reference_scaling",
-                  numericInput(
-                    "scaling_threshold",
-                    "CV threshold for scaling (%)",
-                    value = 30,
-                    min = 20,
-                    max = 50,
-                    step = 5
+                p(style = "font-size: 0.85em; color: #666; margin-bottom: 8px;",
+                  "One-sided significance level for TOST. Default 0.05 yields a 90% confidence interval."),
+                fluidRow(
+                  column(6,
+                    numericInput(
+                      "alpha_level",
+                      label = NULL,
+                      value = 0.05,
+                      min = 0.01,
+                      max = 0.20,
+                      step = 0.01
+                    )
                   ),
-                  helpText("Apply scaling when within-subject CV > threshold")
+                  column(6,
+                    div(id = "confidence_display", style = "margin-top: 8px; color: #6c757d;",
+                      uiOutput("alpha_display_text")
+                    )
+                  )
+                ),
+                hr(style = "margin: 15px 0;"),
+                h6("Per-Parameter BE Limits", style = "font-weight: bold; color: #2c3e50;"),
+                p(style = "font-size: 0.85em; color: #666; margin-bottom: 12px;",
+                  "Set different acceptance limits for each PK parameter category. Defaults: 80.00% - 125.00%."),
+                fluidRow(
+                  column(6,
+                    div(style = "padding: 10px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;",
+                      h6(tags$strong("Cmax Limits (%)"), style = "margin-top: 0;"),
+                      fluidRow(
+                        column(6, numericInput("be_lower_cmax", "Lower", value = 80, min = 70, max = 90, step = 1)),
+                        column(6, numericInput("be_upper_cmax", "Upper", value = 125, min = 110, max = 140, step = 1))
+                      )
+                    )
+                  ),
+                  column(6,
+                    div(style = "padding: 10px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;",
+                      h6(tags$strong("AUC Limits (%)"), style = "margin-top: 0;"),
+                      fluidRow(
+                        column(6, numericInput("be_lower_auc", "Lower", value = 80, min = 70, max = 90, step = 1)),
+                        column(6, numericInput("be_upper_auc", "Upper", value = 125, min = 110, max = 140, step = 1))
+                      )
+                    )
+                  )
                 )
               )
             )
@@ -716,14 +772,32 @@ tagList(
         )
       ), # Close Analysis Parameters box
       
-      # Analysis run button
+      # Analysis run button - disabled for RSABE
       div(style = "text-align: center; padding: 20px; margin-top: 20px;",
-        actionButton(
-          "run_analysis", 
-          "Run Bioequivalence Analysis",
-          class = "btn btn-success btn-lg",
-          icon = icon("calculator"),
-          style = "font-size: 18px; padding: 15px 30px;"
+        conditionalPanel(
+          condition = "input.be_analysis_type != 'RSABE'",
+          actionButton(
+            "run_analysis", 
+            "Run Bioequivalence Analysis",
+            class = "btn btn-success btn-lg",
+            icon = icon("calculator"),
+            style = "font-size: 18px; padding: 15px 30px;"
+          )
+        ),
+        conditionalPanel(
+          condition = "input.be_analysis_type == 'RSABE'",
+          div(
+            tags$button(
+              type = "button",
+              class = "btn btn-secondary btn-lg",
+              disabled = "disabled",
+              style = "font-size: 18px; padding: 15px 30px; cursor: not-allowed;",
+              icon("calculator"), " Run Bioequivalence Analysis"
+            ),
+            div(style = "margin-top: 8px; color: #6c757d; font-style: italic;",
+              "RSABE is not yet available. Please select ABE or ABEL."
+            )
+          )
         )
       )
     ) # Close main configuration column

@@ -48,7 +48,12 @@ detect_anova_design <- function(nca_data) {
 #'
 perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", random_effects = "(1|subject)",
                                 include_group_fixed = FALSE, include_group_random = FALSE, 
-                                include_group_treatment_interaction = FALSE) {
+                                include_group_treatment_interaction = FALSE,
+                                alpha = 0.1) {
+  
+  # Validate alpha and derive CI level
+  if (is.null(alpha) || is.na(alpha) || alpha <= 0 || alpha >= 1) alpha <- 0.1
+  ci_level <- 1 - alpha  # e.g., alpha=0.1 -> 90% CI
   
   cat("\n=== ANOVA Analysis ===\n")
   
@@ -343,7 +348,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           coeffs <- coef(model)
           if (drug_coef_name %in% names(coeffs)) {
             pe_estimate <- 100 * exp(coeffs[[drug_coef_name]])
-            ci <- 100 * exp(confint(model, drug_coef_name, level = 0.9))
+            ci <- 100 * exp(confint(model, drug_coef_name, level = ci_level))
             ci_lower <- ci[1]
             ci_upper <- ci[2]
             df_residual <- anova_table["Residuals", "Df"]
@@ -457,7 +462,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             # Get confidence intervals for nlme model 
             cat("  [DEBUG] Getting confidence intervals...\n")
             tryCatch({
-              ci_obj <- nlme::intervals(model, which = "fixed", level = 0.9)
+              ci_obj <- nlme::intervals(model, which = "fixed", level = ci_level)
               cat("  [DEBUG] Intervals object obtained\n")
               if (drug_coef_name %in% rownames(ci_obj$fixed)) {
                 ci_vals <- 100 * exp(ci_obj$fixed[drug_coef_name, c("lower", "upper")])
@@ -470,7 +475,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
                 coef_val <- tTable[drug_coef_name, "Value"]
                 se_val <- tTable[drug_coef_name, "Std.Error"]
                 df_val <- tTable[drug_coef_name, "DF"]
-                t_crit <- qt(0.95, df_val)  # 90% CI
+                t_crit <- qt(1 - alpha/2, df_val)  # CI based on alpha
                 ci_lower <- 100 * exp(coef_val - t_crit * se_val)
                 ci_upper <- 100 * exp(coef_val + t_crit * se_val)
               }
@@ -480,7 +485,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
               coef_val <- tTable[drug_coef_name, "Value"]
               se_val <- tTable[drug_coef_name, "Std.Error"]
               df_val <- tTable[drug_coef_name, "DF"]
-              t_crit <- qt(0.95, df_val)  # 90% CI
+              t_crit <- qt(1 - alpha/2, df_val)  # CI based on alpha
               ci_lower <- 100 * exp(coef_val - t_crit * se_val)
               ci_upper <- 100 * exp(coef_val + t_crit * se_val)
               cat("  [DEBUG] Used fallback CI calculation\n")
@@ -662,7 +667,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             df_val <- coeffs[drug_coef_name, "df"]
             
             pe_estimate <- 100 * exp(pe_log)
-            alpha <- 0.1  # For 90% CI
             t_crit <- qt(1 - alpha/2, df_val)
             ci_lower <- 100 * exp(pe_log - t_crit * se_log)
             ci_upper <- 100 * exp(pe_log + t_crit * se_log)
@@ -742,7 +746,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             df_val <- coeffs[drug_coef_name, "df"]
             
             pe_estimate <- 100 * exp(pe_log)
-            alpha <- 0.1  # For 90% CI
             t_crit <- qt(1 - alpha/2, df_val)
             ci_lower <- 100 * exp(pe_log - t_crit * se_log)
             ci_upper <- 100 * exp(pe_log + t_crit * se_log)

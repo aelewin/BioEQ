@@ -265,8 +265,8 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
           h6("BE Assessment:"),
           tags$ul(
             tags$li(sprintf("Point Estimate: %.2f%%", rbe_output$`PE(%)`)),
-            tags$li(sprintf("90%% CI Lower: %.2f%%", rbe_output$`CL.lo(%)`)),
-            tags$li(sprintf("90%% CI Upper: %.2f%%", rbe_output$`CL.hi(%)`)),
+            tags$li(sprintf("CI Lower: %.2f%%", rbe_output$`CL.lo(%)`)),
+            tags$li(sprintf("CI Upper: %.2f%%", rbe_output$`CL.hi(%)`)),
             tags$li(sprintf("Scaled Lower Limit: %.2f%%", rbe_output$`L(%)`)),
             tags$li(sprintf("Scaled Upper Limit: %.2f%%", rbe_output$`U(%)`)),
             tags$li(
@@ -1435,9 +1435,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           ))
         }
         
-        # Get BE limits
+        # Get BE limits (default fallback)
         be_lower <- analysis_cfg$be_lower %||% 80
         be_upper <- analysis_cfg$be_upper %||% 125
+        
+        # Compute dynamic CI label from alpha
+        alpha_level <- analysis_cfg$alpha_level %||% 0.05
+        ci_pct <- round((1 - alpha_level * 2) * 100)
+        ci_label <- paste0(ci_pct, "% CI")
         
         # Get analysis type and method
         analysis_type <- be_res$analysis_type %||% "ABE"
@@ -1460,11 +1465,19 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                 br(), "Full RSABE implementation coming soon."
               )
             } else if (analysis_type == "ABEL") {
-              # ABEL is implemented - show info about EMA method
+              # ABEL is implemented - show info about regulator
+              abel_reg <- be_res$regulator %||% "EMA"
+              reg_label <- if (abel_reg == "HC") "Health Canada" else "EMA"
               div(class = "alert alert-success", style = "margin-bottom: 0;",
                 icon("check-circle"), " ",
-                strong("ABEL Analysis: "), "Average Bioequivalence with Expanding Limits (EMA) using replicateBE package.",
-                br(), "Results include scaled acceptance limits based on within-subject variability."
+                strong(sprintf("ABEL Analysis (%s): ", reg_label)),
+                "Average Bioequivalence with Expanding Limits using replicateBE package.",
+                br(), 
+                if (abel_reg == "HC") {
+                  "Scaled limits applied to Cmax and AUC0-t; AUC0-∞ uses fixed 80-125% limits."
+                } else {
+                  "Scaled limits applied to Cmax only; AUC parameters use fixed 80-125% limits."
+                }
               )
             } else {
               p("Standard bioequivalence analysis with fixed limits", style = "margin-bottom: 0; color: #6c757d;")
@@ -1507,7 +1520,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         status_color <- if (all_be) "#28a745" else "#dc3545"
         status_bg <- if (all_be) "#d4edda" else "#f8d7da"
         
-        # Create results table with display names
+        # Create results table with display names and per-parameter limits
         results_list <- mapply(function(param, is_be) {
           ci <- primary_ci[[param]]
           
@@ -1523,12 +1536,29 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           # Convert log parameter name to display name
           display_param <- log_param_to_display_name(param)
           
+          # Per-parameter limits: use limits_used if available, else fall back to global
+          param_lower <- be_lower
+          param_upper <- be_upper
+          if (!is.null(ci$limits_used)) {
+            param_lower <- ci$limits_used$lower %||% be_lower
+            param_upper <- ci$limits_used$upper %||% be_upper
+          } else if (!is.null(ci$scaled_lower_limit) && !is.na(ci$scaled_lower_limit)) {
+            param_lower <- ci$scaled_lower_limit
+            param_upper <- ci$scaled_upper_limit
+          }
+          
+          # Determine limit type label
+          limit_type <- ""
+          if (!is.null(ci$limits_used$type) && ci$limits_used$type == "scaled") {
+            limit_type <- " (scaled)"
+          }
+          
           data.frame(
-            Parameter = display_param,  # Use display name instead of log name
+            Parameter = display_param,
             `Point Estimate` = sprintf("%.2f%%", ci$point_estimate),
-            `90% CI Lower` = sprintf("%.2f%%", ci$ci_lower),
-            `90% CI Upper` = sprintf("%.2f%%", ci$ci_upper),
-            `BE Criteria` = sprintf("%.1f%% - %.1f%%", be_lower, be_upper),
+            `CI Lower` = sprintf("%.2f%%", ci$ci_lower),
+            `CI Upper` = sprintf("%.2f%%", ci$ci_upper),
+            `BE Criteria` = sprintf("%.2f%% - %.2f%%%s", param_lower, param_upper, limit_type),
             `BE Status` = be_status,
             stringsAsFactors = FALSE
           )
@@ -1566,7 +1596,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               )
             ),
             rownames = FALSE,
-            colnames = c("Parameter", "Point Estimate", "90% CI Lower", "90% CI Upper", "BE Criteria", "BE Status"),
+            colnames = c("Parameter", "Point Estimate", paste(ci_label, "Lower"), paste(ci_label, "Upper"), "BE Criteria", "BE Status"),
             escape = FALSE
           ) %>% 
             DT::formatStyle(columns = 1:6, fontSize = '14px'),
@@ -2076,7 +2106,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             return(data.frame(
               Parameter = display_param,
               `Ratio (%)` = "N/A",
-              `90% CI (%)` = "N/A",
+              `CI (%)` = "N/A",
+              `BE Criteria` = "N/A",
               `BE Status` = "⚠️ UNKNOWN",
               stringsAsFactors = FALSE
             ))
@@ -2087,13 +2118,22 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           ci_lower_geom <- ci$ci_lower
           ci_upper_geom <- ci$ci_upper
           
+          # Per-parameter limits
+          param_lower <- 80
+          param_upper <- 125
+          if (!is.null(ci$limits_used)) {
+            param_lower <- ci$limits_used$lower %||% 80
+            param_upper <- ci$limits_used$upper %||% 125
+          }
+          
           # Convert log parameter name to display name
           display_param <- log_param_to_display_name(param)
           
           data.frame(
-            Parameter = display_param,  # Use display name instead of log name
+            Parameter = display_param,
             `Ratio (%)` = sprintf("%.2f%%", point_est_geom),
-            `90% CI (%)` = sprintf("[%.2f%%, %.2f%%]", ci_lower_geom, ci_upper_geom),
+            `CI (%)` = sprintf("[%.2f%%, %.2f%%]", ci_lower_geom, ci_upper_geom),
+            `BE Criteria` = sprintf("%.2f%%-%.2f%%", param_lower, param_upper),
             `BE Status` = ifelse(is.na(is_be), "⚠️ UNKNOWN", 
                                 ifelse(is_be, "✅ BIOEQUIVALENT", "❌ NOT BIOEQUIVALENT")),
             stringsAsFactors = FALSE
@@ -2113,24 +2153,30 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         
         all_results <- do.call(rbind, valid_results)
         
+        # Get dynamic CI label
+        analysis_cfg2 <- analysis_config()
+        alpha_level2 <- analysis_cfg2$alpha_level %||% 0.05
+        ci_pct2 <- round((1 - alpha_level2 * 2) * 100)
+        ci_label2 <- paste0(ci_pct2, "% CI")
+        
         # Define clean column names for display
-        clean_column_names <- c("Parameter", "Ratio (%)", "90% CI (%)", "BE Status")
+        clean_column_names <- c("Parameter", "Ratio (%)", paste0(ci_label2, " (%)"), "BE Criteria", "BE Status")
         
         return(div(
           h5("📋 Bioequivalence Assessment Results"),
           p(style = "font-size: 0.9em; color: #6c757d;", 
-            "Bioequivalence assessment results with 90% confidence intervals for all evaluated parameters. ",
+            sprintf("Bioequivalence assessment results with %s confidence intervals for all evaluated parameters. ", ci_label2),
             "Analysis performed on log-transformed data; parameter names shown without 'ln' prefix for clarity. ",
-            "Bioequivalence is determined by whether the confidence interval falls within 80.00%-125.00%."),
+            "Bioequivalence is determined by whether the confidence interval falls within the acceptance limits."),
           DT::datatable(
             all_results,
             options = list(
               pageLength = 15,
               scrollX = TRUE,
               columnDefs = list(
-                list(className = 'dt-center', targets = 1:3),
+                list(className = 'dt-center', targets = 1:4),
                 list(
-                  targets = 3, # BE Status column (now column 3)
+                  targets = 4, # BE Status column (now column 4 with BE Criteria at 3)
                   createdCell = JS("
                     function(td, cellData, rowData, row, col) {
                       if (cellData.includes('BIOEQUIVALENT')) {
@@ -2243,11 +2289,18 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         param_names <- names(be_res$confidence_intervals)
         has_log_params <- any(startsWith(param_names, "ln"))
         
+        # Get dynamic labels for regulatory notes
+        analysis_cfg3 <- analysis_config()
+        alpha_level3 <- analysis_cfg3$alpha_level %||% 0.05
+        ci_pct3 <- round((1 - alpha_level3 * 2) * 100)
+        be_lower3 <- analysis_cfg3$be_lower %||% 80
+        be_upper3 <- analysis_cfg3$be_upper %||% 125
+        
         # Regulatory guidelines compliance
         regulatory_notes <- list(
-          "✓ 90% Confidence Interval used (regulatory standard)",
+          sprintf("✓ %d%% Confidence Interval used", ci_pct3),
           if(has_log_params) "✓ Log-transformed analysis performed" else "✓ Analysis performed on available parameters",
-          "✓ BE limits: 80.00% - 125.00% (FDA/EMA standard)",
+          sprintf("✓ Default BE limits: %.2f%% - %.2f%%", be_lower3, be_upper3),
           if (overall_be) "✓ Meets regulatory bioequivalence criteria" else "✗ Does not meet regulatory bioequivalence criteria"
         )
         
