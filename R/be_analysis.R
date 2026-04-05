@@ -114,10 +114,13 @@ perform_average_be <- function(data, design = "auto", params = list()) {
   anova_results <- params$anova_results %||% NULL
   welch_correction <- params$welch_correction %||% TRUE
   
+  # Extract per-parameter BE limits (from ABE Advanced Options)
+  be_limits_per_param <- params$be_limits_per_param %||% NULL
+  
   # Use existing BE analysis functions
   results <- switch(design,
-    "2x2x2" = be_crossover_2x2x2(data, alpha, be_limits, parameters, anova_model, anova_results),
-    "parallel" = be_parallel(data, alpha, be_limits, parameters, welch_correction),
+    "2x2x2" = be_crossover_2x2x2(data, alpha, be_limits, parameters, anova_model, anova_results, be_limits_per_param),
+    "parallel" = be_parallel(data, alpha, be_limits, parameters, welch_correction, be_limits_per_param),
     "replicate" = be_replicate(data, alpha, be_limits, parameters),
     "2x2x3" = be_replicate(data, alpha, be_limits, parameters, design = "2x2x3"),
     "2x2x4" = be_replicate(data, alpha, be_limits, parameters, design = "2x2x4"),
@@ -132,94 +135,565 @@ perform_average_be <- function(data, design = "auto", params = list()) {
   return(results)
 }
 
-#' Placeholder for RSABE analysis
+#' Perform RSABE analysis
 #' 
-#' Currently uses ABE methodology with informative messaging
+#' FDA Reference Scaled Average Bioequivalence
+#' Supports two methods:
+#'   - FDA Linearized Scaled Criterion (Howe UCB) — default
+#'   - Non-Central TOST (ncTOST) — exact method
 #' 
 #' @param data Data frame with PK parameters
 #' @param design Study design
-#' @param params Analysis parameters
-#' @return Placeholder results using ABE methodology with RSABE metadata
+#' @param params Analysis parameters (includes rsabe_method: "fda_linearized" or "nctost")
+#' @return RSABE analysis results
 #' @export
 perform_rsabe_placeholder <- function(data, design = "auto", params = list()) {
   
-  cat("⚠️ RSABE analysis requested but not yet implemented.\n")
-  cat("📊 Using standard ABE methodology as placeholder.\n")
-  cat("🔧 Full RSABE implementation coming soon...\n")
-  
-  # For now, perform standard ABE analysis
-  results <- perform_average_be(data, design, params)
-  
-  # Add RSABE-specific metadata and placeholders
-  results$be_method <- "RSABE (Placeholder)"
-  results$limits_type <- "fixed (pending scaling implementation)"
-  results$limits_justification <- "Currently using standard ABE limits. RSABE scaling pending."
-  
-  # Add RSABE-specific information structure
-  results$rsabe_info <- list(
-    implemented = FALSE,
-    status = "Placeholder - using ABE methodology",
-    message = "RSABE analysis requested but using ABE methodology until implementation complete",
-    planned_features = list(
-      scaling_formula = "exp(±0.893 × sWR) where sWR is within-subject SD of reference",
-      cv_threshold = "Applied when CV > 30% (sWR > 0.294)",
-      point_constraint = "Point estimate must be within 80.00% - 125.00%",
-      regulatory_basis = "FDA guidance for industry - Bioequivalence Studies with PK Endpoints for Drugs Submitted Under an ANDA"
-    ),
-    implementation_notes = list(
-      "Calculate within-subject variability for reference formulation",
-      "Apply scaled limits based on sWR",
-      "Maintain point estimate constraint",
-      "Handle mixed scaling (CV < 30% uses standard limits)"
+  # Source the RSABE analysis module if perform_rsabe is not yet available
+  if (!exists("perform_rsabe", mode = "function")) {
+    # Try multiple paths (from different working directories)
+    possible_paths <- c(
+      "R/rsabe_analysis.R",
+      "../R/rsabe_analysis.R",
+      file.path(getwd(), "R", "rsabe_analysis.R")
     )
-  )
+    
+    sourced <- FALSE
+    for (path in possible_paths) {
+      if (file.exists(path)) {
+        source(path)
+        sourced <- TRUE
+        break
+      }
+    }
+    
+    if (!sourced) {
+      stop("RSABE analysis module not found. Expected at: R/rsabe_analysis.R")
+    }
+  }
   
-  return(results)
+  # Delegate to the RSABE engine
+  perform_rsabe(data, design, params)
 }
 
-#' Placeholder for ABEL analysis
+#' Perform ABEL analysis
 #' 
-#' Currently uses ABE methodology with informative messaging
+#' EMA Average Bioequivalence with Expanding Limits using replicateBE package
+#' Supports both Method A (ANOVA) and Method B (mixed model)
 #' 
-#' @param data Data frame with PK parameters
+#' @param data Data frame with PK parameters (expects capitalized columns: Subject, Treatment, Period, Sequence)
 #' @param design Study design  
-#' @param params Analysis parameters
-#' @return Placeholder results using ABE methodology with ABEL metadata
+#' @param params Analysis parameters (including abel_method: "A" or "B")
+#' @return ABEL analysis results
 #' @export
 perform_abel_placeholder <- function(data, design = "auto", params = list()) {
   
-  cat("⚠️ ABEL analysis requested but not yet implemented.\n")
-  cat("📊 Using standard ABE methodology as placeholder.\n")
-  cat("🔧 Full ABEL implementation coming soon...\n")
+  # Derive replicateBE method from ANOVA model selection
+  # Fixed Effects → Method A (linear model)
+  # Mixed Effects (nlme/Satterthwaite/Kenward-Roger) → Method B with appropriate DF
+  anova_model <- params$anova_model %||% "fixed"
   
-  # For now, perform standard ABE analysis
-  results <- perform_average_be(data, design, params)
+  # Determine method and DF approximation
+  # replicateBE::method.B() option parameter:
+  #   1 = lmerTest with Satterthwaite DF
+  #   2 = nlme::lme (SAS DDFM=CONTAIN equivalent) — default
+  #   3 = lmerTest with Kenward-Roger DF
+  if (anova_model == "fixed") {
+    use_method_a <- TRUE
+    method_label <- "Method A (ANOVA/Linear Model)"
+    df_method <- NULL  # Not used for Method A
+  } else {
+    use_method_a <- FALSE
+    if (grepl("satterthwaite", anova_model, ignore.case = TRUE)) {
+      df_method <- 1  # lmerTest Satterthwaite DF
+      method_label <- "Method B (Satterthwaite DF, option=1)"
+    } else if (grepl("kenward", anova_model, ignore.case = TRUE)) {
+      df_method <- 3  # lmerTest Kenward-Roger DF
+      method_label <- "Method B (Kenward-Roger DF, option=3)"
+    } else {
+      # Default for "nlme" or other mixed models
+      df_method <- 2  # nlme::lme (SAS CONTAIN equivalent)
+      method_label <- "Method B (nlme, SAS CONTAIN DF, option=2)"
+    }
+  }
   
-  # Add ABEL-specific metadata and placeholders
-  results$be_method <- "ABEL (Placeholder)"
-  results$limits_type <- "fixed (pending expansion implementation)"
-  results$limits_justification <- "Currently using standard ABE limits. ABEL expansion pending."
+  cat(sprintf("🔬 Performing ABEL analysis using replicateBE::%s...\n", method_label))
+  cat(sprintf("   ANOVA Model: %s\n", anova_model))
   
-  # Add ABEL-specific information structure
-  results$abel_info <- list(
-    implemented = FALSE,
-    status = "Placeholder - using ABE methodology", 
-    message = "ABEL analysis requested but using ABE methodology until implementation complete",
-    planned_features = list(
-      expansion_formula = "exp(±0.76 × sWR) up to maximum of 69.84% - 143.19%",
-      cv_threshold = "Applied when CV > 30% for Cmax",
-      gmr_constraint = "Geometric mean ratio must be within 80.00% - 125.00%",
-      max_expansion = "Upper limit capped at 143.19%, lower at 69.84%",
-      regulatory_basis = "EMA guideline on the investigation of bioequivalence (CPMP/EWP/QWP/1401/98 Rev. 1)"
+  # Extract parameters
+  alpha <- params$alpha_level %||% 0.05
+  parameters <- params$pk_parameters %||% c("Cmax", "AUC0t", "AUC0inf")
+  
+  # Regulatory authority determines which parameters get expanded limits
+  abel_authority <- params$abel_regulator %||% "EMA"
+  cat(sprintf("   Regulatory Authority: %s\n", abel_authority))
+  
+  # Helper: determine if a parameter is eligible for ABEL scaling
+  # EMA: Only Cmax gets expanded limits
+  # HC (Health Canada): Cmax and AUC0t (steady-state) get expanded limits
+  is_abel_eligible <- function(param_name, regulator) {
+    # Normalize: strip ln/log prefix to get base parameter
+    base <- sub("^(ln|log)", "", param_name, ignore.case = TRUE)
+    base_upper <- toupper(base)
+    
+    if (regulator == "EMA") {
+      # EMA: Only Cmax
+      return(grepl("^CMAX$", base_upper))
+    } else if (regulator == "HC") {
+      # Health Canada: Cmax and AUC0t (AUCss for steady-state)
+      return(grepl("^CMAX$", base_upper) || grepl("^AUC0T$", base_upper) || grepl("^AUCSS$", base_upper))
+    } else {
+      # Default (GCC etc.): Same as EMA
+      return(grepl("^CMAX$", base_upper))
+    }
+  }
+  
+  # Detect replicate design
+  design_info <- detect_replicate_design(data)
+  
+  if (!design_info$is_replicate) {
+    stop("ABEL analysis requires a replicate design (2x2x3 or 2x2x4). Detected: ", design_info$design_type)
+  }
+  
+  # Verify required columns exist (capitalized)
+  required_cols <- c("Subject", "Period", "Sequence", "Treatment")
+  missing_cols <- setdiff(required_cols, names(data))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
+  }
+  
+  # Analyze each parameter
+  all_results <- list()
+  ci_list <- list()
+  conclusion_list <- list()
+  processed_params <- c()  # Track which base parameters we've already processed
+  
+  for (param in parameters) {
+    
+    # Determine whether to use non-log or log-transformed data
+    # Priority: Non-log data > Log-transformed data
+    # Detection: Check if parameter starts with "ln" or "log"
+    
+    is_log_param <- grepl("^(ln|log)", param, ignore.case = TRUE)
+    
+    # Extract base parameter name for tracking duplicates
+    if (is_log_param) {
+      base_param_name <- sub("^(ln|log)", "", param, ignore.case = TRUE)
+    } else {
+      base_param_name <- param
+    }
+    
+    # Check if we've already processed this base parameter
+    if (base_param_name %in% processed_params) {
+      cat(sprintf("⏭️  Skipping '%s' - already processed as '%s'\n", param, base_param_name))
+      next
+    }
+    
+    # If this is a log parameter, check if non-log version exists
+    if (is_log_param) {
+      # Extract base parameter name (e.g., "Cmax" from "lnCmax")
+      base_param <- sub("^(ln|log)", "", param, ignore.case = TRUE)
+      
+      if (base_param %in% names(data)) {
+        # Non-log version exists - use that instead
+        cat(sprintf("ℹ️  Found non-log version '%s' for '%s' - using non-log data (replicateBE will log-transform)\n", 
+                    base_param, param))
+        param_to_use <- base_param
+        data_is_logged <- FALSE
+      } else {
+        # Only log version available - use it
+        cat(sprintf("ℹ️  Only log-transformed '%s' available - using pre-logged data\n", param))
+        param_to_use <- param
+        data_is_logged <- TRUE
+      }
+    } else {
+      # This is a non-log parameter
+      # Check if log version exists and warn if both present
+      log_versions <- c(paste0("ln", param), paste0("log", param), paste0("Log", param))
+      found_log <- log_versions[log_versions %in% names(data)]
+      
+      if (length(found_log) > 0 && param %in% names(data)) {
+        # Both exist - prefer non-log
+        cat(sprintf("ℹ️  Using non-log '%s' (ignoring log version: %s)\n", 
+                    param, paste(found_log, collapse = ", ")))
+        param_to_use <- param
+        data_is_logged <- FALSE
+      } else if (length(found_log) > 0) {
+        # Only log version exists
+        cat(sprintf("ℹ️  Non-log '%s' not found, using log-transformed version '%s'\n", 
+                    param, found_log[1]))
+        param_to_use <- found_log[1]
+        data_is_logged <- TRUE
+      } else if (param %in% names(data)) {
+        # Only non-log exists
+        param_to_use <- param
+        data_is_logged <- FALSE
+      } else {
+        # Neither exists
+        cat("⚠️  Parameter", param, "not found in data, skipping...\n")
+        next
+      }
+    }
+    
+    # Check if the parameter exists in data
+    if (!param_to_use %in% names(data)) {
+      cat("⚠️  Parameter", param_to_use, "not found in data, skipping...\n")
+      next
+    }
+    
+    # Mark this base parameter as processed
+    processed_params <- c(processed_params, base_param_name)
+    
+    # =====================================================================
+    # Per-parameter routing: Determine if this param gets ABEL or fixed ABE
+    # =====================================================================
+    use_abel_for_param <- is_abel_eligible(base_param_name, abel_authority)
+    
+    if (!use_abel_for_param) {
+      # ---------------------------------------------------------------
+      # NON-ELIGIBLE: Use standard ABE with fixed 80-125% limits
+      # (e.g., AUC parameters under EMA, AUC0inf under HC)
+      # ---------------------------------------------------------------
+      cat(sprintf("  📋 %s: Not eligible for ABEL scaling under %s — using fixed ABE limits (80-125%%)\n",
+                  base_param_name, abel_authority))
+      
+      tryCatch({
+        # Use the ANOVA results already computed for this parameter
+        anova_res_for_param <- params$anova_results
+        
+        # Try to find results for this param (log-transformed)
+        ln_param <- paste0("ln", base_param_name)
+        param_anova <- NULL
+        if (!is.null(anova_res_for_param)) {
+          if (!is.null(anova_res_for_param[[ln_param]])) {
+            param_anova <- anova_res_for_param[[ln_param]]
+          } else if (!is.null(anova_res_for_param[[base_param_name]])) {
+            param_anova <- anova_res_for_param[[base_param_name]]
+          }
+        }
+        
+        if (!is.null(param_anova) && !is.null(param_anova$pe_estimate)) {
+          # Extract from existing ANOVA results
+          pe <- param_anova$pe_estimate
+          ci_lo_val <- param_anova$ci_lower
+          ci_hi_val <- param_anova$ci_upper
+          df_val <- param_anova$residual_df
+          
+          # Fixed limits for non-scaling parameters
+          fixed_lower <- 80.0
+          fixed_upper <- 125.0
+          
+          be_pass <- (ci_lo_val >= fixed_lower) && (ci_hi_val <= fixed_upper)
+          
+          ci_list[[base_param_name]] <- list(
+            parameter = base_param_name,
+            point_estimate = pe,
+            ci_lower = ci_lo_val,
+            ci_upper = ci_hi_val,
+            confidence_level = (1 - alpha) * 100,
+            geometric_mean_ratio = pe / 100,
+            within_limits = be_pass,
+            # Fixed limits - no scaling
+            cv_wr = NA,
+            scaled_lower_limit = fixed_lower,
+            scaled_upper_limit = fixed_upper,
+            limits_used = list(lower = fixed_lower, upper = fixed_upper, type = "fixed"),
+            method = paste0("ABE (fixed limits, ", abel_authority, " guidance)"),
+            regulator = abel_authority,
+            degrees_freedom = df_val,
+            cv_wt = NA,
+            n_subjects = length(unique(data$Subject)),
+            sw_test = NA,
+            sw_reference = NA,
+            sw_ratio = NA
+          )
+          
+          all_results[[base_param_name]] <- list(
+            model = NULL,
+            anova = param_anova$anova,
+            treatment_coef = param_anova$treatment_coef,
+            treatment_se = param_anova$treatment_se,
+            residual_mse = param_anova$residual_mse,
+            residual_df = df_val,
+            n_observations = param_anova$n_observations,
+            anova_method = param_anova$anova_method %||% "fixed",
+            cv_wr_percent = NA,
+            cv_wt_percent = NA,
+            data_was_logged = TRUE,
+            abel_routing = "fixed_abe"
+          )
+          
+          conclusion_list[[base_param_name]] <- be_pass
+          
+          cat(sprintf("  ✓ %s (ABE): PE=%.2f%%, CI [%.2f%%, %.2f%%], Limits [%.1f%%, %.1f%%], BE=%s\n",
+                      base_param_name, pe, ci_lo_val, ci_hi_val, fixed_lower, fixed_upper,
+                      ifelse(be_pass, "Pass", "Fail")))
+        } else {
+          cat(sprintf("  ⚠️  %s: No ANOVA results available, skipping\n", base_param_name))
+        }
+      }, error = function(e) {
+        cat(sprintf("  ❌ Error processing %s (ABE fallback): %s\n", base_param_name, e$message))
+      })
+      
+      next  # Skip to next parameter
+    }
+    
+    # =====================================================================
+    # ABEL-ELIGIBLE: Route through replicateBE for scaled limits
+    # =====================================================================
+    cat(sprintf("  📋 %s: Eligible for ABEL scaling under %s\n", base_param_name, abel_authority))
+    
+    tryCatch({
+      # Prepare data for replicateBE (expects lowercase: subject, period, sequence, treatment, PK)
+      replicate_data <- data.frame(
+        subject = as.factor(data$Subject),
+        period = as.factor(data$Period),
+        sequence = as.factor(data$Sequence),
+        treatment = as.factor(data$Treatment),
+        PK = as.numeric(data[[param_to_use]]),
+        stringsAsFactors = FALSE
+      )
+      
+      # Remove any rows with missing PK values
+      replicate_data <- replicate_data[!is.na(replicate_data$PK), ]
+      
+      if (nrow(replicate_data) == 0) {
+        stop("No valid data for parameter ", param_to_use)
+      }
+      
+      # Call replicateBE method (A or B) for ABEL (EMA method)
+      # Method A: ANOVA-based approach (default)
+      # Method B: Mixed model approach with subjects as random effect
+      # NOTE: Write to temp CSV and read from file (required for file-based params)
+      temp_dir <- tempdir()
+      temp_file <- file.path(temp_dir, paste0("abel_temp_", param_to_use))
+      write.csv(replicate_data, paste0(temp_file, ".csv"), row.names = FALSE, quote = FALSE)
+      
+      cat(sprintf("  - Wrote temp file: %s.csv\n", temp_file))
+      cat(sprintf("  - Data structure: %d rows, PK range: [%.2f, %.2f]\n", 
+                  nrow(replicate_data), min(replicate_data$PK, na.rm=TRUE), max(replicate_data$PK, na.rm=TRUE)))
+      cat(sprintf("  - Column types: subject=%s, period=%s, sequence=%s, treatment=%s, PK=%s\n",
+                  class(replicate_data$subject)[1], class(replicate_data$period)[1], 
+                  class(replicate_data$sequence)[1], class(replicate_data$treatment)[1], 
+                  class(replicate_data$PK)[1]))
+      cat(sprintf("  - Using %s data (logtrans = %s)\n", 
+                  ifelse(data_is_logged, "pre-logged", "non-log"), 
+                  ifelse(data_is_logged, "FALSE", "TRUE")))
+      
+      # Get ABEL-specific parameters from params (with defaults)
+      # Map UI values to replicateBE regulator codes
+      abel_cap_input <- if (!is.null(params$abel_upper_cap)) params$abel_upper_cap else "50"
+      
+      # Map to replicateBE regulator parameter
+      # Health Canada uses "HC" regulator code in replicateBE (cap at CVwR = 57.4%)
+      # EMA uses "EMA" regulator code (50% cap: 69.84% - 143.19%)
+      # GCC uses "GCC" regulator code (fixed widened limits: 75% - 133.33%)
+      if (abel_authority == "HC") {
+        abel_regulator_code <- "HC"  # Health Canada: cap at CVwR = 57.4% (limits: 66.7% - 150.0%)
+      } else {
+        abel_regulator_code <- switch(abel_cap_input,
+          "none" = "EMA",   # Use EMA but effectively no cap
+          "50" = "EMA",     # EMA with 50% cap (69.84% - 143.19%)
+          "fixed" = "GCC",  # GCC with fixed widened limits (75% - 133.33%)
+          "EMA"             # Default to EMA
+        )
+      }
+      
+      abel_adjust <- if (!is.null(params$abel_adjust_tie)) params$abel_adjust_tie else FALSE
+      abel_ola <- if (!is.null(params$abel_outlier_analysis)) params$abel_outlier_analysis else FALSE
+      abel_fence <- if (!is.null(params$abel_outlier_fence)) params$abel_outlier_fence else 2
+      
+      cat(sprintf("  - ABEL Settings: Authority=%s, Cap=%s -> Regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
+                  abel_authority, abel_cap_input, abel_regulator_code, abel_adjust, abel_ola, abel_fence))
+      
+      # Call appropriate replicateBE method based on ANOVA model selection
+      if (use_method_a) {
+        # Method A: Linear model (ANOVA-based)
+        abel_result <- tryCatch({
+          replicateBE::method.A(
+            path.in = temp_dir,
+            file = basename(temp_file),
+            ext = "csv",
+            print = FALSE,
+            details = TRUE,
+            alpha = alpha,
+            regulator = abel_regulator_code,  # Regulator: EMA, HC, or GCC
+            logtrans = !data_is_logged,  # Only log-transform if data is NOT already logged
+            adjust = abel_adjust,        # TIE adjustment
+            ola = abel_ola,              # Outlier analysis
+            fence = abel_fence           # Outlier detection fence
+          )
+        }, error = function(e) {
+          cat(sprintf("[ERROR] replicateBE::method.A() failed for %s: %s\n", param, e$message))
+          print(traceback())
+          stop(e)
+        })
+      } else {
+        # Method B: Mixed effects model with specified DF approximation
+        # NOTE: method.B() does NOT support 'adjust' (TIE adjustment) — only method.A() does.
+        # The 'option' parameter must be numeric: 1=Satterthwaite, 2=nlme/SAS, 3=Kenward-Roger
+        cat(sprintf("  - Method B option=%d (%s)\n", df_method,
+                    switch(as.character(df_method), "1"="Satterthwaite", "2"="nlme/SAS CONTAIN", "3"="Kenward-Roger")))
+        abel_result <- tryCatch({
+          replicateBE::method.B(
+            path.in = temp_dir,
+            file = basename(temp_file),
+            ext = "csv",
+            print = FALSE,
+            details = TRUE,
+            alpha = alpha,
+            regulator = abel_regulator_code,  # Regulator: EMA, HC, or GCC
+            logtrans = !data_is_logged,  # Only log-transform if data is NOT already logged
+            option = df_method,          # DF approximation: 1=Satterthwaite, 2=nlme, 3=KR
+            ola = abel_ola,              # Outlier analysis (boolean)
+            fence = abel_fence           # Outlier detection fence
+          )
+        }, error = function(e) {
+          cat(sprintf("[ERROR] replicateBE::method.B(option=%d) failed for %s: %s\n", df_method, param, e$message))
+          print(traceback())
+          stop(e)
+        })
+      }
+      
+      # Clean up temp file
+      unlink(paste0(temp_file, ".csv"))
+      
+      # Extract key results from the data frame (single row)
+      # Use row/column indexing: result[1, "column_name"]
+      pe <- abel_result[1, "PE(%)"]  # Point estimate as percentage
+      ci_lower <- abel_result[1, "CL.lo(%)"]  # Lower CI limit as percentage
+      ci_upper <- abel_result[1, "CL.hi(%)"]  # Upper CI limit as percentage
+      
+      # ABEL-specific values
+      cv_wr <- abel_result[1, "CVwR(%)"]  # CV% for reference (already in %)
+      
+      # Scaled limits (already in %)
+      scaled_lower <- abel_result[1, "L(%)"]
+      scaled_upper <- abel_result[1, "U(%)"]
+      
+      # BE conclusion
+      be_pass <- abel_result[1, "BE"] == "pass"
+      
+      # Extract ANOVA-related information from replicateBE output
+      # These will be used to populate ANOVA results display
+      anova_df <- abel_result[1, "DF"]  # Degrees of freedom
+      cv_wt <- abel_result[1, "CVwT(%)"]  # CV% for test
+      n_total <- abel_result[1, "n"]  # Total subjects
+      n_tt <- abel_result[1, "nTT"]  # Subjects with both test treatments
+      n_rr <- abel_result[1, "nRR"]  # Subjects with both reference treatments
+      sw_t <- abel_result[1, "swT"]  # Within-subject SD for test
+      sw_r <- abel_result[1, "swR"]  # Within-subject SD for reference
+      sw_ratio <- abel_result[1, "sw.ratio"]  # Ratio of within-subject SDs
+      
+      # Convert percentages back to ratios for display consistency
+      gmr <- pe / 100
+      ci_lo <- ci_lower / 100
+      ci_hi <- ci_upper / 100
+      limit_lo <- scaled_lower / 100
+      limit_hi <- scaled_upper / 100
+      
+      # Store confidence interval as LIST (matching ABE format)
+      # Must match structure from extract_be_from_anova for compatibility with results display
+      # Use method_label from ANOVA model determination above
+      # Store under BASE parameter name to avoid duplicates (e.g., "Cmax" not "lnCmax")
+      ci_list[[base_param_name]] <- list(
+        parameter = base_param_name,  # Use base name for display
+        point_estimate = pe,  # Already as percentage from replicateBE
+        ci_lower = ci_lower,  # Already as percentage
+        ci_upper = ci_upper,  # Already as percentage
+        confidence_level = (1 - alpha) * 100,
+        geometric_mean_ratio = gmr,  # As ratio
+        within_limits = be_pass,
+        # ABEL-specific fields
+        cv_wr = cv_wr,  # Within-subject CV for reference
+        scaled_lower_limit = scaled_lower,  # Scaled lower limit (%)
+        scaled_upper_limit = scaled_upper,  # Scaled upper limit (%)
+        limits_used = list(lower = scaled_lower, upper = scaled_upper, type = "scaled"),
+        method = method_label,
+        regulator = abel_authority,
+        # ANOVA-related fields from replicateBE
+        degrees_freedom = anova_df,
+        cv_wt = cv_wt,  # CV for test
+        n_subjects = n_total,
+        sw_test = sw_t,
+        sw_reference = sw_r,
+        sw_ratio = sw_ratio
+      )
+      
+      # Store ANOVA-like results for this parameter
+      # Create structure similar to standard ANOVA output for results display
+      # Store under BASE parameter name to avoid duplicates
+      all_results[[base_param_name]] <- list(
+        model = NULL,  # replicateBE doesn't return model object
+        anova = data.frame(
+          Source = c("Treatment", "Subject", "Period", "Residual"),
+          DF = c(1, n_total - 1, design_info$n_periods - 1, anova_df),
+          MS = c(NA, NA, NA, sw_r^2),  # Only residual MS available from sw_r
+          stringsAsFactors = FALSE
+        ),
+        treatment_coef = log(gmr),  # Log of GMR
+        treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha/2, anova_df),  # Back-calculate SE
+        residual_mse = sw_r^2,
+        residual_df = anova_df,
+        n_observations = n_total * design_info$n_periods,
+        anova_method = if(use_method_a) "lm" else switch(as.character(df_method), "1"="lmerTest", "3"="lmerTest", "nlme"),
+        df_method = if(use_method_a) NA else df_method,
+        df_method_label = if(use_method_a) NA else switch(as.character(df_method), "1"="Satterthwaite", "2"="nlme/SAS CONTAIN", "3"="Kenward-Roger"),
+        cv_wr_percent = cv_wr,
+        cv_wt_percent = cv_wt,
+        replicatebe_output = abel_result[1, ],  # Store full replicateBE output row
+        data_was_logged = data_is_logged  # Track whether we used pre-logged data
+      )
+      
+      conclusion_list[[base_param_name]] <- be_pass
+      
+      cat(sprintf("  ✓ %s: GMR=%.4f, 90%% CI [%.4f, %.4f], CV_WR=%.2f%%, BE=%s\n",
+                  base_param_name, gmr, ci_lo, ci_hi, cv_wr, ifelse(be_pass, "Pass", "Fail")))
+      
+    }, error = function(e) {
+      cat("❌ Error analyzing", param, ":", e$message, "\n")
+    })
+  }
+  
+  if (length(ci_list) == 0) {
+    stop("No parameters could be analyzed successfully")
+  }
+  
+  # Convert conclusion_list to proper format (TRUE/FALSE values)
+  be_conclusions_formatted <- list()
+  for (param in names(conclusion_list)) {
+    be_conclusions_formatted[[param]] <- conclusion_list[[param]]
+  }
+  
+  # Combine into results structure matching BioEQ format
+  # NOTE: Keep confidence_intervals as a LIST (not data frame) to match ABE/standard format
+  # Each element should be: confidence_intervals[[param]] = list(parameter, point_estimate, ci_lower, ci_upper, ...)
+  # IMPORTANT: Wrap ANOVA results in nested structure to match simple ANOVA format
+  # Display expects: be_res$anova_results$anova_results[[param]]
+  results <- list(
+    confidence_intervals = ci_list,  # Keep as list, NOT data frame
+    be_conclusions = be_conclusions_formatted,
+    anova_results = list(
+      anova_results = all_results,  # Nested structure for display compatibility
+      design = design_info$design_type,
+      parameters = names(all_results),
+      note = sprintf("ANOVA performed by replicateBE %s", method_label)
     ),
-    implementation_notes = list(
-      "Calculate within-subject variability for reference formulation",
-      "Apply EMA expansion formula with maximum caps",
-      "Ensure GMR constraint satisfaction",
-      "Handle switching conditions based on CV"
-    )
+    design_type = design_info$design_type,
+    n_subjects = length(unique(data$Subject)),
+    n_periods = design_info$n_periods,
+    analysis_type = "ABEL",  # CRITICAL: Required for UI to recognize ABEL analysis
+    analysis_method = sprintf("ABEL %s (%s)", method_label, abel_authority),
+    be_method = sprintf("Average Bioequivalence with Expanding Limits (ABEL) - %s [%s]", method_label, abel_authority),
+    anova_model = anova_model,
+    replicatebe_method = if(use_method_a) "A" else "B",
+    df_approximation = if(use_method_a) NA else df_method,
+    alpha_level = alpha,
+    regulator = abel_authority,
+    limits_justification = sprintf("ABEL per %s guidance: scaled limits for eligible parameters, fixed 80-125%% for others", abel_authority)
   )
   
+  cat("✅ ABEL analysis completed!\n")
   return(results)
 }
 
@@ -233,7 +707,8 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
 #' @export
 be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25), 
                                parameters = c("lnAUC0t", "lnAUC0inf", "lnCmax"),
-                               anova_model = "fixed", anova_results = NULL) {
+                               anova_model = "fixed", anova_results = NULL,
+                               be_limits_per_param = NULL) {
   
   cat("🔬 Analyzing 2x2x2 crossover bioequivalence study...\n")
   
@@ -254,7 +729,7 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
               length(pk_params), paste(pk_params, collapse = ", ")))
   
   # Extract BE results from ANOVA
-  be_results <- extract_be_from_anova(anova_results, alpha, be_limits)
+  be_results <- extract_be_from_anova(anova_results, alpha, be_limits, be_limits_per_param)
   
   # Instead of filtering based on input parameters, use all parameters that were successfully analyzed
   # This ensures that all user-selected parameters that had valid ANOVA results are included
@@ -272,7 +747,7 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
     stop("No valid confidence intervals available for the requested parameters")
   }
   
-  # Generate bioequivalence conclusions
+  # Generate bioequivalence conclusions (uses limits_used from each CI)
   be_conclusions <- evaluate_bioequivalence(filtered_ci, be_limits)
   
   # Compile results
@@ -311,7 +786,8 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
 #' @export
 be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25), 
                        parameters = c("AUC0t", "AUC0inf", "Cmax"), 
-                       welch_correction = TRUE) {
+                       welch_correction = TRUE,
+                       be_limits_per_param = NULL) {
   
   cat("🔬 Analyzing parallel group bioequivalence study...\n")
   
@@ -357,7 +833,27 @@ be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
       param_results <- analyze_parallel_parameter(data, param, alpha, welch_correction)
       
       if (!is.null(param_results)) {
-        confidence_intervals[[param]] <- param_results$ci
+        ci <- param_results$ci
+        
+        # Add per-parameter limits_used metadata
+        if (!is.null(be_limits_per_param)) {
+          param_upper_name <- toupper(param)
+          if (grepl("CMAX", param_upper_name) && !is.null(be_limits_per_param$Cmax)) {
+            ci$limits_used <- list(
+              lower = be_limits_per_param$Cmax$lower %||% 80,
+              upper = be_limits_per_param$Cmax$upper %||% 125,
+              type = "fixed"
+            )
+          } else if (grepl("AUC|AUMC", param_upper_name) && !is.null(be_limits_per_param$AUC)) {
+            ci$limits_used <- list(
+              lower = be_limits_per_param$AUC$lower %||% 80,
+              upper = be_limits_per_param$AUC$upper %||% 125,
+              type = "fixed"
+            )
+          }
+        }
+        
+        confidence_intervals[[param]] <- ci
         statistical_results[[param]] <- param_results$stats
         
         cat("    ", param, ": ", sprintf("%.2f%% (%.2f%% - %.2f%%)", 
@@ -492,9 +988,35 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
 #' @param alpha Significance level (default 0.05) 
 #' @param be_limits Bioequivalence limits (default c(0.8, 1.25))
 #' @return BE analysis results extracted from ANOVA
-extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8, 1.25)) {
+extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8, 1.25), be_limits_per_param = NULL) {
   
   cat("🔗 Extracting bioequivalence results from ANOVA analysis...\n")
+  
+  # Helper: resolve BE limits for a specific parameter
+  # Maps parameter names like lnCmax -> Cmax category, lnAUC0t -> AUC category
+  resolve_param_limits <- function(param_name, global_limits, per_param) {
+    if (is.null(per_param)) return(global_limits)
+    
+    # Determine category: Cmax or AUC
+    param_upper <- toupper(param_name)
+    if (grepl("CMAX", param_upper)) {
+      cat_limits <- per_param$Cmax
+    } else if (grepl("AUC|AUMC", param_upper)) {
+      cat_limits <- per_param$AUC
+    } else {
+      # Unknown parameter category — use global limits
+      return(global_limits)
+    }
+    
+    if (is.null(cat_limits)) return(global_limits)
+    
+    lower <- (cat_limits$lower %||% 80) / 100
+    upper <- (cat_limits$upper %||% 125) / 100
+    
+    # Only use per-param limits if they differ from default 80/125
+    # (i.e. user actually changed them in Advanced Options)
+    return(c(lower, upper))
+  }
   
   # Filter to only log-transformed parameters for BE analysis
   log_params <- names(anova_results)[grepl("^ln", names(anova_results))]
@@ -537,8 +1059,6 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     # Extract pre-calculated treatment difference from ANOVA results
     # This ensures consistent T/R ratio calculation
     treatment_diff <- anova_result$treatment_coef
-    cat(sprintf("  [DEBUG] Using pre-calculated treatment_diff: %s\n", 
-                if(is.na(treatment_diff)) "NA" else format(treatment_diff, digits=6)))
     
     # Check if treatment_diff is valid
     if (is.na(treatment_diff) || is.null(treatment_diff)) {
@@ -670,39 +1190,31 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     ci_lower <- exp(ci_lower_log) * 100
     ci_upper <- exp(ci_upper_log) * 100
     
-    # Debug output for BE calculation values
-    cat(sprintf("  [DEBUG] %s BE calculation values:\n", param))
-    cat(sprintf("    treatment_diff: %s\n", if(is.na(treatment_diff)) "NA" else format(treatment_diff, digits=6)))
-    cat(sprintf("    mse: %s\n", if(is.na(mse)) "NA" else format(mse, digits=6)))
-    cat(sprintf("    treatment_se: %s\n", if(is.na(treatment_se)) "NA" else format(treatment_se, digits=6)))
-    cat(sprintf("    df: %s\n", if(is.na(df) || df <= 0) "NA" else as.character(round(df))))
-    cat(sprintf("    t_critical: %s\n", if(is.na(t_critical)) "NA" else format(t_critical, digits=6)))
-    cat(sprintf("    point_estimate: %s\n", if(is.na(point_estimate)) "NA" else format(point_estimate, digits=2)))
-    cat(sprintf("    ci_lower: %s\n", if(is.na(ci_lower)) "NA" else format(ci_lower, digits=2)))
-    cat(sprintf("    ci_upper: %s\n", if(is.na(ci_upper)) "NA" else format(ci_upper, digits=2)))
+    # Resolve per-parameter limits (falls back to global be_limits)
+    param_be_limits <- resolve_param_limits(param, be_limits, be_limits_per_param)
     
-    # Check for invalid values before evaluating bioequivalence
+    # Pre-compute limits for storage regardless of CI validity
+    if (is.null(param_be_limits) || length(param_be_limits) < 2 || 
+        is.na(param_be_limits[1]) || is.na(param_be_limits[2])) {
+      lower_limit <- 80.0
+      upper_limit <- 125.0
+    } else {
+      # Convert decimal limits to percentage if needed
+      if (max(param_be_limits, na.rm = TRUE) <= 10) {
+        lower_limit <- param_be_limits[1] * 100
+        upper_limit <- param_be_limits[2] * 100
+      } else {
+        lower_limit <- param_be_limits[1]
+        upper_limit <- param_be_limits[2]
+      }
+    }
+    
+    cat(sprintf("  📏 %s limits: %.2f%% - %.2f%%\n", param, lower_limit, upper_limit))
+    
     if (is.na(ci_lower) || is.na(ci_upper) || is.infinite(ci_lower) || is.infinite(ci_upper)) {
       cat(sprintf("  ⚠️  Warning: Invalid confidence interval values for %s - skipping BE evaluation\n", param))
       within_limits <- FALSE
     } else {
-      # Validate BE limits before evaluation
-      if (is.null(be_limits) || length(be_limits) < 2 || 
-          is.na(be_limits[1]) || is.na(be_limits[2])) {
-        cat(sprintf("  ⚠️  Warning: Invalid BE limits - using default 80-125%%\n"))
-        lower_limit <- 80.0
-        upper_limit <- 125.0
-      } else {
-        # Convert decimal limits to percentage if needed
-        if (max(be_limits, na.rm = TRUE) <= 10) {
-          lower_limit <- be_limits[1] * 100
-          upper_limit <- be_limits[2] * 100
-        } else {
-          lower_limit <- be_limits[1]
-          upper_limit <- be_limits[2]
-        }
-      }
-      
       # Evaluate bioequivalence with robust error handling
       tryCatch({
         condition1 <- ci_lower >= lower_limit
@@ -733,6 +1245,8 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
       standard_error = treatment_se,            # Corrected: SE from ANOVA model
       degrees_freedom = df,
       within_limits = within_limits,
+      # Per-parameter limits used for this evaluation
+      limits_used = list(lower = lower_limit, upper = upper_limit, type = "fixed"),
       # Additional BE-specific information
       geometric_mean_ratio = exp(treatment_diff),  # Raw GMR (not as percentage)
       mse = mse,                            # MSE from ANOVA
@@ -797,14 +1311,6 @@ analyze_crossover_parameter <- function(data, parameter, alpha, be_limits, anova
 #' @return Parameter analysis results
 analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction = TRUE) {
   
-  # Debug: show the data structure being passed
-  cat(sprintf("  [DEBUG] analyze_parallel_parameter called with parameter: %s (Welch: %s)\n", parameter, welch_correction))
-  
-  # Print ALL the raw data values for debugging (optional)
-  if (parameter %in% names(data)) {
-    cat(sprintf("  [DEBUG] Analysis of %s values (n=%d)\n", parameter, nrow(data)))
-  }
-  
   # Prepare parameter data
   param_data <- prepare_parameter_data(data, parameter)
   
@@ -817,7 +1323,7 @@ analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction 
   treatment_col <- NULL
   
   # Check all possible treatment column names in order of preference
-  possible_cols <- c("Formulation", "Treatment", "treatment", "Treat")
+  possible_cols <- c("Treatment", "Treatment", "treatment", "Treat")
   for (col in possible_cols) {
     if (col %in% names(param_data)) {
       treatment_col <- col
@@ -829,15 +1335,12 @@ analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction 
     stop("Cannot find treatment column in data. Available columns: ", paste(names(param_data), collapse = ", "))
   }
   
-  # Get unique treatment values to debug
+  # Get unique treatment values
   unique_treatments <- unique(param_data[[treatment_col]])
-  cat(sprintf("  [DEBUG] Treatment column: %s, values: %s\n", treatment_col, paste(unique_treatments, collapse = ", ")))
   
   # Handle all possible test/reference value mappings
   test_data <- subset(param_data, param_data[[treatment_col]] %in% c("Test", "T", "test"))
   ref_data <- subset(param_data, param_data[[treatment_col]] %in% c("Reference", "R", "ref", "reference"))
-  
-  cat(sprintf("  [DEBUG] Test group size: %d, Ref group size: %d\n", nrow(test_data), nrow(ref_data)))
   
   if (nrow(test_data) == 0 || nrow(ref_data) == 0) {
     warning("Missing test or reference data for parameter: ", parameter)
@@ -852,16 +1355,12 @@ analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction 
     var.equal = !welch_correction    # Use welch_correction parameter
   )
   
-  # Debug: show the t.test results (key information only)
-  cat(sprintf("  [DEBUG] t-test: t=%.3f, df=%.1f, p=%.4f\n", test_result$statistic, test_result$parameter, test_result$p.value))
   
   # EXACTLY like reference code: calculate results
   logPE <- as.numeric(test_result$estimate[1] - test_result$estimate[2])
   point_estimate <- 100 * exp(logPE)
   ci_lower <- 100 * exp(test_result$conf.int[1])
   ci_upper <- 100 * exp(test_result$conf.int[2])
-  
-  cat(sprintf("  [DEBUG] Results: PE=%.2f%%, CI=[%.2f%%, %.2f%%]\n", point_estimate, ci_lower, ci_upper))
   
   # Return simple results structure
   ci_result <- list(
@@ -981,7 +1480,7 @@ perform_replicate_mixed_effects <- function(param_data, parameter) {
   # Ensure proper factor levels
   param_data$Subject <- as.factor(param_data$Subject)
   param_data$Period <- as.factor(param_data$Period)
-  param_data$Formulation <- as.factor(param_data$Formulation)
+  param_data$Treatment <- as.factor(param_data$Treatment)
   
   # Add sequence information if not present
   if (!"Sequence" %in% names(param_data)) {
@@ -991,7 +1490,7 @@ perform_replicate_mixed_effects <- function(param_data, parameter) {
   
   # Fit mixed-effects model
   model <- nlme::lme(
-    log_param ~ Formulation + Period + Sequence,
+    log_param ~ Treatment + Period + Sequence,
     random = ~ 1 | Subject,
     data = param_data,
     method = "REML"
@@ -1021,8 +1520,8 @@ validate_be_data <- function(data, design) {
     stop("Data must be a non-empty data frame")
   }
   
-  # Standardize column names
-  data <- standardize_column_names(data)
+  # Data should already have standardized column names from Shiny upload process
+  # No need to call standardize_column_names() - removed to avoid redundancy
   
   # Check required columns
   required_cols <- get_required_columns(design)
@@ -1030,7 +1529,8 @@ validate_be_data <- function(data, design) {
   
   if (length(missing_cols) > 0) {
     stop("Missing required columns for ", design, " design: ", 
-         paste(missing_cols, collapse = ", "))
+         paste(missing_cols, collapse = ", "),
+         "\nAvailable columns: ", paste(names(data), collapse = ", "))
   }
   
   # Validate data quality
@@ -1117,7 +1617,7 @@ prepare_parameter_data <- function(data, parameter) {
   
   # Ensure proper factor levels
   param_data$Subject <- as.factor(param_data$Subject)
-  param_data$Formulation <- as.factor(param_data$Formulation)
+  param_data$Treatment <- as.factor(param_data$Treatment)
   
   if ("Period" %in% names(param_data)) {
     param_data$Period <- as.factor(param_data$Period)
@@ -1149,7 +1649,7 @@ prepare_log_parameter_data <- function(data, parameter) {
   
   # Ensure proper factor levels
   param_data$Subject <- as.factor(param_data$Subject)
-  param_data$Formulation <- as.factor(param_data$Formulation)
+  param_data$Treatment <- as.factor(param_data$Treatment)
   
   if ("Period" %in% names(param_data)) {
     param_data$Period <- as.factor(param_data$Period)
@@ -1290,14 +1790,13 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
   for (param in names(confidence_intervals)) {
     ci <- confidence_intervals[[param]]
     
-    # Debug the CI structure
-    cat(sprintf("🔍 Evaluating %s:\n", param))
-    cat(sprintf("  CI structure: %s\n", paste(names(ci), collapse = ", ")))
-    cat(sprintf("  ci_lower value: %s (is.na: %s)\n", ci$ci_lower, is.na(ci$ci_lower)))
-    cat(sprintf("  ci_upper value: %s (is.na: %s)\n", ci$ci_upper, is.na(ci$ci_upper)))
-    if ("log_ci_lower" %in% names(ci)) {
-      cat(sprintf("  log_ci_lower value: %s (is.na: %s)\n", ci$log_ci_lower, is.na(ci$log_ci_lower)))
-      cat(sprintf("  log_ci_upper value: %s (is.na: %s)\n", ci$log_ci_upper, is.na(ci$log_ci_upper)))
+    # Use per-parameter limits_used if already set on the CI result (from extract_be_from_anova)
+    if (!is.null(ci$limits_used)) {
+      param_lower <- ci$limits_used$lower %||% lower_limit
+      param_upper <- ci$limits_used$upper %||% upper_limit
+    } else {
+      param_lower <- lower_limit
+      param_upper <- upper_limit
     }
     
     # Handle different CI structure possibilities
@@ -1339,16 +1838,16 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
     
     # Evaluate bioequivalence with robust error handling
     # Validate all values before logical operations
-    if (is.null(lower_limit) || is.null(upper_limit) || is.na(lower_limit) || is.na(upper_limit)) {
+    if (is.null(param_lower) || is.null(param_upper) || is.na(param_lower) || is.na(param_upper)) {
       cat(sprintf("  ⚠️ Invalid BE limits for %s: lower=%s, upper=%s\n", 
-                  param, lower_limit, upper_limit))
+                  param, param_lower, param_upper))
       be_conclusions[[param]] <- NA
       next
     }
     
     tryCatch({
-      condition1 <- ci_lower >= lower_limit
-      condition2 <- ci_upper <= upper_limit
+      condition1 <- ci_lower >= param_lower
+      condition2 <- ci_upper <= param_upper
       
       if (is.na(condition1) || is.na(condition2)) {
         cat(sprintf("  ⚠️ NA conditions in BE evaluation for %s\n", param))
@@ -1358,7 +1857,7 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
       }
       
       cat(sprintf("  ✅ %s: CI [%.1f%%, %.1f%%] vs Limits [%.1f%%, %.1f%%] → %s\n", 
-                  param, ci_lower, ci_upper, lower_limit, upper_limit,
+                  param, ci_lower, ci_upper, param_lower, param_upper,
                   ifelse(is_be, "Bioequivalent", "Not Bioequivalent")))
       
     }, error = function(e) {
@@ -1380,13 +1879,6 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
     total_count <- length(valid_conclusions)
     cat(sprintf("📊 Summary: %d of %d parameters are bioequivalent\n", 
                 be_count, total_count))
-  }
-  
-  # Debug: Print all BE conclusions
-  cat("🔍 BE Conclusions Debug:\n")
-  for (param_name in names(be_conclusions)) {
-    conclusion_value <- be_conclusions[[param_name]]
-    cat(sprintf("  %s: %s (class: %s)\n", param_name, conclusion_value, class(conclusion_value)))
   }
   
   return(be_conclusions)
@@ -1501,32 +1993,32 @@ analyze_crossover_parameter_legacy <- function(data, parameter, alpha, be_limits
     param_data$log_param <- log(param_data[[parameter]])
     
     # Simple ANOVA model (crossover design)
-    formula_str <- "log_param ~ Formulation + Subject + Period"
+    formula_str <- "log_param ~ Treatment + Subject + Period"
     
     # Check if we have required variables
-    if (all(c("Formulation", "Subject", "Period") %in% names(param_data))) {
+    if (all(c("Treatment", "Subject", "Period") %in% names(param_data))) {
       
       # Convert to factors
-      param_data$Formulation <- as.factor(param_data$Formulation)
+      param_data$Treatment <- as.factor(param_data$Treatment)
       param_data$Subject <- as.factor(param_data$Subject)
       param_data$Period <- as.factor(param_data$Period)
       
       # Fit model
-      model <- lm(log_param ~ Formulation + Subject + Period, data = param_data)
+      model <- lm(log_param ~ Treatment + Subject + Period, data = param_data)
       
       # Extract treatment effect (Test vs Reference)
-      formulation_coef <- coef(model)["FormulationTest"]
+      formulation_coef <- coef(model)["TreatmentTest"]
       if (is.na(formulation_coef)) {
         # Try the other way around
-        formulation_coef <- -coef(model)["FormulationReference"]
+        formulation_coef <- -coef(model)["TreatmentReference"]
       }
       
       if (!is.na(formulation_coef)) {
         # Get standard error
         model_summary <- summary(model)
-        se <- model_summary$coefficients["FormulationTest", "Std. Error"]
+        se <- model_summary$coefficients["TreatmentTest", "Std. Error"]
         if (is.na(se)) {
-          se <- model_summary$coefficients["FormulationReference", "Std. Error"]
+          se <- model_summary$coefficients["TreatmentReference", "Std. Error"]
         }
         
         # Calculate confidence interval
@@ -1564,7 +2056,7 @@ analyze_crossover_parameter_legacy <- function(data, parameter, alpha, be_limits
 # SECTION 7: HELPER FUNCTIONS FOR STATISTICAL COMPUTATIONS
 # =============================================================================
 
-#' Extract Formulation Effect from Model
+#' Extract Treatment Effect from Model
 #'
 #' @param model Linear model object
 #' @return List with formulation effect value and name
@@ -1572,7 +2064,7 @@ extract_formulation_effect <- function(model) {
   coefs <- coef(model)
   
   # Try different formulation coefficient names
-  formulation_names <- c("FormulationTest", "FormulationT", "FormulationReference", "FormulationR")
+  formulation_names <- c("TreatmentTest", "TreatmentT", "TreatmentReference", "TreatmentR")
   
   for (name in formulation_names) {
     if (name %in% names(coefs) && !is.na(coefs[name])) {
@@ -1623,7 +2115,7 @@ validate_subject_consistency <- function(data, design) {
     
     if (design_info$is_partial_replicate) {
       # For partial replicate, check reference formulation replication
-      formulations <- unique(data$Formulation)
+      formulations <- unique(data$Treatment)
       ref_formulation <- if ("Reference" %in% formulations) {
         "Reference"
       } else if ("R" %in% formulations) {
@@ -1632,12 +2124,11 @@ validate_subject_consistency <- function(data, design) {
         formulations[1]
       }
       
-      ref_counts <- data %>%
-        filter(Formulation == ref_formulation) %>%
-        group_by(Subject) %>%
-        summarise(n_obs = n(), .groups = "drop")
+      # Count reference observations per subject without dplyr
+      ref_data <- data[data$Treatment == ref_formulation, ]
+      ref_counts <- tapply(rep(1, nrow(ref_data)), ref_data$Subject, sum)
       
-      subjects_with_ref_replicates <- sum(ref_counts$n_obs >= 2)
+      subjects_with_ref_replicates <- sum(ref_counts >= 2, na.rm = TRUE)
       
       if (subjects_with_ref_replicates == 0) {
         warning("Partial replicate design requires subjects with multiple reference observations")
@@ -1651,10 +2142,10 @@ validate_subject_consistency <- function(data, design) {
 #' Get Required Columns by Design
 get_required_columns <- function(design) {
   switch(design,
-    "2x2x2" = c("Subject", "Period", "Formulation"),
-    "parallel" = c("Subject", "Formulation"),
-    "replicate" = c("Subject", "Period", "Formulation"),
-    "auto" = c("Subject", "Formulation")  # Minimum for auto-detection
+    "2x2x2" = c("Subject", "Period", "Treatment"),
+    "parallel" = c("Subject", "Treatment"),
+    "replicate" = c("Subject", "Period", "Treatment"),
+    "auto" = c("Subject", "Treatment")  # Minimum for auto-detection
   )
 }
 
@@ -1667,7 +2158,7 @@ standardize_column_names <- function(data) {
   name_mappings <- list(
     Subject = c("SUBJECT", "ID", "USUBJID", "subj"),
     Period = c("PERIOD", "PER", "period"),
-    Formulation = c("FORMULATION", "TRT", "TREATMENT", "tmt", "Treatment"),
+    Treatment = c("FORMULATION", "TRT", "TREATMENT", "tmt", "Treatment"),
     Sequence = c("SEQUENCE", "SEQ", "seq")
   )
   
@@ -1690,7 +2181,7 @@ standardize_column_names <- function(data) {
 #' @return Data with validated numeric parameters
 validate_numeric_parameters <- function(data) {
   # Identify potential PK parameters (numeric columns excluding ID variables)
-  id_cols <- c("Subject", "Period", "Formulation", "Sequence")
+  id_cols <- c("Subject", "Period", "Treatment", "Sequence")
   numeric_cols <- names(data)[sapply(data, is.numeric)]
   pk_cols <- setdiff(numeric_cols, id_cols)
   
@@ -1704,21 +2195,21 @@ validate_numeric_parameters <- function(data) {
   return(data)
 }
 
-#' Validate Formulation Coding
+#' Validate Treatment Coding
 #'
 #' @param data Study data
 #' @return Data with validated formulation coding
 validate_formulation_coding <- function(data) {
   # Standardize formulation levels
-  if ("Formulation" %in% names(data)) {
+  if ("Treatment" %in% names(data)) {
     # Map common formulation codes
-    data$Formulation <- as.character(data$Formulation)
-    data$Formulation[data$Formulation %in% c("T", "Test", "1")] <- "Test"
-    data$Formulation[data$Formulation %in% c("R", "Reference", "2")] <- "Reference"
-    data$Formulation <- as.factor(data$Formulation)
+    data$Treatment <- as.character(data$Treatment)
+    data$Treatment[data$Treatment %in% c("T", "Test", "1")] <- "Test"
+    data$Treatment[data$Treatment %in% c("R", "Reference", "2")] <- "Reference"
+    data$Treatment <- as.factor(data$Treatment)
     
     # Check that we have both levels
-    levels_present <- levels(data$Formulation)
+    levels_present <- levels(data$Treatment)
     if (!"Test" %in% levels_present || !"Reference" %in% levels_present) {
       warning("Missing Test or Reference formulation in data")
     }
@@ -1733,62 +2224,208 @@ validate_formulation_coding <- function(data) {
 
 #' Detect Replicate Design Type and Structure
 #'
-#' @param data Study data with Subject, Period, Formulation columns
+#' @param data Study data with Subject, Period, Treatment columns
 #' @return List with design information
 detect_replicate_design <- function(data) {
   
-  # Check if we have required columns
-  if (!all(c("Subject", "Period", "Formulation") %in% names(data))) {
-    stop("Data must contain Subject, Period, and Formulation columns")
+  # Data should already have standardized capitalized column names from Shiny upload
+  # PREFER Sequence column if available (most accurate), otherwise infer from Period/Treatment
+  
+  # Check minimum required columns
+  if (!"Subject" %in% colnames(data)) {
+    stop("Data must contain Subject column. Found: ", paste(colnames(data), collapse = ", "))
   }
   
-  # Analyze the structure without dplyr dependency
-  subjects <- unique(data$Subject)
-  subject_patterns <- data.frame(
-    Subject = character(),
-    pattern = character(),
-    n_periods = numeric(),
-    formulations = character(),
-    stringsAsFactors = FALSE
-  )
+  # PREFERRED METHOD: Use Sequence column if available
+  if ("Sequence" %in% colnames(data)) {
+    cat("ℹ️  Using Sequence column for design detection (most accurate)\n")
+    
+    # Extract unique sequences
+    sequences <- unique(data$Sequence)
+    sequences <- sequences[!is.na(sequences)]
+    
+    if (length(sequences) == 0) {
+      stop("Sequence column exists but contains no valid data")
+    }
+    
+    # Determine periods from sequence length
+    n_periods <- nchar(as.character(sequences[1]))
+    
+    # Count subjects per sequence
+    sequence_dist <- table(sapply(unique(data$Subject), function(s) {
+      as.character(data$Sequence[data$Subject == s][1])
+    }))
+    
+    # Build design info
+    design_info <- list()
+    design_info$sequences <- as.character(sequences)
+    design_info$n_periods <- n_periods
+    design_info$sequence_distribution <- sequence_dist
+    design_info$n_subjects_total <- length(unique(data$Subject))
+    design_info$n_subjects_complete <- length(unique(data$Subject))
+    design_info$subjects_with_missing_periods <- character(0)
+    design_info$n_subjects_incomplete <- 0
+    
+    # Detect design type from sequences
+    if (n_periods == 4) {
+      if (any(grepl("TRTR|RTRT", sequences))) {
+        design_info$design_name <- "2x2x4 (Full Replicate)"
+        design_info$design_type <- "2x2x4 Full Replicate"
+        design_info$is_replicate <- TRUE
+        design_info$is_partial_replicate <- FALSE
+      } else {
+        design_info$design_name <- "4-Period Crossover"
+        design_info$design_type <- "4-Period Crossover"
+        design_info$is_replicate <- FALSE
+        design_info$is_partial_replicate <- FALSE
+      }
+    } else if (n_periods == 3) {
+      if (any(grepl("TRR|RTT|RRT|TTR", sequences))) {
+        design_info$design_name <- "2x2x3 (Partial Replicate)"
+        design_info$design_type <- "2x2x3 Partial Replicate"
+        design_info$is_replicate <- TRUE
+        design_info$is_partial_replicate <- TRUE
+      } else if (any(grepl("TRT|RTR", sequences))) {
+        design_info$design_name <- "2x3x3 (Full Replicate)"
+        design_info$design_type <- "2x3x3 Full Replicate"
+        design_info$is_replicate <- TRUE
+        design_info$is_partial_replicate <- FALSE
+      } else {
+        design_info$design_name <- "3-Period Crossover"
+        design_info$design_type <- "3-Period Crossover"
+        design_info$is_replicate <- FALSE
+        design_info$is_partial_replicate <- FALSE
+      }
+    } else if (n_periods == 2) {
+      design_info$design_name <- "2x2x2 Crossover"
+      design_info$design_type <- "2x2x2 Crossover"
+      design_info$is_replicate <- FALSE
+      design_info$is_partial_replicate <- FALSE
+    } else {
+      design_info$design_name <- paste0(n_periods, "-Period Crossover")
+      design_info$design_type <- paste0(n_periods, "-Period Crossover")
+      design_info$is_replicate <- FALSE
+      design_info$is_partial_replicate <- FALSE
+    }
+    
+    return(design_info)
+  }
   
-  # Build subject patterns manually
-  for (subj in subjects) {
-    subj_data <- data[data$Subject == subj, ]
-    subj_data <- subj_data[order(subj_data$Period), ]
-    
-    pattern <- paste(subj_data$Formulation, collapse = "")
-    n_periods <- nrow(subj_data)
-    formulations <- paste(unique(subj_data$Formulation), collapse = ",")
-    
-    subject_patterns <- rbind(subject_patterns, data.frame(
-      Subject = subj,
-      pattern = pattern,
-      n_periods = n_periods,
-      formulations = formulations,
+  # FALLBACK METHOD: Infer from Period and Treatment columns
+  cat("ℹ️  Sequence column not found - inferring design from Period and Treatment\n")
+  
+  required_cols <- c("Period", "Treatment")
+  if (!all(required_cols %in% colnames(data))) {
+    stop("Data must contain Period and Treatment columns (or Sequence column). Found: ", 
+         paste(colnames(data), collapse = ", "))
+  }
+  
+  # Prefer Sequence column if available, otherwise use Treatment
+  use_sequence <- "Sequence" %in% colnames(data)
+  
+  if (use_sequence) {
+    cat("ℹ️  Using Sequence column for design detection\n")
+    # Extract pattern from Sequence column directly
+    subjects <- unique(data$Subject)
+    subject_patterns <- data.frame(
+      Subject = character(),
+      pattern = character(),
+      n_periods = numeric(),
+      has_missing_periods = logical(),
       stringsAsFactors = FALSE
-    ))
+    )
+    
+    for (subj in subjects) {
+      subj_data <- data[data$Subject == subj, ]
+      
+      # Get sequence from first row (should be same for all rows of same subject)
+      pattern <- as.character(subj_data$Sequence[1])
+      n_periods <- nchar(pattern)  # RTRT = 4, TRR = 3, etc.
+      
+      # Check for missing periods
+      expected_periods <- 1:n_periods
+      actual_periods <- unique(subj_data$Period)
+      has_missing <- !all(expected_periods %in% actual_periods)
+      
+      subject_patterns <- rbind(subject_patterns, data.frame(
+        Subject = subj,
+        pattern = pattern,
+        n_periods = n_periods,
+        has_missing_periods = has_missing,
+        stringsAsFactors = FALSE
+      ))
+    }
+    
+  } else {
+    # Fallback: use Treatment column to build pattern
+    if (!"Treatment" %in% colnames(data)) {
+      stop("Data must contain either Sequence or Treatment column for design detection")
+    }
+    
+    cat("ℹ️  Using Treatment column to infer design (Sequence column preferred)\n")
+    
+    subjects <- unique(data$Subject)
+    subject_patterns <- data.frame(
+      Subject = character(),
+      pattern = character(),
+      n_periods = numeric(),
+      has_missing_periods = logical(),
+      stringsAsFactors = FALSE
+    )
+    
+    for (subj in subjects) {
+      subj_data <- data[data$Subject == subj, ]
+      subj_data <- subj_data[order(subj_data$Period), ]
+      
+      # Check for missing periods
+      expected_periods <- 1:max(subj_data$Period)
+      actual_periods <- subj_data$Period
+      has_missing <- !all(expected_periods %in% actual_periods)
+      
+      pattern <- paste(subj_data$Treatment, collapse = "")
+      n_periods <- nrow(subj_data)
+      
+      subject_patterns <- rbind(subject_patterns, data.frame(
+        Subject = subj,
+        pattern = pattern,
+        n_periods = n_periods,
+        has_missing_periods = has_missing,
+        stringsAsFactors = FALSE
+      ))
+    }
   }
   
-  # Get unique patterns
-  unique_patterns <- unique(subject_patterns$pattern)
-  n_periods <- max(subject_patterns$n_periods)
+  # Identify subjects with missing periods
+  subjects_with_missing <- subject_patterns$Subject[subject_patterns$has_missing_periods]
   
-  # Determine design type
+  # Filter to complete subjects only for design detection
+  complete_patterns <- subject_patterns[!subject_patterns$has_missing_periods, ]
+  
+  # Get unique patterns from complete subjects
+  unique_patterns <- unique(complete_patterns$pattern)
+  n_periods <- max(complete_patterns$n_periods)
+  
+  # Determine design type based on complete subjects only
   design_info <- list()
   
   if (n_periods == 3) {
     # Check for 2x2x3 designs (TRR, RTT, etc.)
     if (any(grepl("TRR|RTT", unique_patterns))) {
       design_info$design_name <- "2x2x3 (Partial Replicate)"
+      design_info$design_type <- "2x2x3 Partial Replicate"
+      design_info$is_replicate <- TRUE
       design_info$is_partial_replicate <- TRUE
       design_info$sequences <- unique_patterns
     } else if (any(grepl("TRT|RTR", unique_patterns))) {
       design_info$design_name <- "2x3x3 (Full Replicate)"
+      design_info$design_type <- "2x3x3 Full Replicate"
+      design_info$is_replicate <- TRUE
       design_info$is_partial_replicate <- FALSE
       design_info$sequences <- unique_patterns
     } else {
       design_info$design_name <- "3-Period Crossover"
+      design_info$design_type <- "3-Period Crossover"
+      design_info$is_replicate <- FALSE
       design_info$is_partial_replicate <- FALSE
       design_info$sequences <- unique_patterns
     }
@@ -1796,638 +2433,48 @@ detect_replicate_design <- function(data) {
     # Check for 2x2x4 designs
     if (any(grepl("TRTR|RTRT", unique_patterns))) {
       design_info$design_name <- "2x2x4 (Full Replicate)"
+      design_info$design_type <- "2x2x4 Full Replicate"
+      design_info$is_replicate <- TRUE
       design_info$is_partial_replicate <- FALSE
       design_info$sequences <- unique_patterns
     } else {
       design_info$design_name <- "4-Period Crossover"
+      design_info$design_type <- "4-Period Crossover"
+      design_info$is_replicate <- FALSE
       design_info$is_partial_replicate <- FALSE
       design_info$sequences <- unique_patterns
     }
+  } else if (n_periods == 2) {
+    # Standard 2x2x2 crossover
+    design_info$design_name <- "2x2x2 Crossover"
+    design_info$design_type <- "2x2x2 Crossover"
+    design_info$is_replicate <- FALSE
+    design_info$is_partial_replicate <- FALSE
+    design_info$sequences <- unique_patterns
   } else {
     design_info$design_name <- paste0(n_periods, "-Period Crossover")
+    design_info$design_type <- paste0(n_periods, "-Period Crossover")
+    design_info$is_replicate <- FALSE
     design_info$is_partial_replicate <- FALSE
     design_info$sequences <- unique_patterns
   }
   
   design_info$n_periods <- n_periods
-  design_info$n_subjects <- nrow(subject_patterns)
-  design_info$sequence_distribution <- table(subject_patterns$pattern)
+  design_info$n_subjects_complete <- nrow(complete_patterns)
+  design_info$n_subjects_total <- nrow(subject_patterns)
+  design_info$sequence_distribution <- table(complete_patterns$pattern)
+  design_info$subjects_with_missing_periods <- subjects_with_missing
+  design_info$n_subjects_incomplete <- length(subjects_with_missing)
+  
+  # Add warnings if there are subjects with missing data
+  if (length(subjects_with_missing) > 0) {
+    design_info$warnings <- paste0(
+      "WARNING: ", length(subjects_with_missing), 
+      " subject(s) have missing periods and were excluded from design detection: ",
+      paste(head(subjects_with_missing, 10), collapse = ", "),
+      if (length(subjects_with_missing) > 10) " ..." else ""
+    )
+  }
   
   return(design_info)
-}
-
-#' Add Sequence Information for Replicate Design
-#'
-#' @param data Study data
-#' @return Data with sequence information added
-add_sequence_info_replicate <- function(data) {
-  
-  # Determine sequence pattern from the data
-  subject_patterns <- data %>%
-    arrange(Subject, Period) %>%
-    group_by(Subject) %>%
-    summarise(
-      pattern = paste(Formulation, collapse = ""),
-      .groups = "drop"
-    )
-  
-  # Create sequence mapping
-  unique_patterns <- unique(subject_patterns$pattern)
-  sequence_map <- setNames(1:length(unique_patterns), unique_patterns)
-  
-  subject_patterns$Sequence <- sequence_map[subject_patterns$pattern]
-  
-  # Merge back to original data
-  data <- merge(data, subject_patterns[, c("Subject", "Sequence")], by = "Subject")
-  
-  return(data)
-}
-
-#' Calculate Within-Subject Variability for Replicate Design
-#'
-#' @param mixed_result Mixed-effects model results
-#' @param design_info Design information
-#' @return Variability measures including CV and variance components
-calculate_within_subject_variability <- function(mixed_result, design_info = NULL) {
-  
-  if (!requireNamespace("nlme", quietly = TRUE)) {
-    stop("Package 'nlme' is required for replicate design analysis")
-  }
-  
-  # Extract variance components from mixed-effects model
-  var_corr <- nlme::VarCorr(mixed_result$model)
-  
-  # Within-subject variance (residual)
-  sigma2_wr <- as.numeric(mixed_result$model$sigma^2)
-  
-  # Between-subject variance
-  sigma2_br <- as.numeric(var_corr[1, "Variance"])
-  if (is.na(sigma2_br)) sigma2_br <- 0
-  
-  # Calculate within-subject coefficient of variation
-  swr <- sqrt(sigma2_wr)
-  cv_wr <- sqrt(exp(sigma2_wr) - 1) * 100
-  
-  # Calculate between-subject coefficient of variation
-  sbr <- sqrt(sigma2_br)
-  cv_br <- sqrt(exp(sigma2_br) - 1) * 100
-  
-  # Total CV
-  cv_total <- sqrt(exp(sigma2_wr + sigma2_br) - 1) * 100
-  
-  return(list(
-    sigma2_wr = sigma2_wr,
-    sigma2_br = sigma2_br,
-    swr = swr,
-    sbr = sbr,
-    cv_wr = cv_wr,
-    cv_br = cv_br,
-    cv_total = cv_total,
-    scaling_threshold_met = cv_wr > 30
-  ))
-}
-
-#' Calculate Scaled Confidence Interval
-#'
-#' @param mixed_result Mixed-effects results
-#' @param variability Variability measures
-#' @param alpha Significance level
-#' @param regulatory_cap Regulatory scaling cap (default EMA: c(0.69, 1.43))
-#' @return Scaled confidence interval
-calculate_scaled_ci <- function(mixed_result, variability, alpha, regulatory_cap = c(0.69, 1.43)) {
-  
-  # Extract formulation effect from mixed model
-  fixed_effects <- nlme::fixed.effects(mixed_result$model)
-  
-  # Find formulation effect coefficient
-  formulation_coef <- 0
-  formulation_se <- 0
-  
-  coef_names <- names(fixed_effects)
-  formulation_names <- c("FormulationTest", "FormulationT", "FormulationReference", "FormulationR")
-  
-  for (name in formulation_names) {
-    if (name %in% coef_names) {
-      formulation_coef <- fixed_effects[name]
-      # Get standard error from summary
-      model_summary <- summary(mixed_result$model)
-      formulation_se <- model_summary$tTable[name, "Std.Error"]
-      
-      # Adjust sign if needed (we want Test - Reference)
-      if (grepl("Reference|R$", name)) {
-        formulation_coef <- -formulation_coef
-      }
-      break
-    }
-  }
-  
-  # Calculate degrees of freedom
-  df <- mixed_result$model$fixDF$X[length(mixed_result$model$fixDF$X)]
-  
-  # Calculate scaled bioequivalence limits
-  swr <- variability$swr
-  scaled_lower <- exp(-log(1.25) * sqrt(swr^2 / 0.1))  # Scaled lower limit
-  scaled_upper <- exp(log(1.25) * sqrt(swr^2 / 0.1))   # Scaled upper limit
-  
-  # Apply regulatory cap
-  scaled_lower <- max(scaled_lower, regulatory_cap[1])
-  scaled_upper <- min(scaled_upper, regulatory_cap[2])
-  
-  # Calculate confidence interval
-  t_critical <- qt(0.95, df)
-  ci_lower_log <- formulation_coef - t_critical * formulation_se
-  ci_upper_log <- formulation_coef + t_critical * formulation_se
-  
-  # Back-transform to ratio scale
-  point_estimate <- exp(formulation_coef) * 100
-  ci_lower <- exp(ci_lower_log) * 100
-  ci_upper <- exp(ci_upper_log) * 100
-  
-  # Check scaled bioequivalence
-  is_bioequivalent <- (ci_lower >= scaled_lower * 100) && (ci_upper <= scaled_upper * 100)
-  
-  return(list(
-    point_estimate = point_estimate,
-    ci_lower = ci_lower,
-    ci_upper = ci_upper,
-    confidence_level = (1 - alpha) * 100,
-    scaled_limits = c(scaled_lower, scaled_upper),
-    regulatory_cap = regulatory_cap,
-    scaling_applied = TRUE,
-    is_bioequivalent = is_bioequivalent,
-    df = df,
-    t_critical = t_critical
-  ))
-}
-
-#' Calculate Unscaled Confidence Interval
-#'
-#' @param mixed_result Mixed-effects results
-#' @param alpha Significance level
-#' @param be_limits Standard bioequivalence limits
-#' @return Unscaled confidence interval
-calculate_unscaled_ci <- function(mixed_result, alpha, be_limits = c(0.8, 1.25)) {
-  
-  # Extract formulation effect from mixed model
-  fixed_effects <- nlme::fixed.effects(mixed_result$model)
-  
-  # Find formulation effect coefficient
-  formulation_coef <- 0
-  formulation_se <- 0
-  
-  coef_names <- names(fixed_effects)
-  formulation_names <- c("FormulationTest", "FormulationT", "FormulationReference", "FormulationR")
-  
-  for (name in formulation_names) {
-    if (name %in% coef_names) {
-      formulation_coef <- fixed_effects[name]
-      # Get standard error from summary
-      model_summary <- summary(mixed_result$model)
-      formulation_se <- model_summary$tTable[name, "Std.Error"]
-      
-      # Adjust sign if needed (we want Test - Reference)
-      if (grepl("Reference|R$", name)) {
-        formulation_coef <- -formulation_coef
-      }
-      break
-    }
-  }
-  
-  # Calculate degrees of freedom
-  df <- mixed_result$model$fixDF$X[length(mixed_result$model$fixDF$X)]
-  
-  # Calculate confidence interval
-  t_critical <- qt(0.95, df)
-  ci_lower_log <- formulation_coef - t_critical * formulation_se
-  ci_upper_log <- formulation_coef + t_critical * formulation_se
-  
-  # Back-transform to ratio scale
-  point_estimate <- exp(formulation_coef) * 100
-  ci_lower <- exp(ci_lower_log) * 100
-  ci_upper <- exp(ci_upper_log) * 100
-  
-  # Check standard bioequivalence
-  is_bioequivalent <- (ci_lower >= be_limits[1] * 100) && (ci_upper <= be_limits[2] * 100)
-  
-  return(list(
-    point_estimate = point_estimate,
-    ci_lower = ci_lower,
-    ci_upper = ci_upper,
-    confidence_level = (1 - alpha) * 100,
-    be_limits = be_limits,
-    scaling_applied = FALSE,
-    is_bioequivalent = is_bioequivalent,
-    df = df,
-    t_critical = t_critical
-  ))
-}
-
-# =============================================================================
-# SECTION 9: COMPREHENSIVE ICH M13A REGULATORY EVALUATION
-# =============================================================================
-
-#' Apply ICH M13A Regulatory Evaluation
-#'
-#' @param results Statistical results
-#' @param config Analysis configuration
-#' @return Results with comprehensive regulatory assessment
-apply_ich_m13a_evaluation <- function(results, config) {
-  
-  cat("🏛️ Applying ICH M13A regulatory evaluation...\n")
-  
-  # Create regulatory assessment for each parameter
-  regulatory_assessment <- list()
-  
-  for (param in names(results$confidence_intervals)) {
-    ci <- results$confidence_intervals[[param]]
-    
-    # ICH M13A specific evaluations
-    param_assessment <- list(
-      bioequivalence_conclusion = evaluate_bioequivalence_ich_m13a(ci, param, config),
-      confidence_interval_evaluation = evaluate_ci_ich_m13a(ci, param, config),
-      point_estimate_evaluation = evaluate_pe_ich_m13a(ci, param, config),
-      variability_assessment = if (results$design == "replicate") {
-        evaluate_variability_ich_m13a(results$variability_results[[param]], param, config)
-      } else NULL,
-      scaling_justification = if (results$design == "replicate" && !is.null(results$scaling_decisions[[param]])) {
-        evaluate_scaling_decision_ich_m13a(results$scaling_decisions[[param]], param, config)
-      } else NULL
-    )
-    
-    # Parameter-specific assessments
-    if (param %in% c("AUC0t", "AUC0inf")) {
-      param_assessment$exposure_assessment <- "Primary exposure parameter - requires BE demonstration"
-    }
-    if (param == "Cmax") {
-      param_assessment$cmax_assessment <- "Primary rate parameter - requires BE demonstration"
-    }
-    if (param == "Tmax") {
-      param_assessment$tmax_assessment <- "Non-parametric analysis recommended for Tmax"
-    }
-    
-    regulatory_assessment[[param]] <- param_assessment
-  }
-  
-  # Overall study assessment
-  overall_assessment <- list(
-    study_design_adequacy = evaluate_design_adequacy_ich_m13a(results, config),
-    sample_size_adequacy = evaluate_sample_size_adequacy_ich_m13a(results, config),
-    primary_parameters_assessed = evaluate_primary_parameters_ich_m13a(results, config),
-    regulatory_compliance = determine_overall_compliance_ich_m13a(regulatory_assessment, config),
-    recommendations = generate_regulatory_recommendations_ich_m13a(regulatory_assessment, results, config)
-  )
-  
-  # Add regulatory section to results
-  results$regulatory_assessment <- list(
-    standard = "ICH M13A",
-    parameter_assessments = regulatory_assessment,
-    overall_assessment = overall_assessment,
-    evaluation_date = Sys.Date(),
-    evaluator = "BioEQ Automated Assessment"
-  )
-  
-  cat("✅ ICH M13A regulatory evaluation completed!\n")
-  return(results)
-}
-
-#' Evaluate Bioequivalence Conclusion per ICH M13A
-#'
-#' @param ci Confidence interval results
-#' @param parameter Parameter name
-#' @param config Analysis configuration
-#' @return ICH M13A bioequivalence evaluation
-evaluate_bioequivalence_ich_m13a <- function(ci, parameter, config) {
-  
-  # ICH M13A specific criteria
-  be_limits <- config$be_limits
-  
-  # Check if confidence interval is within acceptance limits
-  ci_within_limits <- (ci$ci_lower >= be_limits[1] * 100) && (ci$ci_upper <= be_limits[2] * 100)
-  
-  # Check point estimate criteria (should be reasonably close to 100%)
-  pe_acceptable <- (ci$point_estimate >= 80) && (ci$point_estimate <= 125)
-  
-  # ICH M13A conclusion
-  conclusion <- if (ci_within_limits && pe_acceptable) {
-    "BIOEQUIVALENT - Meets ICH M13A criteria"
-  } else if (ci_within_limits && !pe_acceptable) {
-    "QUESTIONABLE - CI within limits but point estimate concerning"
-  } else {
-    "NOT BIOEQUIVALENT - Does not meet ICH M13A criteria"
-  }
-  
-  return(list(
-    conclusion = conclusion,
-    ci_within_limits = ci_within_limits,
-    point_estimate_acceptable = pe_acceptable,
-    ich_compliant = ci_within_limits && pe_acceptable
-  ))
-}
-
-#' Evaluate Confidence Interval per ICH M13A
-#'
-#' @param ci Confidence interval results
-#' @param parameter Parameter name
-#' @param config Analysis configuration
-#' @return CI evaluation
-evaluate_ci_ich_m13a <- function(ci, parameter, config) {
-  
-  # Check CI width
-  ci_width <- ci$ci_upper - ci$ci_lower
-  
-  # Check if CI is appropriately narrow (< 45% is generally good)
-  ci_narrow <- ci_width < 45
-  
-  # Check if CI is symmetric around point estimate
-  lower_distance <- ci$point_estimate - ci$ci_lower
-  upper_distance <- ci$ci_upper - ci$point_estimate
-  asymmetry_ratio <- max(lower_distance, upper_distance) / min(lower_distance, upper_distance)
-  ci_symmetric <- asymmetry_ratio < 1.5
-  
-  return(list(
-    ci_width = ci_width,
-    ci_narrow = ci_narrow,
-    ci_symmetric = ci_symmetric,
-    asymmetry_ratio = asymmetry_ratio,
-    evaluation = if (ci_narrow && ci_symmetric) "Acceptable" else "Review recommended"
-  ))
-}
-
-#' Evaluate Point Estimate per ICH M13A
-#'
-#' @param ci Confidence interval results
-#' @param parameter Parameter name
-#' @param config Analysis configuration
-#' @return Point estimate evaluation
-evaluate_pe_ich_m13a <- function(ci, parameter, config) {
-  
-  # Distance from 100%
-  pe_deviation <- abs(ci$point_estimate - 100)
-  
-  # ICH M13A guidance on point estimate
-  pe_close_to_unity <- pe_deviation < 10  # Within 10% of unity
-  pe_acceptable_range <- (ci$point_estimate >= 90) && (ci$point_estimate <= 111)
-  
-  return(list(
-    point_estimate = ci$point_estimate,
-    deviation_from_unity = pe_deviation,
-    close_to_unity = pe_close_to_unity,
-    acceptable_range = pe_acceptable_range,
-    evaluation = if (pe_close_to_unity) "Excellent" else if (pe_acceptable_range) "Acceptable" else "Concerning"
-  ))
-}
-
-#' Evaluate Variability per ICH M13A
-#'
-#' @param variability Variability results
-#' @param parameter Parameter name
-#' @param config Analysis configuration
-#' @return Variability evaluation
-evaluate_variability_ich_m13a <- function(variability, parameter, config) {
-  
-  if (is.null(variability)) return(NULL)
-  
-  cv_wr <- variability$cv_wr
-  
-  # ICH M13A variability categories
-  variability_category <- if (cv_wr < 20) {
-    "Low variability"
-  } else if (cv_wr < 30) {
-    "Moderate variability"
-  } else if (cv_wr < 50) {
-    "High variability - scaling may be considered"
-  } else {
-    "Very high variability - scaling recommended"
-  }
-  
-  # Scaling threshold per ICH M13A
-  scaling_threshold_met <- cv_wr > config$scaling_threshold
-  
-  return(list(
-    cv_wr = cv_wr,
-    variability_category = variability_category,
-    scaling_threshold_met = scaling_threshold_met,
-    scaling_recommended = cv_wr > 30,
-    evaluation = variability_category
-  ))
-}
-
-#' Evaluate Scaling Decision per ICH M13A
-#'
-#' @param scaling_decision Scaling decision results
-#' @param parameter Parameter name
-#' @param config Analysis configuration
-#' @return Scaling evaluation
-evaluate_scaling_decision_ich_m13a <- function(scaling_decision, parameter, config) {
-  
-  cv_wr <- scaling_decision$cv_wr
-  use_scaling <- scaling_decision$use_scaling
-  threshold <- scaling_decision$threshold
-  
-  # ICH M13A scaling justification
-  scaling_justified <- cv_wr > threshold
-  decision_appropriate <- (scaling_justified && use_scaling) || (!scaling_justified && !use_scaling)
-  
-  justification <- if (use_scaling && scaling_justified) {
-    paste0("Scaling applied appropriately (CV = ", round(cv_wr, 1), "% > ", round(threshold, 1), "%)")
-  } else if (!use_scaling && !scaling_justified) {
-    paste0("Standard limits applied appropriately (CV = ", round(cv_wr, 1), "% ≤ ", round(threshold, 1), "%)")
-  } else if (use_scaling && !scaling_justified) {
-    "WARNING: Scaling applied despite low variability"
-  } else {
-    "WARNING: Standard limits used despite high variability"
-  }
-  
-  return(list(
-    scaling_justified = scaling_justified,
-    decision_appropriate = decision_appropriate,
-    justification = justification,
-    cv_wr = cv_wr,
-    threshold = threshold
-  ))
-}
-
-# =============================================================================
-# SECTION 10: ENHANCED SUMMARY GENERATION
-# =============================================================================
-
-#' Generate Comprehensive BE Summary
-#'
-#' @param results BE analysis results
-#' @param include_regulatory Include regulatory assessment
-#' @return Comprehensive summary data frame
-generate_be_summary <- function(results, include_regulatory = TRUE) {
-  
-  if (is.null(results$confidence_intervals) || length(results$confidence_intervals) == 0) {
-    return(data.frame(message = "No parameters analyzed"))
-  }
-  
-  # Create summary table
-  summary_data <- data.frame(
-    Parameter = character(),
-    N_Subjects = numeric(),
-    Point_Estimate = numeric(),
-    CI_Lower = numeric(),
-    CI_Upper = numeric(),
-    CI_Width = numeric(),
-    Bioequivalent = logical(),
-    stringsAsFactors = FALSE
-  )
-  
-  # Add design-specific columns
-  if (results$design == "replicate") {
-    summary_data$CV_WR <- numeric(0)
-    summary_data$Scaling_Applied <- logical(0)
-  }
-  
-  if (include_regulatory && !is.null(results$regulatory_assessment)) {
-    summary_data$Regulatory_Status <- character(0)
-    summary_data$ICH_Compliant <- logical(0)
-  }
-  
-  # Fill summary data
-  for (param in names(results$confidence_intervals)) {
-    ci <- results$confidence_intervals[[param]]
-    
-    # Base data
-    row_data <- data.frame(
-      Parameter = param,
-      N_Subjects = results$n_subjects,
-      Point_Estimate = round(ci$point_estimate, 2),
-      CI_Lower = round(ci$ci_lower, 2),
-      CI_Upper = round(ci$ci_upper, 2),
-      CI_Width = round(ci$ci_upper - ci$ci_lower, 2),
-      Bioequivalent = results$be_conclusions[[param]],
-      stringsAsFactors = FALSE
-    )
-    
-    # Add replicate-specific data
-    if (results$design == "replicate") {
-      cv_wr <- if (!is.null(results$variability_results[[param]])) {
-        results$variability_results[[param]]$cv_wr
-      } else NA
-      
-      scaling_applied <- if (!is.null(results$scaling_decisions[[param]])) {
-        results$scaling_decisions[[param]]$use_scaling
-      } else FALSE
-      
-      row_data$CV_WR <- round(cv_wr, 1)
-      row_data$Scaling_Applied <- scaling_applied
-    }
-    
-    # Add regulatory data
-    if (include_regulatory && !is.null(results$regulatory_assessment)) {
-      param_assessment <- results$regulatory_assessment$parameter_assessments[[param]]
-      
-      if (!is.null(param_assessment)) {
-        row_data$Regulatory_Status <- param_assessment$bioequivalence_conclusion$conclusion
-        row_data$ICH_Compliant <- param_assessment$bioequivalence_conclusion$ich_compliant
-      } else {
-        row_data$Regulatory_Status <- "Not assessed"
-        row_data$ICH_Compliant <- NA
-      }
-    }
-    
-    summary_data <- rbind(summary_data, row_data)
-  }
-  
-  # Add metadata
-  attr(summary_data, "design") <- results$design
-  attr(summary_data, "n_subjects") <- results$n_subjects
-  attr(summary_data, "be_limits") <- results$be_limits
-  attr(summary_data, "alpha") <- results$alpha
-  attr(summary_data, "analysis_date") <- Sys.Date()
-  
-  if (include_regulatory && !is.null(results$regulatory_assessment)) {
-    attr(summary_data, "regulatory_standard") <- results$regulatory_assessment$standard
-    attr(summary_data, "overall_compliant") <- results$regulatory_assessment$overall_assessment$regulatory_compliance
-  }
-  
-  return(summary_data)
-}
-
-# =============================================================================
-# SECTION 11: ADDITIONAL HELPER FUNCTIONS FOR REGULATORY EVALUATION
-# =============================================================================
-
-#' Evaluate Design Adequacy per ICH M13A
-evaluate_design_adequacy_ich_m13a <- function(results, config) {
-  list(
-    design_type = results$design,
-    adequate = TRUE,
-    notes = paste("Design", results$design, "is appropriate for bioequivalence assessment")
-  )
-}
-
-#' Evaluate Sample Size Adequacy per ICH M13A
-evaluate_sample_size_adequacy_ich_m13a <- function(results, config) {
-  n_subjects <- results$n_subjects
-  
-  adequate <- n_subjects >= 12  # Minimum recommended by ICH M13A
-  
-  list(
-    n_subjects = n_subjects,
-    adequate = adequate,
-    notes = if (adequate) {
-      "Sample size adequate"
-    } else {
-      "Sample size may be insufficient for reliable BE assessment"
-    }
-  )
-}
-
-#' Evaluate Primary Parameters per ICH M13A
-evaluate_primary_parameters_ich_m13a <- function(results, config) {
-  analyzed_params <- names(results$confidence_intervals)
-  required_params <- config$primary_params
-  
-  missing_params <- setdiff(required_params, analyzed_params)
-  
-  list(
-    analyzed_parameters = analyzed_params,
-    required_parameters = required_params,
-    missing_parameters = missing_params,
-    adequate = length(missing_params) == 0
-  )
-}
-
-#' Determine Overall Compliance per ICH M13A
-determine_overall_compliance_ich_m13a <- function(regulatory_assessment, config) {
-  
-  # Check if all assessed parameters are compliant
-  param_compliance <- sapply(regulatory_assessment, function(x) {
-    x$bioequivalence_conclusion$ich_compliant
-  })
-  
-  all_compliant <- all(param_compliance, na.rm = TRUE)
-  
-  return(all_compliant)
-}
-
-#' Generate Regulatory Recommendations per ICH M13A
-generate_regulatory_recommendations_ich_m13a <- function(regulatory_assessment, results, config) {
-  
-  recommendations <- c()
-  
-  # Check each parameter for specific recommendations
-  for (param in names(regulatory_assessment)) {
-    assessment <- regulatory_assessment[[param]]
-    
-    if (!assessment$bioequivalence_conclusion$ich_compliant) {
-      recommendations <- c(recommendations, 
-                          paste("Consider additional studies for", param, "bioequivalence"))
-    }
-    
-    if (!is.null(assessment$variability_assessment) && 
-        assessment$variability_assessment$cv_wr > 50) {
-      recommendations <- c(recommendations,
-                          paste("High variability observed for", param, "- consider formulation optimization"))
-    }
-  }
-  
-  if (length(recommendations) == 0) {
-    recommendations <- "No specific recommendations - study meets ICH M13A criteria"
-  }
-  
-  return(recommendations)
 }

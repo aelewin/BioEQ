@@ -209,7 +209,7 @@ help_texts <- list(
       div(
         style = "margin-top: 10px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
         tags$strong("Long Half-life Drugs:"),
-        " When AUC is truncated at 72 hours, AUC(0-72h) becomes the primary parameter and AUC(0-inf), AUC(0-t)/AUC(0-inf), kel, and t1/2 are not required."
+        " For drugs with long half-lives, AUC0-t automatically reflects the last sampling time (e.g., AUC0-72h if sampling ends at 72 hours). AUC0-inf may not be reliably estimated and can be excluded from BE assessment."
       ),
       
       div(
@@ -233,6 +233,116 @@ help_texts <- list(
     )
   ),
   
+  alpha_level_abe = list(
+    tooltip = "One-sided significance level for the TOST procedure",
+    title = "Alpha Level (α) for ABE",
+    content = div(
+      p("Alpha (α) is the", tags$strong("one-sided"), "significance level used in the Two One-Sided Tests (TOST) procedure for bioequivalence:"),
+      tags$ul(
+        tags$li(tags$strong("α = 0.05"), " → 90% confidence interval (regulatory standard)"),
+        tags$li(tags$strong("α = 0.025"), " → 95% confidence interval (more conservative)"),
+        tags$li(tags$strong("Formula:"), " CI% = 100 × (1 - 2α)")
+      ),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("TOST Procedure:"), br(),
+        "The TOST procedure uses", tags$strong("two"), "one-sided tests:", br(),
+        "• H₁: μT/μR > lower limit", br(),
+        "• H₂: μT/μR < upper limit", br(),
+        "Each test is performed at significance level α (one-sided).", br(),
+        "Together they create a (1-2α) confidence interval."
+      )
+    )
+  ),
+  
+  alpha_level_sabe = list(
+    tooltip = "One-sided significance level for replicate BE analysis",
+    title = "Alpha Level (α) for Scaled BE",
+    content = div(
+      p("For replicate BE studies (ABEL/RSABE), alpha (α) represents the", tags$strong("one-sided"), 
+        "Type I Error probability:"),
+      tags$ul(
+        tags$li(tags$strong("α = 0.05"), " → 90% confidence interval (regulatory standard)"),
+        tags$li(tags$strong("α = 0.025"), " → 95% confidence interval"),
+        tags$li(tags$strong("Formula:"), " CI% = 100 × (1 - 2α)")
+      ),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #fff3cd; border-left: 3px solid #ffc107; border-radius: 4px;",
+        tags$strong(icon("info-circle"), " Important for Replicate Studies:"), br(),
+        "In ABEL/RSABE, the confidence interval is based on the within-subject variability of the reference (s", 
+        tags$sub("wR"), "). The one-sided alpha remains 0.05 for a 90% CI, but the ", 
+        tags$strong("acceptance limits expand"), " based on CV", tags$sub("wR"), "."
+      ),
+      div(
+        style = "margin-top: 10px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("replicateBE Package:"), br(),
+        "The replicateBE package uses α as the one-sided significance level. ",
+        "Setting α = 0.05 will produce a 90% CI using the formula 100(1-2α) = 90%."
+      )
+    )
+  ),
+  
+  abel_method = list(
+    tooltip = "Information about ABEL method selection",
+    title = "ABEL Method Selection",
+    content = div(
+      p("The ANOVA Model selection above determines which replicateBE method will be used for ABEL analysis:"),
+      tags$ul(
+        tags$li(tags$strong("Fixed Effects"), " → Method A (Linear Model/ANOVA)"),
+        tags$li(tags$strong("Mixed Effects - nlme"), " → Method B (SAS default DF approximation)"),
+        tags$li(tags$strong("Mixed Effects - Satterthwaite"), " → Method B (Satterthwaite DF)"),
+        tags$li(tags$strong("Mixed Effects - Kenward-Roger"), " → Method B (Kenward-Roger DF)")
+      ),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("Method A vs Method B:"), br(),
+        tags$strong("Method A:"), " Linear model (lm), faster, suitable for balanced designs", br(),
+        tags$strong("Method B:"), " Mixed-effects model (lme), handles unbalanced designs, allows different DF approximations"
+      )
+    )
+  ),
+  
+  abel_upper_cap = list(
+    tooltip = "Select the regulatory approach for ABEL",
+    title = "ABEL Regulatory Approaches",
+    content = div(
+      p("Different regulatory agencies use different approaches for Average Bioequivalence with Expanding Limits. Only the following are currently supported by the replicateBE package:"),
+      
+      tags$h6(tags$strong("EMA (European Medicines Agency)"), style = "margin-top: 15px;"),
+      tags$ul(
+        tags$li(tags$strong("Scaling with 50% cap")),
+        tags$li("Limits expand based on reference variability (CV", tags$sub("wR"), ")"),
+        tags$li("Maximum expanded limits: 69.84% - 143.19%"),
+        tags$li("Cap reached when CV", tags$sub("wR"), " ≈ 50%"),
+        tags$li("Limits rounded to 2 decimal places"),
+        tags$li("Point estimate must remain within 80.00% - 125.00%")
+      ),
+      
+      div(
+        style = "margin-top: 10px; padding: 10px; background-color: #e7f3ff; border-left: 4px solid #2196F3; border-radius: 4px;",
+        tags$strong(icon("calculator"), " EMA Scaling Formula:"), br(),
+        "Expanded limits = 100 × exp(±k × s", tags$sub("wR"), ")", br(),
+        "where s", tags$sub("wR"), " = √(ln(CV", tags$sub("wR"), tags$sup("2"), " + 1))", br(),
+        "and k = 0.76 (regulatory constant)"
+      ),
+      
+      tags$h6(tags$strong("GCC (Gulf Cooperation Council, pre-2022)"), style = "margin-top: 15px;"),
+      tags$ul(
+        tags$li(tags$strong("Fixed widened limits: 75.00% - 133.33%")),
+        tags$li("Limits do NOT scale with CV", tags$sub("wR")),
+        tags$li("Applied when CV", tags$sub("wR"), " > 30%"),
+        tags$li("If CV", tags$sub("wR"), " ≤ 30%, standard 80-125% limits apply"),
+        tags$li("Point estimate must remain within 80.00% - 125.00%")
+      ),
+      
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 4px;",
+        tags$strong(icon("info-circle"), " Health Canada:"), br(),
+        "Cap at CVwR = 57.4% (limits: 66.7%–150.0%). Applied automatically when the Health Canada scope is selected."
+      )
+    )
+  ),
+  
   be_analysis_type = list(
     tooltip = "Select the type of bioequivalence analysis approach",
     title = "BE Analysis Types",
@@ -247,7 +357,7 @@ help_texts <- list(
       ),
       
       h4("Reference-Scaled Average BE (RSABE)", style = "margin-top: 20px;"),
-      p("FDA approach for highly variable drugs (HVDs) with CV ≥ 30%. Features:"),
+      p("Approach for highly variable drugs (HVDs) with CV ≥ 30%. Features:"),
       tags$ul(
         tags$li("BE limits scale with reference formulation variability"),
         tags$li("Point estimate constraint (80-125%) still required"),
@@ -261,7 +371,7 @@ help_texts <- list(
       ),
       
       h4("Average BE with Expanding Limits (ABEL)", style = "margin-top: 20px;"),
-      p("EMA approach for HVDs per EMA guidelines. Features:"),
+      p("Alternative approach for HVDs with expanding acceptance limits. Features:"),
       tags$ul(
         tags$li("Widened limits based on CV (up to 69.84%-143.19%)"),
         tags$li("Geometric mean ratio (GMR) constraint (80-125%)"),
@@ -330,6 +440,44 @@ help_texts <- list(
     )
   ),
   
+  rsabe_method = list(
+    tooltip = "Select the RSABE statistical method",
+    title = "RSABE Statistical Methods",
+    content = div(
+      tags$h6(tags$strong("FDA Linearized Scaled Criterion (Howe UCB)"), style = "margin-top: 10px;"),
+      tags$p("Linearizes the scaled BE criterion \u03B7 = d\u00B2 \u2212 \u03B8\u00B2\u209B\u00B7s\u00B2wR and tests whether its ",
+             "95% upper confidence bound (UCB) \u2264 0, using Howe\u2019s method for combining ",
+             "independent confidence intervals (Eq. 31 in T\u00F3thfalusi & Endr\u00E9nyi 2016). ",
+             "This is the default FDA-recommended method for highly variable drugs and drug products (HVDs/HVDPs)."),
+      tags$p(tags$em("Howe WG (1974). Approximate Confidence Limits on the Mean of X + Y ",
+                     "Where X and Y Are Two Tabled Independent Random Variables. "),
+             tags$em("Journal of the American Statistical Association"), ", 69, 789\u2013794.",
+             style = "font-size: 0.85em; color: #555;"),
+      tags$hr(style = "margin: 10px 0;"),
+      tags$h6(tags$strong("Non-Central TOST (ncTOST) \u2014 Exact Method"), style = "margin-top: 10px;"),
+      tags$p("Uses the noncentral t distribution directly to perform two one-sided tests ",
+             "against the scaled limits \u00B1\u03B8\u209B\u00B7\u03C3", tags$sub("wR"),
+             ". Computes the pivotal index d = d\u0302/s", tags$sub("wR"),
+             " (Glass\u2019s effect size), applies Hedges\u2019 bias correction c", tags$sub("r"),
+             "(df), and evaluates p-values from the noncentral t CDF with ",
+             "design-dependent constant K and noncentrality parameter \u00B1\u03B8/K."),
+      tags$p(tags$em("T\u00F3thfalusi L, Endr\u00E9nyi L (2016). An Exact Procedure for the ",
+                     "Evaluation of Reference-Scaled Average Bioequivalence. "),
+             tags$em("The AAPS Journal"), ", 18(2), 476\u2013489. DOI: 10.1208/s12248-016-9873-6.",
+             style = "font-size: 0.85em; color: #555;"),
+      div(
+        style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
+        tags$strong("Common to both methods:"),
+        tags$ul(style = "margin-bottom: 0; margin-top: 5px;",
+          tags$li("Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924"),
+          tags$li("Switching variability: s\u00B2", tags$sub("w0"), " = 0.0625 (CV", tags$sub("wR"), " \u2248 25.4%)"),
+          tags$li("FDA point estimate constraint: 80\u2013125%"),
+          tags$li("Variance estimated via Intra-Subject Contrasts (ISC)")
+        )
+      )
+    )
+  ),
+
   welch_correction = list(
     tooltip = "Statistical method for t-tests in parallel group bioequivalence studies",
     title = "Welch Correction for Parallel Designs",

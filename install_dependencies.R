@@ -17,7 +17,8 @@ required_packages <- c(
   "readxl",
   "bslib",
   "ggplot2",
-  "gridExtra"
+  "gridExtra",
+  "replicateBE"
 )
 
 # Optional packages (enhanced functionality)

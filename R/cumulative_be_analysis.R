@@ -60,20 +60,6 @@ generate_cumulative_be_plots <- function(data, parameters = c("Cmax", "AUC0t", "
     cat(sprintf("Found %d subjects for cumulative analysis\n", n_subjects))
     cat("Available subjects in cumulative data:", paste(subjects, collapse = ", "), "\n")
     
-    # Debug: Check if subject 113 is in the original data
-    cat("Checking for subject 113 in data...\n")
-    has_113 <- "113" %in% as.character(analysis_data$subject)
-    cat("Subject 113 present:", has_113, "\n")
-    
-    if (has_113) {
-      subj_113_data <- analysis_data[analysis_data$subject == "113", ]
-      cat("Subject 113 data rows:", nrow(subj_113_data), "\n")
-      if (nrow(subj_113_data) > 0) {
-        cat("Subject 113 treatments:", paste(unique(subj_113_data$treatment), collapse = ", "), "\n")
-        cat("Subject 113 columns:", paste(names(subj_113_data), collapse = ", "), "\n")
-      }
-    }
-    
     # Filter parameters to only those available in data
     available_params <- intersect(parameters, names(analysis_data))
     if (length(available_params) == 0) {
@@ -106,6 +92,7 @@ generate_cumulative_be_plots <- function(data, parameters = c("Cmax", "AUC0t", "
 #' Prepare Data for Cumulative Analysis
 #' 
 #' Standardizes column names and validates data structure
+#' For replicate designs, calculates subject-level T/R ratios
 #' 
 #' @param data Raw PK data
 #' @return Standardized data frame or NULL if invalid
@@ -117,7 +104,7 @@ prepare_cumulative_data <- function(data) {
   # Map common column name variations to standard names
   col_mappings <- list(
     "subject" = c("subject", "Subject", "SUBJECT", "subj", "Subj", "ID", "id"),
-    "treatment" = c("treatment", "Treatment", "TREATMENT", "Formulation", "formulation", "trt", "Trt"),
+    "treatment" = c("treatment", "Treatment", "TREATMENT", "formulation", "trt", "Trt"),
     "period" = c("period", "Period", "PERIOD"),
     "sequence" = c("sequence", "Sequence", "SEQUENCE", "seq", "Seq")
   )
@@ -174,6 +161,70 @@ prepare_cumulative_data <- function(data) {
   }
   
   return(analysis_data)
+}
+
+#' Calculate Subject-Level T/R Ratios
+#' 
+#' For replicate designs (2x2x3, 2x2x4), calculate subject-level ratios by averaging
+#' Test and Reference periods. For crossover (2x2x2), use single T/R ratio.
+#' 
+#' @param data Standardized PK data with subject, treatment, period columns
+#' @param parameter PK parameter name to calculate ratios for
+#' @return Data frame with one row per subject containing T/R ratio
+calculate_subject_tr_ratios <- function(data, parameter) {
+  
+  if (!parameter %in% names(data)) {
+    cat(sprintf("Parameter %s not found in data\n", parameter))
+    return(NULL)
+  }
+  
+  if (!requireNamespace("dplyr", quietly = TRUE)) {
+    stop("dplyr package required for ratio calculations")
+  }
+  
+  # Detect design type by counting periods per subject
+  periods_per_subject <- data %>%
+    dplyr::group_by(subject) %>%
+    dplyr::summarise(n_periods = dplyr::n(), .groups = "drop") %>%
+    dplyr::pull(n_periods) %>%
+    max()
+  
+  is_replicate <- periods_per_subject > 2
+  
+  cat(sprintf("Detected %s design (%d periods per subject)\n", 
+              ifelse(is_replicate, "replicate", "crossover"), periods_per_subject))
+  
+  # Calculate subject-level statistics
+  subject_ratios <- data %>%
+    dplyr::group_by(subject, treatment) %>%
+    dplyr::summarise(
+      mean_pk = mean(.data[[parameter]], na.rm = TRUE),
+      n_obs = dplyr::n(),
+      .groups = "drop"
+    ) %>%
+    tidyr::pivot_wider(
+      id_cols = subject,
+      names_from = treatment,
+      values_from = c(mean_pk, n_obs)
+    )
+  
+  # Calculate T/R ratio (on original scale if not log-transformed)
+  # Check if parameter is already log-transformed
+  is_log <- grepl("^(ln|log)", parameter, ignore.case = TRUE)
+  
+  if (is_log) {
+    # Already log scale - difference gives log ratio
+    subject_ratios$tr_ratio_pct <- exp(subject_ratios$mean_pk_Test - subject_ratios$mean_pk_Reference) * 100
+  } else {
+    # Original scale - direct ratio
+    subject_ratios$tr_ratio_pct <- (subject_ratios$mean_pk_Test / subject_ratios$mean_pk_Reference) * 100
+  }
+  
+  # Add metadata
+  subject_ratios$is_replicate <- is_replicate
+  subject_ratios$parameter <- parameter
+  
+  return(subject_ratios)
 }
 
 #' Perform Progressive Cumulative BE Analysis
@@ -328,12 +379,16 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
     return(NULL)
   }
   
-  # Check that we have both treatments
+  # Check that we have both treatments (support both "T"/"R" and "Test"/"Reference" labels)
   treatments <- unique(valid_data$treatment)
-  if (length(treatments) < 2 || !all(c("Test", "Reference") %in% treatments)) {
-    cat("Missing treatment groups - need both Test and Reference\n")
+  has_tr <- all(c("T", "R") %in% treatments)
+  has_test_ref <- all(c("Test", "Reference") %in% treatments)
+  if (length(treatments) < 2 || (!has_tr && !has_test_ref)) {
+    cat("Missing treatment groups - need both Test and Reference (or T and R)\n")
     return(NULL)
   }
+  test_label <- if (has_tr) "T" else "Test"
+  ref_label <- if (has_tr) "R" else "Reference"
   
   # Get unique subjects
   subjects <- unique(valid_data$subject)
@@ -343,8 +398,8 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
   
   # For single subject, calculate simple ratio (no CI possible)
   if (n_subjects == 1) {
-    test_data <- valid_data[valid_data$treatment == "Test", ]
-    ref_data <- valid_data[valid_data$treatment == "Reference", ]
+    test_data <- valid_data[valid_data$treatment == test_label, ]
+    ref_data <- valid_data[valid_data$treatment == ref_label, ]
     
     if (nrow(test_data) > 0 && nrow(ref_data) > 0) {
       log_ratio <- mean(test_data[[parameter]]) - mean(ref_data[[parameter]])

@@ -148,7 +148,7 @@ tagList(
                     "AIC (Akaike Information Criterion)" = "aic",
                     "TTT (Two-Times-Tmax)" = "ttt"
                   ),
-                  selected = "manual"
+                  selected = "ttt"
                 ),
                 
                 # Conditional input for manual point selection
@@ -168,27 +168,7 @@ tagList(
                   )
                 ),
 
-                h5(tags$strong("Missing Data Handling"),
-                   help_icon("missing_data", help_texts$missing_data$tooltip, 
-                            help_texts$missing_data$title, help_texts$missing_data$content)
-                ),
-                selectInput(
-                  "missing_data",
-                  label = NULL,
-                  choices = list(
-                    "Last observation carried forward" = "locf",
-                    "Linear interpolation" = "interpolate", 
-                    "Multiple imputation" = "multiple"
-                  ),
-                  selected = "interpolate"
-                )
-              ),
-              column(6,
-                h5(tags$strong("Optional PK Parameters"),
-                   help_icon("pk_parameters", "Configure optional pharmacokinetic parameters for specialized analysis", 
-                            "Optional PK Parameters", 
-                            "Most standard PK parameters (AUC0t, AUC0inf, Cmax, Tmax, t½, etc.) are calculated automatically. Use this section to configure partial AUC (pAUC) for early exposure assessment when required by regulatory guidelines.")
-                ),
+                h5(tags$strong("Optional PK Parameters")),
                 
                 div(style = "margin-left: 20px;",
                   # pAUC Configuration
@@ -226,23 +206,35 @@ tagList(
                         )
                       )
                     )
-                  ),
-                  
-                  # Special case for long half-life drugs
-                  div(style = "margin-top: 20px; padding-top: 15px; border-top: 1px solid #dee2e6;",
-                    checkboxInput(
-                      "truncated_auc_72h",
-                      "Use AUC(0-72h) for long half-life drugs",
-                      value = FALSE
-                    ),
-                    conditionalPanel(
-                      condition = "input.truncated_auc_72h",
-                      div(style = "margin-left: 20px; color: #666; font-size: 0.9em;")
-                    )
                   )
+                )
+              ),
+              column(6,
+                h5(tags$strong("Missing Data Handling")),
+                tags$label("Middle Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
+                selectInput(
+                  "missing_data_middle",
+                  label = NULL,
+                  choices = list(
+                    "Exclude point" = "complete",
+                    "Linear interpolation" = "interpolate",
+                    "Last observation carried forward" = "locf"
+                  ),
+                  selected = "complete"
                 ),
+                tags$label("Terminal Points", style = "font-weight: 600; font-size: 13px; color: #4a5568;"),
+                selectInput(
+                  "missing_data_terminal",
+                  label = NULL,
+                  choices = list(
+                    "Exclude point" = "complete",
+                    "Last observation carried forward" = "locf"
+                  ),
+                  selected = "complete"
+                ),
+                helpText("BLQ values are always set to 0."),
                 
-                # Carryover Detection section - aligned with Optional PK Parameters heading
+                # Carryover Detection section
                 div(
                   # Add conditional styling for parallel designs
                   style = "transition: all 0.3s ease;",
@@ -250,9 +242,6 @@ tagList(
                     condition = "output.is_parallel_design == true",
                     div(style = "opacity: 0.4; pointer-events: none; background-color: #f8f9fa; padding: 10px; border-radius: 5px; border: 1px dashed #dee2e6;",
                       h5(tags$strong("Carryover Detection (ICH M13A)"),
-                         help_icon("carryover_effect", "ICH M13A Section 2.2.3.3 carryover detection method", 
-                                  "ICH M13A Carryover Detection", 
-                                  "Proper carryover detection examines pre-dose samples in Period 2+ and compares to Cmax within the same period. If pre-dose > 5% of Cmax, significant carryover is detected and the subject should be excluded per regulatory guidelines."),
                          tags$span(" (Not available for parallel studies)", style = "color: #6c757d; font-weight: normal; font-size: 0.9em;")
                       ),
                       
@@ -292,17 +281,13 @@ tagList(
                   
                   conditionalPanel(
                     condition = "output.is_parallel_design == false",
-                    h5(tags$strong("Carryover Detection (ICH M13A)"),
-                       help_icon("carryover_effect", "ICH M13A Section 2.2.3.3 carryover detection method", 
-                                "ICH M13A Carryover Detection", 
-                                "Proper carryover detection examines pre-dose samples in Period 2+ and compares to Cmax within the same period. If pre-dose > 5% of Cmax, significant carryover is detected and the subject should be excluded per regulatory guidelines.")
-                    ),
+                    h5(tags$strong("Carryover Detection (ICH M13A)")),
                     
                     div(style = "margin-left: 20px;",
                       checkboxInput(
                         "test_carryover",
                         "Perform carryover assessment",
-                        value = TRUE
+                        value = FALSE
                       ),
                       
                       conditionalPanel(
@@ -351,166 +336,15 @@ tagList(
           )
         ),
         
-        # Step 2: ANOVA Configuration (for all data types)
+        # Step 2: BE Statistical Analysis (for all data types) — choose BE type FIRST
         div(
-          style = "border: 2px solid #e67e22; border-radius: 10px; padding: 20px; margin-bottom: 20px; background-color: #fef9f3;",
-          h4(icon("chart-bar"), " Step 2: ANOVA Configuration", style = "color: #e67e22; margin-top: 0;"),
+          style = "border: 2px solid #27ae60; border-radius: 10px; padding: 20px; margin-bottom: 20px; background-color: #f8fff8;",
+          h4(icon("calculator"), " Step 2: BE Statistical Analysis", style = "color: #27ae60; margin-top: 0;"),
           
           fluidRow(
+            # BE Analysis Type Selection — left column
             column(6,
-              h5("Analysis Model",
-                 help_icon("analysis_model", help_texts$analysis_model$tooltip, 
-                          help_texts$analysis_model$title, help_texts$analysis_model$content)
-              ),
-              # Conditional ANOVA model selection based on study design
-              conditionalPanel(
-                condition = "output.study_design_detected && output.detected_design_type == 'parallel'",
-                div(
-                  selectInput(
-                    "anova_model",
-                    label = NULL,
-                    choices = list("Fixed Effects (lm)" = "fixed"),
-                    selected = "fixed"
-                  ),
-                  div(style = "font-size: 11px; color: #666; margin-top: 5px;",
-                    "🔒 Fixed effects model automatically selected for parallel designs."
-                  )
-                )
-              ),
-              conditionalPanel(
-                condition = "!output.study_design_detected || output.detected_design_type != 'parallel'",
-                selectInput(
-                  "anova_model",
-                  label = NULL,
-                  choices = list(
-                    "Fixed Effects (lm)" = "fixed",
-                    "Mixed Effects - nlme" = "nlme", 
-                    "Mixed Effects - Satterthwaite" = "satterthwaite",
-                    "Mixed Effects - Kenward-Roger" = "kenward-roger"
-                  ),
-                  selected = "fixed"
-                )
-              ),
-              
-              # Conditional random effects specification for mixed models
-              conditionalPanel(
-                condition = "input.anova_model != 'fixed'",
-                div(style = "margin-top: 10px;",
-                  h6("Random Effects Structure", style = "margin-bottom: 5px; font-weight: bold;"),
-                  selectInput(
-                    "random_effects",
-                    label = NULL,
-                    choices = list(
-                      "Random Intercept: (1|subject)" = "(1|subject)",
-                      "Random Intercept: (1|subject/period)" = "(1|subject/period)",
-                      "Random Slope: (treatment|subject)" = "(treatment|subject)",
-                      "Random Intercept + Slope: (1 + treatment|subject)" = "(1 + treatment|subject)"
-                    ),
-                    selected = "(1|subject)"
-                  ),
-                  div(style = "font-size: 11px; color: #666; margin-top: 5px;",
-                    "For most bioequivalence studies, '(1|subject)' is appropriate."
-                  ),
-                  
-                  # Group as random effect option (only for mixed models)
-                  conditionalPanel(
-                    condition = "output.groups_detected",
-                    div(style = "margin-top: 10px; padding: 10px; background-color: #fff3cd; border-radius: 5px; border-left: 3px solid #ffc107;",
-                      h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #856404;"),
-                      checkboxInput(
-                        "include_group_random",
-                        "Include Group as Random Effect",
-                        value = FALSE
-                      ),
-                      div(style = "font-size: 11px; color: #856404; margin-top: 5px;",
-                        "Groups detected in data. Check to include group-to-group variability in mixed-effects model."
-                      )
-                    )
-                  )
-                )
-              ),
-              
-              # Group effects for fixed models (separate from random effects)
-              conditionalPanel(
-                condition = "input.anova_model == 'fixed' && output.groups_detected",
-                div(style = "margin-top: 10px; padding: 10px; background-color: #d1ecf1; border-radius: 5px; border-left: 3px solid #17a2b8;",
-                  h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #0c5460;"),
-                  checkboxInput(
-                    "include_group_fixed",
-                    "Include Group as Fixed Effect",
-                    value = TRUE
-                  ),
-                  checkboxInput(
-                    "include_group_treatment_interaction",
-                    "Include Group × Treatment Interaction",
-                    value = FALSE
-                  ),
-                  div(style = "font-size: 11px; color: #0c5460; margin-top: 5px;",
-                    "Groups detected in data. Including group effects accounts for between-group variability."
-                  )
-                )
-              )
-            ),
-            column(6,
-              h5("PK Parameters for Analysis",
-                 help_icon("pk_parameters", "Select which pharmacokinetic parameters to include in the ANOVA analysis. Both original and log-transformed versions will be analyzed automatically.", 
-                          "PK Parameter Selection", "Choose the pharmacokinetic parameters you want to analyze. Primary parameters (Cmax, AUC0-t, AUC0-inf) are pre-selected as they are typically required for bioequivalence assessment. The system will automatically include both the original parameter and its log-transformed version (e.g., selecting Cmax will analyze both Cmax and lnCmax).")
-              ),
-              
-              fluidRow(
-                column(6,
-                  h6("Primary Parameters", style = "color: #2c3e50; font-weight: bold;"),
-                  checkboxGroupInput(
-                    "primary_pk_params",
-                    label = NULL,
-                    choices = list(
-                      "Cmax" = "Cmax",
-                      "AUC0-t" = "AUC0t",
-                      "AUC0-inf" = "AUC0inf"
-                    ),
-                    selected = c("Cmax", "AUC0t", "AUC0inf")
-                  )
-                ),
-                column(6,
-                  h6("Secondary Parameters", style = "color: #2c3e50; font-weight: bold;"),
-                  checkboxGroupInput(
-                    "secondary_pk_params",
-                    label = NULL,
-                    choices = list(
-                      "Tmax" = "Tmax",
-                      "pAUC" = "pAUC",
-                      "AUC0-72" = "AUC072"
-                    ),
-                    selected = NULL
-                  )
-                )
-              ),
-              
-              # Note about Tmax methodology
-              div(
-                style = "margin-top: 8px; padding: 8px; background-color: #fff3cd; border-left: 3px solid #ffc107; border-radius: 3px;",
-                tags$small(
-                  icon("exclamation-triangle"), 
-                  " Note: Tmax requires non-parametric analysis methods (median differences, Wilcoxon tests) per regulatory guidance and is not suitable for standard confidence interval-based bioequivalence assessment.",
-                  style = "color: #856404;"
-                )
-              )
-            )
-          )
-        ),
-        
-        # Step 3: BE Statistical Analysis (for all data types)
-        div(
-          style = "border: 2px solid #27ae60; border-radius: 10px; padding: 20px; background-color: #f8fff8;",
-          h4(icon("calculator"), " Step 3: BE Statistical Analysis", style = "color: #27ae60; margin-top: 0;"),
-          
-          fluidRow(
-            # BE Analysis Type Selection (NEW - First element)
-            column(6,
-              h5("BE Analysis Type",
-                 help_icon("be_analysis_type", help_texts$be_analysis_type$tooltip, 
-                          help_texts$be_analysis_type$title, help_texts$be_analysis_type$content)
-              ),
+              h5("BE Analysis Type"),
               radioButtons("be_analysis_type", 
                 label = NULL,
                 choices = list(
@@ -522,74 +356,103 @@ tagList(
                 inline = FALSE
               ),
               
-              # Placeholder panels for RSABE and ABEL
+              # Design compatibility warning — shown when RSABE/ABEL selected with non-replicate
               conditionalPanel(
-                condition = "input.be_analysis_type == 'RSABE'",
-                div(class = "alert alert-info",
-                  h5(icon("info-circle"), " Reference-Scaled Average BE"),
-                  p("RSABE analysis for highly variable drugs (CV > 30%)"),
-                  p("Configuration options coming soon:"),
-                  tags$ul(
-                    tags$li("Regulatory constant (default: 0.893)"),
-                    tags$li("CV threshold for scaling (default: 30%)"),
-                    tags$li("Upper cap for scaling")
-                  ),
-                  helpText("Currently using ABE methodology. Full RSABE implementation pending.")
-                )
-              ),
-              
-              conditionalPanel(
-                condition = "input.be_analysis_type == 'ABEL'",
-                div(class = "alert alert-info",
-                  h5(icon("info-circle"), " Average BE with Expanding Limits"),
-                  p("ABEL analysis per EMA guidelines for HVDs"),
-                  p("Configuration options coming soon:"),
-                  tags$ul(
-                    tags$li("CV threshold (default: 30%)"),
-                    tags$li("Maximum expansion factor"),
-                    tags$li("Widening approach selection")
-                  ),
-                  helpText("Currently using ABE methodology. Full ABEL implementation pending.")
+                condition = "(input.be_analysis_type == 'RSABE' || input.be_analysis_type == 'ABEL') && output.is_non_replicate_design == true",
+                div(style = "padding: 10px; background-color: #f8d7da; border-left: 3px solid #dc3545; border-radius: 4px; margin-top: 10px;",
+                  tags$small(style = "color: #721c24;",
+                    icon("exclamation-triangle"), " ",
+                    tags$strong("Design Incompatibility: "),
+                    "RSABE and ABEL require a replicate design (2\u00D72\u00D73 or 2\u00D72\u00D74). ",
+                    "The detected study design does not support this analysis type. ",
+                    "Please select ABE or change the study design."
+                  )
                 )
               )
             ),
             
-            # Analysis configuration (moved to right column)
+            # BE type configuration — right column
             column(6,
-              h5("Alpha Level (α)",
-                 help_icon("alpha_level", help_texts$confidence_level$tooltip, 
-                          help_texts$confidence_level$title, help_texts$confidence_level$content)
-              ),
-              numericInput(
-                "alpha_level",
-                label = NULL,
-                value = 0.05,
-                min = 0.01,
-                max = 0.20,
-                step = 0.01
-              ),
-              div(id = "confidence_display", style = "margin-bottom: 15px; color: #6c757d;",
-                "95% CI corresponds to α = 0.05 for two one-sided tests"
-              ),
-              
-              # Conditional panel for ABE limits (moved here)
+
+              # ABE acceptance limits (fixed)
               conditionalPanel(
                 condition = "input.be_analysis_type == 'ABE'",
-                h5("Bioequivalence Limits (%)",
-                   help_icon("be_limits", help_texts$be_limits$tooltip, 
-                            help_texts$be_limits$title, help_texts$be_limits$content)
+                div(style = "padding: 10px; background-color: #e8f5e9; border-left: 3px solid #28a745; border-radius: 4px; margin-top: 10px;",
+                  tags$small(style = "color: #2e7d32;",
+                    icon("check-circle"), " ",
+                    tags$strong("Acceptance Limits: "),
+                    "80.00% \u2013 125.00% (regulatory standard for all parameters)"
+                  )
+                )
+              ),
+              
+              # RSABE: Method selector
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'RSABE'",
+                h5("RSABE Statistical Method",
+                   help_icon("rsabe_method", help_texts$rsabe_method$tooltip,
+                            help_texts$rsabe_method$title, help_texts$rsabe_method$content)
+                ),
+                radioButtons("rsabe_method",
+                  label = NULL,
+                  choices = list(
+                    "FDA Linearized Scaled Criterion (Howe UCB)" = "fda_linearized",
+                    "Non-Central TOST (ncTOST)" = "nctost"
+                  ),
+                  selected = "fda_linearized",
+                  inline = FALSE
+                ),
+                div(style = "padding: 10px; background-color: #e3f2fd; border-left: 3px solid #1976d2; border-radius: 4px; margin-top: 10px;",
+                  tags$small(style = "color: #1565c0;",
+                    icon("info-circle"), " ",
+                    "RSABE uses intra-subject contrasts (ISC) for variance estimation. ",
+                    "Requires replicate design (2\u00D72\u00D73 or 2\u00D72\u00D74). ",
+                    "Parameters with CV", tags$sub("wR"), " \u2264 ~25.4% use standard ABE limits."
+                  )
+                )
+              ),
+              
+              # ABEL: Expanded limits scope selection
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'ABEL'",
+                h5("Expanded Limits Scope"),
+                radioButtons("abel_regulator",
+                  label = NULL,
+                  choices = list(
+                    "Cmax only \u2014 AUC uses fixed 80\u2013125% limits" = "EMA",
+                    "Cmax + AUC0-t" = "HC"
+                  ),
+                  selected = "EMA",
+                  inline = FALSE
+                )
+              ),
+              
+              # Conditional panel for ABEL cap selection
+              conditionalPanel(
+                condition = "input.be_analysis_type == 'ABEL'",
+                h5("Cap the Limits",
+                   help_icon("abel_upper_cap", help_texts$abel_upper_cap$tooltip, 
+                            help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content)
                 ),
                 div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
-                  fluidRow(
-                    column(6,
-                      numericInput("be_lower", "Lower (%)", value = 80, min = 70, max = 90, step = 1)
-                    ),
-                    column(6,
-                      numericInput("be_upper", "Upper (%)", value = 125, min = 110, max = 140, step = 1)
+                  conditionalPanel(
+                    condition = "input.abel_regulator == 'EMA' || !input.abel_regulator",
+                    selectInput(
+                      "abel_upper_cap",
+                      label = NULL,
+                      choices = list(
+                        "None (no cap)" = "none",
+                        "50% cap (limits: 69.84% - 143.19%)" = "50",
+                        "Fixed widened limits (75.00% - 133.33%)" = "fixed"
+                      ),
+                      selected = "50"
                     )
                   ),
-                  div(style = "margin-top: 10px; color: #6c757d; font-size: 0.9em;",
-                    "• Standard: 80.00% - 125.00% for most drugs"
+                  conditionalPanel(
+                    condition = "input.abel_regulator == 'HC'",
+                    div(style = "color: #6c757d; font-size: 0.9em;",
+                      "Cap applied automatically at CVwR = 57.4% (limits: 66.7% \u2013 150.0%)."
+                    )
                   )
                 )
               ),
@@ -620,7 +483,209 @@ tagList(
           )
         ),
         
-        # Advanced Options Section (previously reference scaling)
+        # Step 3: ANOVA Configuration (for all data types) — model depends on BE type
+        div(
+          style = "border: 2px solid #e67e22; border-radius: 10px; padding: 20px; margin-bottom: 20px; background-color: #fef9f3;",
+          h4(icon("chart-bar"), " Step 3: ANOVA Configuration", style = "color: #e67e22; margin-top: 0;"),
+          
+          fluidRow(
+            column(6,
+              h5("Analysis Model"),
+              
+              # ===============================================================
+              # PARALLEL DESIGNS: Fixed effects only (all BE types)
+              # ===============================================================
+              conditionalPanel(
+                condition = "output.study_design_detected && output.detected_design_type == 'parallel'",
+                div(
+                  selectInput(
+                    "anova_model",
+                    label = NULL,
+                    choices = list("Fixed Effects (lm)" = "fixed"),
+                    selected = "fixed"
+                  ),
+                  div(style = "font-size: 11px; color: #666; margin-top: 5px;",
+                    "\U0001F512 Fixed effects model automatically selected for parallel designs."
+                  )
+                )
+              ),
+              
+              # ===============================================================
+              # ABE: All four ANOVA model options (our own simple_anova.R)
+              # ===============================================================
+              conditionalPanel(
+                condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'ABE'",
+                selectInput(
+                  "anova_model",
+                  label = NULL,
+                  choices = list(
+                    "Fixed Effects (lm)" = "fixed",
+                    "Mixed Effects - nlme (REML)" = "nlme", 
+                    "Mixed Effects - Satterthwaite DF" = "satterthwaite",
+                    "Mixed Effects - Kenward-Roger DF" = "kenward-roger"
+                  ),
+                  selected = "fixed"
+                ),
+                div(style = "font-size: 11px; color: #666; margin-top: 5px;",
+                  "ABE uses our ANOVA engine for treatment comparison and 90% CI construction."
+                )
+              ),
+              
+              # ===============================================================
+              # ABEL: Maps to replicateBE Method A (fixed) or Method B (mixed)
+              # method.B option: 1=Satterthwaite, 2=nlme/SAS, 3=Kenward-Roger
+              # ===============================================================
+              conditionalPanel(
+                condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'ABEL'",
+                selectInput(
+                  "anova_model",
+                  label = NULL,
+                  choices = list(
+                    "Method A — Fixed Effects (ANOVA)" = "fixed",
+                    "Method B — Mixed Effects, nlme (SAS CONTAIN DF)" = "nlme",
+                    "Method B — Mixed Effects, Satterthwaite DF" = "satterthwaite",
+                    "Method B — Mixed Effects, Kenward-Roger DF" = "kenward-roger"
+                  ),
+                  selected = "fixed"
+                ),
+                div(style = "font-size: 11px; color: #666; margin-top: 5px;",
+                  icon("info-circle"), " ABEL analysis is performed by the replicateBE package. ",
+                  tags$b("Method A"), " uses a linear fixed-effects model (ANOVA). ",
+                  tags$b("Method B"), " uses a linear mixed-effects model with subjects as random effect. ",
+                  "The random effects structure is fixed at (1|subject) as required by the EMA guideline."
+                )
+              ),
+              
+              # ===============================================================
+              # RSABE: Fixed or nlme only (our own rsabe_analysis.R)
+              # ===============================================================
+              conditionalPanel(
+                condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'RSABE'",
+                selectInput(
+                  "anova_model",
+                  label = NULL,
+                  choices = list(
+                    "Fixed Effects (lm)" = "fixed",
+                    "Mixed Effects - nlme (REML)" = "nlme"
+                  ),
+                  selected = "fixed"
+                ),
+                div(style = "font-size: 11px; color: #666; margin-top: 5px;",
+                  "RSABE uses Fixed Effects or nlme for treatment effect estimation. ",
+                  "Within-reference variance (s\u00B2wR) is always computed via individual subject contrasts (ISC)."
+                )
+              ),
+              
+              # ===============================================================
+              # RANDOM EFFECTS — only for ABE with mixed models
+              # (ABEL uses replicateBE's built-in (1|subject); RSABE uses nlme's built-in (1|subject))
+              # ===============================================================
+              conditionalPanel(
+                condition = "input.anova_model != 'fixed' && input.be_analysis_type == 'ABE'",
+                div(style = "margin-top: 10px;",
+                  h6("Random Effects Structure", style = "margin-bottom: 5px; font-weight: bold;"),
+                  selectInput(
+                    "random_effects",
+                    label = NULL,
+                    choices = list(
+                      "Random Intercept: (1|subject)" = "(1|subject)",
+                      "Random Intercept: (1|subject/period)" = "(1|subject/period)",
+                      "Random Slope: (treatment|subject)" = "(treatment|subject)",
+                      "Random Intercept + Slope: (1 + treatment|subject)" = "(1 + treatment|subject)"
+                    ),
+                    selected = "(1|subject)"
+                  ),
+                  div(style = "font-size: 11px; color: #666; margin-top: 5px;",
+                    "For most bioequivalence studies, '(1|subject)' is appropriate."
+                  ),
+                  
+                  # Group as random effect option (only for ABE mixed models)
+                  conditionalPanel(
+                    condition = "output.groups_detected",
+                    div(style = "margin-top: 10px; padding: 10px; background-color: #fff3cd; border-radius: 5px; border-left: 3px solid #ffc107;",
+                      h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #856404;"),
+                      checkboxInput(
+                        "include_group_random",
+                        "Include Group as Random Effect",
+                        value = FALSE
+                      ),
+                      div(style = "font-size: 11px; color: #856404; margin-top: 5px;",
+                        "Groups detected in data. Check to include group-to-group variability in mixed-effects model."
+                      )
+                    )
+                  )
+                )
+              ),
+              
+              # Group effects for fixed models (ABE only — ABEL/RSABE handle their own models)
+              conditionalPanel(
+                condition = "input.anova_model == 'fixed' && output.groups_detected && input.be_analysis_type == 'ABE'",
+                div(style = "margin-top: 10px; padding: 10px; background-color: #d1ecf1; border-radius: 5px; border-left: 3px solid #17a2b8;",
+                  h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #0c5460;"),
+                  checkboxInput(
+                    "include_group_fixed",
+                    "Include Group as Fixed Effect",
+                    value = TRUE
+                  ),
+                  checkboxInput(
+                    "include_group_treatment_interaction",
+                    "Include Group \u00D7 Treatment Interaction",
+                    value = FALSE
+                  ),
+                  div(style = "font-size: 11px; color: #0c5460; margin-top: 5px;",
+                    "Groups detected in data. Including group effects accounts for between-group variability."
+                  )
+                )
+              )
+            ),
+            column(6,
+              h5("PK Parameters for Analysis"),
+              
+              fluidRow(
+                column(6,
+                  h6("Primary Parameters", style = "color: #2c3e50; font-weight: bold;"),
+                  checkboxGroupInput(
+                    "primary_pk_params",
+                    label = NULL,
+                    choices = list(
+                      "Cmax" = "Cmax",
+                      "AUC0-t" = "AUC0t"
+                    ),
+                    selected = c("Cmax", "AUC0t")
+                  )
+                ),
+                column(6,
+                  h6("Secondary Parameters", style = "color: #2c3e50; font-weight: bold;"),
+                  checkboxGroupInput(
+                    "secondary_pk_params",
+                    label = NULL,
+                    choices = list(
+                      "AUC0-inf" = "AUC0inf",
+                      "pAUC" = "pAUC",
+                      "Tmax" = "Tmax"
+                    ),
+                    selected = NULL
+                  )
+                )
+              ),
+              
+              # Note about Tmax methodology
+              conditionalPanel(
+                condition = "input.secondary_pk_params && input.secondary_pk_params.indexOf('Tmax') > -1",
+                div(
+                  style = "margin-top: 8px; padding: 8px; background-color: #fff3cd; border-left: 3px solid #ffc107; border-radius: 3px;",
+                  tags$small(
+                    icon("exclamation-triangle"), 
+                    " Note: Tmax requires non-parametric analysis methods (median differences, Wilcoxon tests) per regulatory guidance and is not suitable for standard confidence interval-based bioequivalence assessment.",
+                    style = "color: #856404;"
+                  )
+                )
+              )
+            )
+          )
+        ),
+        
+        # Advanced Options Section (ABE)
         conditionalPanel(
           condition = "input.be_analysis_type == 'ABE'",
           div(
@@ -634,24 +699,170 @@ tagList(
             conditionalPanel(
               condition = "input.enable_advanced_options",
               div(style = "margin-top: 15px; padding: 15px; background-color: #e8f4fd; border-radius: 5px;",
-                h6("Experimental Reference Scaling"),
-                p("Note: Advanced reference scaling features are experimental"),
+                h6("Alpha Level (\u03b1)",
+                   help_icon("alpha_level", help_texts$confidence_level$tooltip, 
+                            help_texts$confidence_level$title, help_texts$confidence_level$content),
+                   style = "font-weight: bold; color: #2c3e50;"
+                ),
+                p(style = "font-size: 0.85em; color: #666; margin-bottom: 8px;",
+                  "One-sided significance level for TOST. Default 0.05 yields a 90% confidence interval."),
+                fluidRow(
+                  column(6,
+                    numericInput(
+                      "alpha_level",
+                      label = NULL,
+                      value = 0.05,
+                      min = 0.01,
+                      max = 0.20,
+                      step = 0.01
+                    )
+                  ),
+                  column(6,
+                    div(id = "confidence_display", style = "margin-top: 8px; color: #6c757d;",
+                      uiOutput("alpha_display_text")
+                    )
+                  )
+                ),
+                hr(style = "margin: 15px 0;"),
+                h6("Per-Parameter BE Limits", style = "font-weight: bold; color: #2c3e50;"),
+                p(style = "font-size: 0.85em; color: #666; margin-bottom: 12px;",
+                  "Set different acceptance limits for each PK parameter category. Defaults: 80.00% - 125.00%."),
+                fluidRow(
+                  column(6,
+                    div(style = "padding: 10px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;",
+                      h6(tags$strong("Cmax Limits (%)"), style = "margin-top: 0;"),
+                      fluidRow(
+                        column(6, numericInput("be_lower_cmax", "Lower", value = 80, min = 70, max = 90, step = 1)),
+                        column(6, numericInput("be_upper_cmax", "Upper", value = 125, min = 110, max = 140, step = 1))
+                      )
+                    )
+                  ),
+                  column(6,
+                    div(style = "padding: 10px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;",
+                      h6(tags$strong("AUC Limits (%)"), style = "margin-top: 0;"),
+                      fluidRow(
+                        column(6, numericInput("be_lower_auc", "Lower", value = 80, min = 70, max = 90, step = 1)),
+                        column(6, numericInput("be_upper_auc", "Upper", value = 125, min = 110, max = 140, step = 1))
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        ),
+        
+        # ABEL Advanced Options
+        conditionalPanel(
+          condition = "input.be_analysis_type == 'ABEL'",
+          div(
+            style = "border: 1px solid #dee2e6; border-radius: 5px; padding: 15px; margin-top: 15px; background: #f8f9fa;",
+            h5("Advanced ABEL Options"),
+            checkboxInput(
+              "abel_show_advanced",
+              "Show advanced options",
+              value = FALSE
+            ),
+            conditionalPanel(
+              condition = "input.abel_show_advanced",
+              div(style = "padding: 15px; background-color: #fff8e1; border: 1px solid #ffd54f; border-radius: 5px; margin-top: 10px;",
+                h6(tags$strong(tags$i(class="fa fa-exclamation-triangle"), " Advanced Options"), 
+                   style = "color: #f57f17; margin-bottom: 10px;"),
+                p(style = "font-size: 0.85em; color: #666; margin-bottom: 12px;",
+                  "These options allow customization of ABEL parameters. Use only if required by specific regulatory guidance."),
+                
+                # Alpha Level for ABEL
+                h6("Alpha Level (\u03b1)", style = "font-weight: bold; color: #2c3e50;"),
+                p(style = "font-size: 0.85em; color: #666; margin-bottom: 8px;",
+                  "One-sided significance level for TOST. Default 0.05 yields a 90% confidence interval."),
+                fluidRow(
+                  column(6,
+                    numericInput(
+                      "alpha_level_abel",
+                      label = NULL,
+                      value = 0.05,
+                      min = 0.01,
+                      max = 0.20,
+                      step = 0.01
+                    )
+                  ),
+                  column(6,
+                    div(id = "confidence_display_abel", style = "margin-top: 8px; color: #6c757d;")
+                  )
+                ),
+                hr(style = "margin: 15px 0;"),
+                
+                # TIE adjustment
                 checkboxInput(
-                  "reference_scaling",
-                  "Enable experimental reference scaling",
+                  "abel_adjust_tie",
+                  "Adjust alpha to control Type I Error inflation",
                   value = FALSE
                 ),
                 conditionalPanel(
-                  condition = "input.reference_scaling",
-                  numericInput(
-                    "scaling_threshold",
-                    "CV threshold for scaling (%)",
-                    value = 30,
-                    min = 20,
-                    max = 50,
-                    step = 5
+                  condition = "input.abel_adjust_tie",
+                  div(style = "margin-left: 20px; margin-top: 8px; padding: 10px; background-color: #fff; border-radius: 4px;",
+                    helpText("Iteratively adjusts alpha to control TIE inflation at the nominal level (Labes & Schütz 2016).")
+                  )
+                ),
+                
+                # Outlier analysis
+                checkboxInput(
+                  "abel_outlier_analysis",
+                  "Enable outlier detection (studentized residuals)",
+                  value = FALSE
+                ),
+                conditionalPanel(
+                  condition = "input.abel_outlier_analysis",
+                  div(style = "margin-left: 20px; margin-top: 8px; padding: 10px; background-color: #fff; border-radius: 4px;",
+                    numericInput(
+                      "abel_outlier_fence",
+                      "Outlier detection fence (IQR multiplier):",
+                      value = 2,
+                      min = 1.5,
+                      max = 3,
+                      step = 0.5
+                    ),
+                    helpText("Multiplier of the interquartile range. Higher values = fewer outliers detected. Default: 2 (Tukey's rule).")
+                  )
+                )
+              )
+            )
+          )
+        ),
+        
+        # RSABE Advanced Options
+        conditionalPanel(
+          condition = "input.be_analysis_type == 'RSABE'",
+          div(
+            style = "border: 1px solid #dee2e6; border-radius: 5px; padding: 15px; margin-top: 15px; background: #f8f9fa;",
+            h5("Advanced RSABE Options"),
+            checkboxInput(
+              "rsabe_show_advanced",
+              "Show advanced options",
+              value = FALSE
+            ),
+            conditionalPanel(
+              condition = "input.rsabe_show_advanced",
+              div(style = "padding: 15px; background-color: #e8f4fd; border: 1px solid #90caf9; border-radius: 5px; margin-top: 10px;",
+                h6("Alpha Level (\u03b1)",
+                   style = "font-weight: bold; color: #2c3e50;"
+                ),
+                p(style = "font-size: 0.85em; color: #666; margin-bottom: 8px;",
+                  "One-sided significance level. Default 0.05 yields a 95% upper confidence bound (linearized) or 90% CI (ncTOST)."),
+                fluidRow(
+                  column(6,
+                    numericInput(
+                      "alpha_level_rsabe",
+                      label = NULL,
+                      value = 0.05,
+                      min = 0.01,
+                      max = 0.20,
+                      step = 0.01
+                    )
                   ),
-                  helpText("Apply scaling when within-subject CV > threshold")
+                  column(6,
+                    div(id = "confidence_display_rsabe", style = "margin-top: 8px; color: #6c757d;")
+                  )
                 )
               )
             )
@@ -678,9 +889,18 @@ tagList(
       // Function to update confidence interval display
       function updateConfidenceInterval() {
         var alpha = $('#alpha_level').val();
+        var beType = $('input[name=\"be_analysis_type\"]:checked').val();
+        
         if (alpha && !isNaN(alpha)) {
-          var ci = (1 - parseFloat(alpha)) * 100;
-          var ciText = ci.toFixed(0) + '% CI corresponds to α = ' + alpha + ' for two one-sided tests';
+          var ci = (1 - 2 * parseFloat(alpha)) * 100;
+          var ciText = '';
+          
+          if (beType === 'ABEL' || beType === 'RSABE') {
+            ciText = ci.toFixed(0) + '% CI (α = ' + alpha + ' one-sided for TOST)';
+          } else {
+            ciText = ci.toFixed(0) + '% CI (α = ' + alpha + ' one-sided for TOST)';
+          }
+          
           $('#confidence_display').text(ciText);
         }
       }
@@ -690,6 +910,11 @@ tagList(
       
       // Update when alpha level changes
       $('#alpha_level').on('input change', function() {
+        updateConfidenceInterval();
+      });
+      
+      // Update when BE analysis type changes
+      $('input[name=\"be_analysis_type\"]').on('change', function() {
         updateConfidenceInterval();
       });
     });

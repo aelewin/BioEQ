@@ -116,14 +116,17 @@ validate_bioeq_data_enhanced <- function(data) {
 }
 
 # Enhanced data summary function
-create_data_summary_enhanced <- function(data) {
+# EXPECTS: Data with capitalized standard column names (Subject, Treatment, Period, Sequence)
+# This function is called AFTER column mapping/standardization
+# pk_param_info: Optional list with PK parameter metadata (is_log_transformed, etc.)
+create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
   if (is.null(data)) return(NULL)
   
   tryCatch({
-    # Basic counts
-    n_subjects <- length(unique(data$subject))
-    n_treatments <- length(unique(data$treatment))
-    treatments <- sort(unique(data$treatment))
+    # Basic counts - use capitalized column names
+    n_subjects <- if("Subject" %in% names(data)) length(unique(data$Subject)) else 0
+    n_treatments <- if("Treatment" %in% names(data)) length(unique(data$Treatment)) else 0
+    treatments <- if("Treatment" %in% names(data)) sort(unique(data$Treatment)) else character(0)
     total_obs <- nrow(data)
     
     # Group information
@@ -134,7 +137,7 @@ create_data_summary_enhanced <- function(data) {
         group_summary <- data %>%
           group_by(group) %>%
           summarise(
-            n_subjects = n_distinct(subject),
+            n_subjects = n_distinct(Subject),
             n_observations = n(),
             .groups = "drop"
           )
@@ -173,7 +176,7 @@ create_data_summary_enhanced <- function(data) {
       group_info$subjects_per_group <- tryCatch({
         data %>%
           group_by(group) %>%
-          summarise(n_subjects = length(unique(subject)), .groups = "drop")
+          summarise(n_subjects = length(unique(Subject)), .groups = "drop")
       }, error = function(e) {
         data.frame(group = unique(data$group), n_subjects = 1)
       })
@@ -184,21 +187,22 @@ create_data_summary_enhanced <- function(data) {
     }
     
     # Check if this is concentration-time data or PK parameters data
-    has_time <- "time" %in% names(data)
-    has_concentration <- "concentration" %in% names(data)
+    # Use capitalized column names: Time, Concentration
+    has_time <- "Time" %in% names(data)
+    has_concentration <- "Concentration" %in% names(data)
     
     if (has_time && has_concentration) {
       # Concentration-time data
-      n_timepoints <- length(unique(data$time))
-      timepoints <- sort(unique(data$time))
+      n_timepoints <- length(unique(data$Time))
+      timepoints <- sort(unique(data$Time))
       
       # Design analysis with error handling
       treatments_per_subject <- tryCatch({
         data %>%
-          group_by(subject) %>%
-          summarise(n_treatments = length(unique(treatment[!is.na(treatment)])), .groups = "drop")
+          group_by(Subject) %>%
+          summarise(n_treatments = length(unique(Treatment[!is.na(Treatment)])), .groups = "drop")
       }, error = function(e) {
-        data.frame(subject = unique(data$subject[!is.na(data$subject)]), n_treatments = 1)
+        data.frame(Subject = unique(data$Subject[!is.na(data$Subject)]), n_treatments = 1)
       })
       
       is_crossover <- tryCatch({
@@ -210,13 +214,26 @@ create_data_summary_enhanced <- function(data) {
       }, error = function(e) FALSE)
       design_type <- if (is_crossover) "Crossover" else "Parallel"
       
-      # Missing data analysis
-      missing_conc <- sum(is.na(data$concentration))
+      # Missing data analysis - use capitalized Concentration
+      missing_conc <- sum(is.na(data$Concentration))
       missing_pct <- round(missing_conc / total_obs * 100, 2)
       
-      # Concentration range with safe handling
+      # Build per-subject missing detail
+      missing_detail <- NULL
+      if (missing_conc > 0) {
+        na_rows <- data[is.na(data$Concentration), , drop = FALSE]
+        missing_detail <- data.frame(
+          Subject = as.character(na_rows$Subject),
+          Treatment = as.character(na_rows$Treatment),
+          Period = if ("Period" %in% names(na_rows)) as.character(na_rows$Period) else "",
+          Time = as.numeric(na_rows$Time),
+          stringsAsFactors = FALSE
+        )
+      }
+      
+      # Concentration range with safe handling - use capitalized Concentration
       conc_range <- tryCatch({
-        valid_conc <- data$concentration[is.finite(data$concentration)]
+        valid_conc <- data$Concentration[is.finite(data$Concentration)]
         if(length(valid_conc) > 0) {
           range(valid_conc, na.rm = TRUE)
         } else {
@@ -224,8 +241,9 @@ create_data_summary_enhanced <- function(data) {
         }
       }, error = function(e) c(NA, NA))
       
+      # Time range - use capitalized Time
       time_range <- tryCatch({
-        valid_time <- data$time[is.finite(data$time)]
+        valid_time <- data$Time[is.finite(data$Time)]
         if(length(valid_time) > 0) {
           range(valid_time, na.rm = TRUE)
         } else {
@@ -243,6 +261,7 @@ create_data_summary_enhanced <- function(data) {
         design_type = design_type,
         missing_concentrations = missing_conc,
         missing_percentage = missing_pct,
+        missing_detail = missing_detail,
         concentration_range = conc_range,
         time_range = time_range,
         data_type = "concentration",
@@ -253,26 +272,72 @@ create_data_summary_enhanced <- function(data) {
       # PK parameters data
       # Get numeric columns (potential PK parameters)
       # Exclude design variables and demographic columns from PK parameter detection
-      excluded_cols <- c("subject", "sequence", "period", "dose", "weight", "age", "height", "bmi", 
+      # Use capitalized column names
+      excluded_cols <- c("Subject", "Sequence", "Period", "Treatment", "dose", "weight", "age", "height", "bmi", 
                         "group", "grp", "site", "cohort", "batch", "study_group")
       
-      numeric_cols <- sapply(data, is.numeric)
-      pk_cols <- names(data)[numeric_cols & !names(data) %in% excluded_cols]
+      # If pk_param_info is provided (from user mappings), use it
+      # Otherwise fall back to auto-detection
+      if (!is.null(pk_param_info) && length(pk_param_info) > 0) {
+        # Use mapped PK parameters
+        pk_cols <- names(pk_param_info)
+        
+        # Create detailed PK parameter info with log-transform status
+        pk_details <- lapply(pk_cols, function(param) {
+          info <- pk_param_info[[param]]
+          list(
+            name = param,
+            is_log_transformed = isTRUE(info$is_log_transformed),
+            original_name = info$original_name %||% param
+          )
+        })
+        names(pk_details) <- pk_cols
+      } else {
+        # Auto-detection: Get numeric columns
+        numeric_cols <- sapply(data, is.numeric)
+        pk_cols <- names(data)[numeric_cols & !names(data) %in% excluded_cols]
+        
+        # Create basic PK parameter info (no log-transform info available)
+        pk_details <- lapply(pk_cols, function(param) {
+          list(
+            name = param,
+            is_log_transformed = grepl("^(ln|log)", param, ignore.case = TRUE),  # Guess from name
+            original_name = param
+          )
+        })
+        names(pk_details) <- pk_cols
+      }
       
-      # Design analysis with error handling
+      # Design analysis with error handling - use capitalized column names
       treatments_per_subject <- tryCatch({
         data %>%
-          group_by(subject) %>%
-          summarise(n_treatments = length(unique(treatment)), .groups = "drop")
+          group_by(Subject) %>%
+          summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
       }, error = function(e) {
-        data.frame(subject = unique(data$subject), n_treatments = 1)
+        data.frame(Subject = unique(data$Subject), n_treatments = 1)
       })
       
       is_crossover <- tryCatch({
         all(treatments_per_subject$n_treatments > 1)
       }, error = function(e) FALSE)
       
-      design_type <- if (is_crossover) "Crossover" else "Parallel"
+      # Try to detect replicate design
+      design_type <- "Parallel"
+      if (is_crossover) {
+        # Check if it's a replicate design
+        replicate_info <- NULL
+        if (all(c("Subject", "Period", "Treatment") %in% names(data))) {
+          tryCatch({
+            replicate_info <- detect_replicate_design(data)
+          }, error = function(e) NULL)
+        }
+        
+        if (!is.null(replicate_info) && isTRUE(replicate_info$is_replicate)) {
+          design_type <- replicate_info$design_type
+        } else {
+          design_type <- "Crossover"
+        }
+      }
       
       # Missing data analysis for PK parameters
       if (length(pk_cols) > 0) {
@@ -294,6 +359,7 @@ create_data_summary_enhanced <- function(data) {
         treatments = treatments,
         n_pk_parameters = length(pk_cols),
         pk_parameters = pk_cols,
+        pk_parameter_details = pk_details,  # Include detailed info about log-transform status
         total_observations = total_obs,
         design_type = design_type,
         missing_pk_values = missing_pk,
@@ -304,10 +370,11 @@ create_data_summary_enhanced <- function(data) {
     }
   }, error = function(e) {
     # Return a safe default summary if anything goes wrong
+    # Use capitalized column names with safe fallbacks
     return(list(
-      n_subjects = length(unique(data$subject)),
-      n_treatments = length(unique(data$treatment)),
-      treatments = unique(data$treatment),
+      n_subjects = if("Subject" %in% names(data)) length(unique(data$Subject)) else 0,
+      n_treatments = if("Treatment" %in% names(data)) length(unique(data$Treatment)) else 0,
+      treatments = if("Treatment" %in% names(data)) unique(data$Treatment) else character(0),
       total_observations = nrow(data),
       design_type = "Unknown",
       data_type = "unknown",
@@ -396,58 +463,22 @@ observeEvent(input$data_file, {
       # Store processed data if validation passed
       if (validation_result$valid) {
         processed_data <- validation_result$processed_data
-        
-        # Additional safety: Force conversion of any remaining character PK parameters to numeric
-        if (input$data_type == "pk_parameters") {
-          # Common PK parameter names that should be numeric
-          pk_param_patterns <- c("AUC", "Cmax", "Tmax", "half", "clearance", "volume", "lambda", "MRT")
           
-          for (col_name in names(processed_data)) {
-            # Check if this column name suggests it's a PK parameter
-            is_pk_param <- any(sapply(pk_param_patterns, function(pattern) {
-              grepl(pattern, col_name, ignore.case = TRUE)
-            }))
-            
-            if (is_pk_param && !is.numeric(processed_data[[col_name]])) {
-              # Try to convert to numeric
-              numeric_values <- suppressWarnings(as.numeric(processed_data[[col_name]]))
-              
-              # Check if conversion was successful (not all NA)
-              if (!all(is.na(numeric_values))) {
-                cat(sprintf("[DEBUG] Force converting %s to numeric (was %s)\n", col_name, class(processed_data[[col_name]])[1]))
-                processed_data[[col_name]] <- numeric_values
-                
-                # Add warning about successful conversion
-                if (!"warnings" %in% names(validation_result)) validation_result$warnings <- c()
-                validation_result$warnings <- c(validation_result$warnings, 
-                  paste0("Converted column '", col_name, "' from character to numeric"))
-              } else {
-                cat(sprintf("[DEBUG] Could not convert %s to numeric - contains non-numeric data\n", col_name))
-              }
-            }
+          values$uploaded_data <- processed_data
+          values$data_summary <- validation_result
+          values$data_type <- input$data_type
+          # Don't set columns_mapped to true here - require explicit mapping confirmation
+          
+          # Update progress indicator
+          if (exists("shinyjs_available") && shinyjs_available) {
+            shinyjs::runjs("
+              $('.progress-step').removeClass('active');
+              $('.progress-step:first-child').addClass('completed');
+              $('.progress-step:nth-child(2)').addClass('active');
+            ")
           }
-        }
-        
-        values$uploaded_data <- processed_data
-        values$data_summary <- validation_result
-        values$data_type <- input$data_type
-        # Don't set columns_mapped to true here - require explicit mapping confirmation
-        
-        # Update progress indicator
-        if (exists("shinyjs_available") && shinyjs_available) {
-          shinyjs::runjs("
-            $('.progress-step').removeClass('active');
-            $('.progress-step:first-child').addClass('completed');
-            $('.progress-step:nth-child(2)').addClass('active');
-          ")
-        }
-        
-        # Simple success message
-        if (input$data_type == "concentration") {
+          
           showNotification("Data uploaded successfully!", type = "message", duration = 3)
-        } else {
-          showNotification("Data uploaded successfully!", type = "message", duration = 3)
-        }
       } else {
         values$uploaded_data <- NULL
         values$data_summary <- NULL
@@ -697,11 +728,16 @@ output$data_preview <- DT::renderDataTable({
   
   # Format numeric columns for better display based on data type
   if (data_type == "concentration") {
+    # Support both lowercase (legacy) and capitalized (new standard) column names
     if ("concentration" %in% names(data)) {
       data$concentration <- round(data$concentration, 3)
+    } else if ("Concentration" %in% names(data)) {
+      data$Concentration <- round(data$Concentration, 3)
     }
     if ("time" %in% names(data)) {
       data$time <- round(data$time, 2)
+    } else if ("Time" %in% names(data)) {
+      data$Time <- round(data$Time, 2)
     }
   } else {
     # For PK parameters, format all numeric PK columns
@@ -772,6 +808,10 @@ output$data_summary <- renderText({
       } else "Range not available", ")\n",
       "Total Observations: ", summary$total_observations, "\n",
       "Missing Concentrations: ", summary$missing_concentrations, " (", summary$missing_percentage, "%)\n",
+      if (summary$missing_concentrations > 0 && !is.null(summary$missing_detail)) {
+        affected <- unique(summary$missing_detail$Subject)
+        paste0("  Affected Subjects: ", paste(affected, collapse = ", "), "\n")
+      } else "",
       "Concentration Range: ", 
       if(!is.na(summary$concentration_range[1]) && !is.na(summary$concentration_range[2])) {
         paste0(round(summary$concentration_range[1], 3), " - ", round(summary$concentration_range[2], 3))
@@ -793,10 +833,31 @@ output$data_summary <- renderText({
     }
     
     # Continue with PK parameters and other info
+    # Show PK parameters with log-transform status if available
+    pk_params_text <- if(isTRUE(length(summary$pk_parameters) > 0)) {
+      if (!is.null(summary$pk_parameter_details)) {
+        # Show detailed info with log-transform status
+        param_list <- sapply(summary$pk_parameters, function(p) {
+          details <- summary$pk_parameter_details[[p]]
+          if (!is.null(details) && isTRUE(details$is_log_transformed)) {
+            paste0(p, " (log-transformed)")
+          } else {
+            p
+          }
+        })
+        paste0("Parameters: ", paste(param_list, collapse = ", "), "\n")
+      } else {
+        # Simple list without log-transform info
+        paste0("Parameters: ", paste(summary$pk_parameters, collapse = ", "), "\n")
+      }
+    } else {
+      ""
+    }
+    
     paste0(
       base_text,
       "PK Parameters: ", summary$n_pk_parameters, "\n",
-      if(isTRUE(length(summary$pk_parameters) > 0)) paste0("Parameters: ", paste(summary$pk_parameters, collapse = ", "), "\n") else "",
+      pk_params_text,
       "Total Observations: ", summary$total_observations, "\n",
       "Missing PK Values: ", summary$missing_pk_values, " (", summary$missing_percentage, "%)\n"
     )
@@ -927,7 +988,7 @@ output$download_pk_template <- downloadHandler(
       pk_template_data <- data.frame(
         Subject = rep(1:6, each = 2),
         Period = rep(1:2, times = 6),
-        Formulation = rep(c("Reference", "Test"), times = 6),
+        Treatment = rep(c("Reference", "Test"), times = 6),
         AUC0t = c(245.6, 235.8, 251.4, 248.2, 239.7, 228.5, 
                   256.3, 251.8, 242.1, 237.4, 248.9, 244.3),
         AUC0inf = c(251.2, 241.5, 257.8, 254.1, 245.3, 234.2,
@@ -999,35 +1060,64 @@ validate_pk_data_enhanced <- function(data) {
     return(NULL)
   }
   
-  # Map required columns to standard names
+  # =============================================================================
+  # COLUMN MAPPING - Skip if data already has capitalized standard names
+  # =============================================================================
+  
+  required_columns_capitalized <- c("Subject", "Treatment")
+  has_manual_mapping <- all(required_columns_capitalized %in% names(processed_data))
+  
   mapped_columns <- list()
-  for (std_name in names(column_mappings)) {
-    found_col <- find_column(data, column_mappings[[std_name]])
-    if (!is.null(found_col)) {
-      mapped_columns[[std_name]] <- found_col
-      # Rename column in processed data
-      names(processed_data)[names(processed_data) == found_col] <- std_name
-    }
-  }
-  
-  # Map optional columns too
-  for (std_name in names(optional_mappings)) {
-    found_col <- find_column(data, optional_mappings[[std_name]])
-    if (!is.null(found_col)) {
-      mapped_columns[[std_name]] <- found_col
-      # Rename column in processed data
-      names(processed_data)[names(processed_data) == found_col] <- std_name
-    }
-  }
-  
-  # Map PK parameter columns
   mapped_pk_parameters <- list()
-  for (pk_name in names(pk_parameter_mappings)) {
-    found_col <- find_column(data, pk_parameter_mappings[[pk_name]])
-    if (!is.null(found_col)) {
-      mapped_pk_parameters[[pk_name]] <- found_col
-      # Rename column in processed data
-      names(processed_data)[names(processed_data) == found_col] <- pk_name
+  
+  if (has_manual_mapping) {
+    # Data already has capitalized standard column names (from manual mapping)
+    # Just record what we have
+    
+    # Record the standard columns
+    if ("Subject" %in% names(processed_data)) mapped_columns[["Subject"]] <- "Subject"
+    if ("Treatment" %in% names(processed_data)) mapped_columns[["Treatment"]] <- "Treatment"
+    if ("Period" %in% names(processed_data)) mapped_columns[["Period"]] <- "Period"
+    if ("Sequence" %in% names(processed_data)) mapped_columns[["Sequence"]] <- "Sequence"
+    
+    # Identify PK parameter columns (non-standard columns that aren't the core columns)
+    core_columns <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration")
+    potential_pk_columns <- setdiff(names(processed_data), core_columns)
+    for (col in potential_pk_columns) {
+      mapped_pk_parameters[[col]] <- col
+    }
+    
+  } else {
+    # Original auto-mapping logic for data that hasn't been manually mapped yet
+    
+    # Map required columns to standard names
+    for (std_name in names(column_mappings)) {
+      found_col <- find_column(data, column_mappings[[std_name]])
+      if (!is.null(found_col)) {
+        mapped_columns[[std_name]] <- found_col
+        # Rename column in processed data
+        names(processed_data)[names(processed_data) == found_col] <- std_name
+      }
+    }
+    
+    # Map optional columns too
+    for (std_name in names(optional_mappings)) {
+      found_col <- find_column(data, optional_mappings[[std_name]])
+      if (!is.null(found_col)) {
+        mapped_columns[[std_name]] <- found_col
+        # Rename column in processed data
+        names(processed_data)[names(processed_data) == found_col] <- std_name
+      }
+    }
+    
+    # Map PK parameter columns
+    for (pk_name in names(pk_parameter_mappings)) {
+      found_col <- find_column(data, pk_parameter_mappings[[pk_name]])
+      if (!is.null(found_col)) {
+        mapped_pk_parameters[[pk_name]] <- found_col
+        # Rename column in processed data
+        names(processed_data)[names(processed_data) == found_col] <- pk_name
+      }
     }
   }
   
@@ -1035,18 +1125,20 @@ validate_pk_data_enhanced <- function(data) {
   # REQUIRED COLUMN VALIDATION
   # =============================================================================
   
-  required_columns <- c("subject", "treatment")
-  missing_required <- setdiff(required_columns, names(mapped_columns))
+  # Check if we successfully mapped the required columns
+  # For manual mapping: check for "Subject" and "Treatment"
+  # For auto mapping: check for "subject" and "treatment"
+  has_required_capitalized <- ("Subject" %in% names(mapped_columns)) && ("Treatment" %in% names(mapped_columns))
+  has_required_lowercase <- ("subject" %in% names(mapped_columns)) && ("treatment" %in% names(mapped_columns))
   
-  cat("[DEBUG] PK Validation - Required columns check:\n")
-  cat("[DEBUG] PK Validation - Mapped columns:", paste(names(mapped_columns), collapse = ", "), "\n")
-  cat("[DEBUG] PK Validation - Missing required:", paste(missing_required, collapse = ", "), "\n")
-  
-  if (length(missing_required) > 0) {
+  if (!has_required_capitalized && !has_required_lowercase) {
+    # Missing required columns
+    required_columns <- c("subject", "treatment")
+    missing_required <- setdiff(required_columns, names(mapped_columns))
+    
     for (missing in missing_required) {
       possible_names <- paste(column_mappings[[missing]], collapse = ", ")
       errors <- c(errors, paste0("Missing required column '", missing, "'. Expected one of: ", possible_names))
-      cat("[DEBUG] PK Validation - Error added for missing:", missing, "\n")
     }
   }
   
@@ -1056,9 +1148,6 @@ validate_pk_data_enhanced <- function(data) {
     warnings <- c(warnings, "No standard PK parameters automatically identified. You will need to specify which columns contain PK parameters.")
     suggestions <- c(suggestions, paste0("Available columns that could be PK parameters: ", 
                                        paste(setdiff(names(data), names(mapped_columns)), collapse = ", ")))
-    cat("[DEBUG] PK Validation - No PK parameters found in columns:", paste(names(data), collapse = ", "), "\n")
-    cat("[DEBUG] PK Validation - Mapped columns:", paste(names(mapped_columns), collapse = ", "), "\n")
-    cat("[DEBUG] PK Validation - Unmapped columns:", paste(setdiff(names(data), names(mapped_columns)), collapse = ", "), "\n")
   } else {
     # Check for primary PK parameters
     primary_params <- c("AUC0t", "AUC0inf", "Cmax")
@@ -1077,26 +1166,26 @@ validate_pk_data_enhanced <- function(data) {
   
   if (length(errors) == 0) {  # Only proceed if we have required columns
     
-    # Validate Subject column
-    if ("subject" %in% names(processed_data)) {
-      if (any(is.na(processed_data$subject))) {
+    # Validate Subject column - use capitalized column name
+    if ("Subject" %in% names(processed_data)) {
+      if (any(is.na(processed_data$Subject))) {
         errors <- c(errors, "Subject column contains missing values")
       }
     }
     
-    # Validate Treatment column
-    if ("treatment" %in% names(processed_data)) {
-      if (any(is.na(processed_data$treatment))) {
+    # Validate Treatment column - use capitalized column name (renamed from treatment)
+    if ("Treatment" %in% names(processed_data)) {
+      if (any(is.na(processed_data$Treatment))) {
         errors <- c(errors, "Treatment column contains missing values")
       }
       
-      # Check treatment values
-      unique_treatments <- unique(processed_data$treatment)
+      # Check formulation values
+      unique_treatments <- unique(processed_data$Treatment)
       valid_treatments <- c("R", "T", "Reference", "Test", "r", "t", "reference", "test")
       
       invalid_treatments <- setdiff(unique_treatments, valid_treatments)
       if (length(invalid_treatments) > 0) {
-        warnings <- c(warnings, paste0("Non-standard treatment values found: ", 
+        warnings <- c(warnings, paste0("Non-standard formulation values found: ", 
                                      paste(invalid_treatments, collapse = ", "), 
                                      ". Expected: R/T or Reference/Test"))
       }
@@ -1313,7 +1402,7 @@ output$concentration_column_mapper <- renderUI({
                   label = "Map to Data Type:",
                   choices = c("Select data type..." = "none",
                             "Subject ID" = "subject",
-                            "Treatment/Formulation" = "treatment",
+                            "Treatment/Treatment" = "treatment",
                             "Time" = "time",
                             "Concentration" = "concentration",
                             "Sequence" = "sequence",
@@ -1558,15 +1647,75 @@ observeEvent(input$confirm_concentration_mapping, {
   
   # Update the processed data with new column names
   processed_data <- values$uploaded_data_original
+  
+  # Track which columns are PK parameters and their log-transform status
+  pk_parameter_info <- list()
+  
+  # Process each column mapping
   for (data_type in names(column_mappings)) {
     original_col <- column_mappings[[data_type]]
-    names(processed_data)[names(processed_data) == original_col] <- data_type
+    
+    # Skip columns mapped to "other" (they will be removed)
+    if (tolower(data_type) == "other" || grepl("ignore", tolower(data_type), ignore.case = TRUE)) {
+      next
+    }
+    
+    # Map to CAPITALIZED standard names
+    standard_name <- switch(data_type,
+      "subject" = "Subject",
+      "treatment" = "Treatment",
+      "period" = "Period",
+      "sequence" = "Sequence",
+      "time" = "Time",
+      "concentration" = "Concentration",
+      data_type  # Keep PK parameter names as-is
+    )
+    
+    # Rename column in processed data
+    names(processed_data)[names(processed_data) == original_col] <- standard_name
+    
+    # Track PK parameters (anything not in the standard design columns)
+    if (!standard_name %in% c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration",
+                               "dose", "weight", "age", "height", "bmi", "group", "grp", "site", "cohort")) {
+      # Check if this is marked as log-transformed in units_settings
+      is_logged <- FALSE
+      if (!is.null(units_settings[[original_col]])) {
+        is_logged <- isTRUE(units_settings[[original_col]]$log_transformed)
+      }
+      
+      pk_parameter_info[[standard_name]] <- list(
+        original_name = original_col,
+        is_log_transformed = is_logged
+      )
+    }
   }
+  
+  # Remove columns that were NOT mapped AND columns mapped to "other/ignore"
+  # Build list of columns to keep (already renamed to standard names)
+  columns_to_keep <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration")
+  
+  # Add PK parameter names (these are the RENAMED standard names)
+  if (length(pk_parameter_info) > 0) {
+    columns_to_keep <- c(columns_to_keep, names(pk_parameter_info))
+  }
+  
+  # Filter processed_data to only keep the mapped columns
+  # processed_data has already been renamed, so we check against renamed names
+  columns_to_keep <- intersect(columns_to_keep, names(processed_data))
+  
+  if (length(columns_to_keep) > 0) {
+    processed_data <- processed_data[, columns_to_keep, drop = FALSE]
+  } else {
+    cat("[WARNING] No columns to keep after filtering!\n")
+  }
+  
+  # Store PK parameter information for later use
+  values$pk_parameter_info <- pk_parameter_info
   
   # Apply treatment designations to remap treatment values
   if (!is.null(values$treatment_designations)) {
     treatment_designations <- values$treatment_designations
-    treatment_col_name <- "treatment"  # Column is now renamed to "treatment"
+    treatment_col_name <- "Treatment"  # Column is now renamed to "Treatment" (capitalized)
     
     if (treatment_col_name %in% names(processed_data)) {
       # Remap treatment values based on user designations
@@ -1605,7 +1754,6 @@ observeEvent(input$confirm_concentration_mapping, {
       if (is_pk_param && !is.numeric(processed_data[[col_name]])) {
         numeric_values <- suppressWarnings(as.numeric(processed_data[[col_name]]))
         if (!all(is.na(numeric_values))) {
-          cat(sprintf("[DEBUG] Column mapping: Force converting %s to numeric\n", col_name))
           processed_data[[col_name]] <- numeric_values
           values$uploaded_data <- processed_data
         }
@@ -1614,7 +1762,9 @@ observeEvent(input$confirm_concentration_mapping, {
   }
   
   # Recreate data summary with mapped data
-  values$data_summary <- create_data_summary_enhanced(processed_data)
+  # Pass PK parameter info to show which are log-transformed
+  values$data_summary <- create_data_summary_enhanced(processed_data, values$pk_parameter_info)
+  
   values$data_summary$column_mappings_confirmed <- TRUE
   values$data_summary$mapped_columns <- names(column_mappings)
   values$data_summary$units_settings <- units_settings
@@ -1655,7 +1805,7 @@ output$pk_parameter_selector <- renderUI({
       
       # PK parameter mappings
       pk_mappings <- list(
-        AUC0t = c("auc0t", "auc_0_t", "auc0-t", "auc_0t", "auct", "auc_t", "auc_last", "auclast"),
+        AUC0t = c("auc0t", "auc_0_t", "auc0-t", "auct", "auc_t", "auc_last", "auclast"),
         AUC0inf = c("auc0inf", "auc_0_inf", "auc0-inf", "auc_inf", "aucinfinity", "auc_infinity", "aucinf", "auc_0_infinity"),
         Cmax = c("cmax", "c_max", "peak", "maximum_concentration", "max_conc"),
         Tmax = c("tmax", "t_max", "time_max", "peak_time", "time_to_max", "timemax"),
@@ -1704,7 +1854,7 @@ output$pk_parameter_selector <- renderUI({
           icon("info-circle", style = "color: #856404;"), 
           strong(" Required Columns:", style = "color: #856404;"), 
           br(),
-          span("• Subject ID and Treatment/Formulation are required for PK analysis", 
+          span("• Subject ID and Treatment/Treatment are required for PK analysis", 
                style = "color: #856404; font-size: 13px;"),
           br(),
           span("• Columns identified as 'PK Parameter' will be configured in Section B below", 
@@ -1743,7 +1893,7 @@ output$pk_parameter_selector <- renderUI({
                     label = "Map to Data Type:",
                     choices = c("Select data type..." = "none",
                               "Subject ID" = "subject",
-                              "Treatment/Formulation" = "treatment",
+                              "Treatment/Treatment" = "treatment",
                               "Sequence" = "sequence",
                               "Period" = "period",
                               "Group" = "group",
@@ -1894,7 +2044,7 @@ output$pk_parameter_config_area <- renderUI({
   if (length(pk_columns) == 0) {
     div(
       p("Select columns as 'PK Parameter' in Section A above to configure them here.", 
-        style = "color: #6c757d; font-style: italic; text-align: center; padding: 20px."),
+        style = "color: #6c757d; font-style: italic; text-align: center; padding: 20px;"),
       p(paste("Monitoring", length(names(values$uploaded_data_original)), "columns for PK parameter selections..."), 
         style = "color: #6c757d; font-size: 11px; text-align: center;")
     )
@@ -2147,28 +2297,37 @@ observeEvent(input$confirm_pk_mapping, {
     param_type_input <- input[[paste0("pk_param_type_", clean_col_id)]]
     
     if (!is.null(param_type_input) && param_type_input != "none") {
-      parameter_name <- NULL
+      base_parameter_name <- NULL
       
       if (param_type_input == "other") {
         custom_name <- input[[paste0("pk_custom_param_", clean_col_id)]]
         if (!is.null(custom_name) && custom_name != "") {
-          parameter_name <- custom_name
-          pk_mappings[[custom_name]] <- col
+          base_parameter_name <- custom_name
         }
       } else {
-        parameter_name <- param_type_input
-        pk_mappings[[param_type_input]] <- col
+        base_parameter_name <- param_type_input
       }
       
-      # Get log-transformation setting for this specific parameter
-      if (!is.null(parameter_name)) {
+      # Get log-transformation setting for this column
+      if (!is.null(base_parameter_name)) {
         log_input <- input[[paste0("pk_param_log_", clean_col_id)]]
-        pk_log_settings[[parameter_name]] <- ifelse(is.null(log_input), FALSE, log_input)
+        is_logged <- isTRUE(log_input)
+        
+        # Create unique parameter name: if logged and doesn't start with ln/log, prefix with "ln"
+        final_parameter_name <- if (is_logged && !grepl("^(ln|log)", tolower(base_parameter_name))) {
+          paste0("ln", base_parameter_name)
+        } else {
+          base_parameter_name
+        }
+        
+        # Store mapping with FINAL name as key
+        pk_mappings[[final_parameter_name]] <- col
+        pk_log_settings[[final_parameter_name]] <- is_logged
         
         # Get units setting for this specific parameter
         units_input <- input[[paste0("pk_param_units_", clean_col_id)]]
         if (!is.null(units_input)) {
-          pk_units_settings[[parameter_name]] <- units_input
+          pk_units_settings[[final_parameter_name]] <- units_input
         }
       }
     }
@@ -2232,26 +2391,87 @@ observeEvent(input$confirm_pk_mapping, {
   # Update the processed data with new column names
   processed_data <- values$uploaded_data_original
   
-  # Map general columns
+  # Map general columns to CAPITALIZED standard names
   for (data_type in names(general_mappings)) {
     original_col <- general_mappings[[data_type]]
+    
+    # Map to CAPITALIZED standard names
+    standard_name <- switch(data_type,
+      "subject" = "Subject",
+      "treatment" = "Treatment",
+      "period" = "Period",
+      "sequence" = "Sequence",
+      data_type  # Keep others as-is
+    )
+    
     if (original_col %in% names(processed_data)) {
-      names(processed_data)[names(processed_data) == original_col] <- data_type
+      names(processed_data)[names(processed_data) == original_col] <- standard_name
     }
   }
   
   # Map PK parameter columns
+  # Parameter names already have "ln" prefix if they're log-transformed (added during mapping collection)
+  pk_parameter_info <- list()  # Create pk_parameter_info for summary
+  
   for (pk_param in names(pk_mappings)) {
     original_col <- pk_mappings[[pk_param]]
+    
     if (original_col %in% names(processed_data)) {
+      # Check if this would create a duplicate column name
+      if (pk_param %in% names(processed_data) && pk_param != original_col) {
+        cat(sprintf("[WARNING] Skipping mapping '%s' -> '%s': would create duplicate column\n", original_col, pk_param))
+        next
+      }
       names(processed_data)[names(processed_data) == original_col] <- pk_param
+      
+      # Track in pk_parameter_info for summary
+      pk_parameter_info[[pk_param]] <- list(
+        original_name = original_col,
+        is_log_transformed = isTRUE(pk_log_settings[[pk_param]])
+      )
     }
+  }
+  
+  # Remove columns that were NOT mapped (only keep mapped columns)
+  # Build list of columns to keep
+  columns_to_keep <- c("Subject", "Treatment", "Period", "Sequence")
+  
+  # Add general mapped columns
+  for (std_name in names(general_mappings)) {
+    capitalized_name <- switch(std_name,
+      "subject" = "Subject",
+      "treatment" = "Treatment",
+      "period" = "Period",
+      "sequence" = "Sequence",
+      std_name
+    )
+    if (capitalized_name %in% names(processed_data)) {
+      columns_to_keep <- c(columns_to_keep, capitalized_name)
+    }
+  }
+  
+  # Add PK parameters
+  columns_to_keep <- c(columns_to_keep, names(pk_parameter_info))
+  
+  # Filter to only keep mapped columns
+  columns_to_keep <- unique(intersect(columns_to_keep, names(processed_data)))
+  
+  if (length(columns_to_keep) > 0) {
+    processed_data <- processed_data[, columns_to_keep, drop = FALSE]
+  }
+  
+  # Remove any duplicate columns that might have been created
+  if (any(duplicated(names(processed_data)))) {
+    dup_cols <- names(processed_data)[duplicated(names(processed_data))]
+    cat(sprintf("[WARNING] Found duplicate columns after mapping: %s\n", paste(unique(dup_cols), collapse = ", ")))
+    cat("[WARNING] Removing duplicate columns (keeping first occurrence)\n")
+    processed_data <- processed_data[, !duplicated(names(processed_data)), drop = FALSE]
   }
   
   # Apply treatment designations to remap treatment values for PK data
   if (!is.null(values$treatment_designations)) {
     treatment_designations <- values$treatment_designations
-    treatment_col_name <- "treatment"  # Column is now renamed to "treatment"
+    treatment_col_name <- "Treatment"  # Column is now renamed to "Treatment" (capitalized)
     
     if (treatment_col_name %in% names(processed_data)) {
       # Remap treatment values based on user designations
@@ -2284,7 +2504,6 @@ observeEvent(input$confirm_pk_mapping, {
     if (is_pk_param && !is.numeric(processed_data[[col_name]])) {
       numeric_values <- suppressWarnings(as.numeric(processed_data[[col_name]]))
       if (!all(is.na(numeric_values))) {
-        cat(sprintf("[DEBUG] PK mapping: Force converting %s to numeric\n", col_name))
         processed_data[[col_name]] <- numeric_values
       }
     }
@@ -2293,138 +2512,13 @@ observeEvent(input$confirm_pk_mapping, {
   values$uploaded_data <- processed_data
   values$validation_result <- validation_result
   values$columns_mapped <- TRUE
+  values$pk_parameter_info <- pk_parameter_info  # Store for later use
   
-  # Update data summary
-  values$data_summary <- create_data_summary_enhanced(processed_data)
+  # Update data summary AND data_type
+  values$data_summary <- create_data_summary_enhanced(processed_data, pk_parameter_info)
   values$data_summary$pk_mappings_confirmed <- TRUE
   values$data_summary$data_type <- "pk_parameters"
+  values$data_type <- "pk_parameters"  # CRITICAL: Update the main data_type variable
   
   showNotification("Column mapping confirmed!", type = "message", duration = 3)
-})
-
-# Help modal
-observeEvent(input$show_help, {
-  showModal(modalDialog(
-    title = "Data Upload Help",
-    size = "l",
-    
-    h4("Data Format Requirements"),
-    p("Your bioequivalence data should be in a specific format for proper analysis:"),
-    
-    h5("Required Columns:"),
-    tags$ul(
-      tags$li(tags$strong("Subject:"), " Unique identifier for each study participant (numeric)"),
-      tags$li(tags$strong("Treatment:"), " Treatment code - use 'R' for Reference and 'T' for Test"),
-      tags$li(tags$strong("Subject:"), " Unique identifier for each study participant (numeric)"),
-      tags$li(tags$strong("Treatment:"), " Treatment code - use 'R' for Reference and 'T' for Test"),
-      tags$li(tags$strong("Time:"), " Sampling time in hours from dosing (numeric)"),
-      tags$li(tags$strong("Concentration:"), " Drug concentration in ng/mL or appropriate units (numeric)")
-    ),
-    
-    h5("Data Quality Tips:"),
-    tags$ul(
-      tags$li("Include pre-dose concentrations (Time = 0)"),
-      tags$li("Ensure no missing subject IDs"),
-      tags$li("Check for negative concentrations (may indicate assay issues)")
-    ),
-    
-    h5("Common Issues:"),
-    tags$ul(
-      tags$li("Mixed treatment codes (e.g., 'Ref', 'Test' instead of 'R', 'T')"),
-      tags$li("Missing time points for some subjects"),
-      tags$li("Inconsistent time units (minutes vs hours)")
-    ),
-    
-    footer = modalButton("Close")
-  ))
-})
-
-# =============================================================================
-# WORKFLOW STEP TRACKING FOR NEW REORGANIZED UI
-# =============================================================================
-
-# Track current workflow step for enhanced user guidance
-current_workflow_step <- reactive({
-  if (is.null(values$uploaded_data)) {
-    return(1)  # Step 1: Upload data
-  } else if (!is.null(values$uploaded_data) && is.null(values$validation_result)) {
-    return(2)  # Step 2: Data preview available, validation pending
-  } else if (!is.null(values$validation_result)) {
-    data_type <- input$data_type %||% "concentration"
-    if (data_type == "concentration") {
-      return(3)  # Step 3: Unit specifications for concentration data
-    } else {
-      # For PK parameters, check if parameter identification is complete
-      pk_mappings_complete <- !is.null(input$pk_mapping_confirmed) && input$pk_mapping_confirmed
-      if (pk_mappings_complete) {
-        return(4)  # Step 4: Unit specifications for PK data
-      } else {
-        return(3)  # Step 3: PK parameter identification
-      }
-    }
-  }
-  return(1)
-})
-
-# Enhanced validation message with step-specific guidance
-output$workflow_guidance <- renderUI({
-  current_step <- current_workflow_step()
-  data_type <- input$data_type %||% "concentration"
-  
-  guidance_content <- switch(current_step,
-    "1" = list(
-      icon = "upload",
-      color = "#3498db", 
-      title = "Ready to Upload",
-      message = "Select your data type and upload your bioequivalence study file."
-    ),
-    "2" = list(
-      icon = "table",
-      color = "#27ae60",
-      title = "Data Successfully Loaded", 
-      message = "Review your data preview and summary below, then proceed to the next step."
-    ),
-    "3" = if (data_type == "concentration") {
-      list(
-        icon = "ruler",
-        color = "#9b59b6",
-        title = "Specify Units",
-        message = "Please specify the units for your concentration and time data."
-      )
-    } else {
-      list(
-        icon = "tags", 
-        color = "#e74c3c",
-        title = "Identify PK Parameters",
-        message = "Map your data columns to the appropriate PK parameter types."
-      )
-    },
-    "4" = list(
-      icon = "ruler",
-      color = "#9b59b6", 
-      title = "Specify PK Parameter Units",
-      message = "Please specify the units for your identified PK parameters."
-    ),
-    "5" = list(
-      icon = "clipboard-check",
-      color = "#17a2b8",
-      title = "Final Validation",
-      message = "Review the validation results and proceed to analysis setup."
-    )
-  )
-  
-  if (!is.null(guidance_content)) {
-    div(
-      style = paste0("background: linear-gradient(135deg, ", guidance_content$color, "15 0%, ", guidance_content$color, "05 100%); 
-                     border-left: 4px solid ", guidance_content$color, "; 
-                     padding: 15px; border-radius: 8px; margin: 15px 0;"),
-      div(style = "display: flex; align-items: center;",
-        icon(guidance_content$icon, style = paste0("color: ", guidance_content$color, "; font-size: 24px; margin-right: 15px;")),
-        div(
-          h5(guidance_content$title, style = paste0("color: ", guidance_content$color, "; margin: 0; font-weight: 600;")),
-          p(guidance_content$message, style = "color: #2d3748; margin: 5px 0 0 0; font-size: 14px;")
-        )
-      )
-    )
-  }
 })

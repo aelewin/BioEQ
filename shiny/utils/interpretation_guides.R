@@ -77,7 +77,7 @@ generate_anova_interpretation_guide <- function(anova_results = NULL) {
     h5("📈 ANOVA Statistical Interpretation"),
     
     div(class = "interpretation-section",
-      h6("Formulation Effect"),
+      h6("Treatment Effect"),
       p("• Tests for differences between Test and Reference formulations"),
       p("• P > 0.05 supports bioequivalence (no significant difference)"),
       p("• This is the key test for bioequivalence assessment"),
@@ -112,7 +112,7 @@ generate_anova_interpretation_guide <- function(anova_results = NULL) {
       icon("exclamation-triangle"),
       strong(" Important Considerations:"),
       tags$ul(
-        tags$li("The Formulation P-value is NOT the bioequivalence test"),
+        tags$li("The Treatment P-value is NOT the bioequivalence test"),
         tags$li("Bioequivalence is determined by the 90% confidence interval"),
         tags$li("ANOVA provides the variance estimates for CI calculation"),
         tags$li("Significant carryover effects may invalidate crossover analysis")
@@ -244,7 +244,7 @@ generate_be_conclusion_interpretation <- function(be_conclusions) {
         icon("times-circle"),
         h6("❌ NOT BIOEQUIVALENT"),
         p("Primary endpoints do not meet bioequivalence criteria."),
-        p(strong("Regulatory Implication: "), "Formulation modifications may be necessary.")
+        p(strong("Regulatory Implication: "), "Treatment modifications may be necessary.")
       )
     )
   }

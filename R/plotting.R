@@ -20,7 +20,7 @@ for (pkg in required_packages) {
 #' @return If silent=TRUE, returns list with valid (logical) and message (character)
 #' @export
 validate_conc_time_data <- function(data, silent = FALSE) {
-  required_cols <- c("Time", "Concentration", "Subject", "Formulation")
+  required_cols <- c("Time", "Concentration", "Subject", "Treatment")
   missing_cols <- setdiff(required_cols, names(data))
   
   if (length(missing_cols) > 0) {
@@ -42,7 +42,7 @@ validate_conc_time_data <- function(data, silent = FALSE) {
   }
   
   # Check for valid formulations
-  formulations <- unique(data$Formulation)
+  formulations <- unique(data$Treatment)
   warnings <- c()
   
   if (length(formulations) < 2) {
@@ -96,7 +96,7 @@ standardize_column_names <- function(data, required_cols = NULL) {
   if (is.null(required_cols)) {
     # Default mappings for bioequivalence data
     required_cols <- list(
-      "Formulation" = c("Formulation", "Treatment", "Trt", "Group"),
+      "Treatment" = c("Treatment", "Treatment", "Trt", "Group"),
       "Subject" = c("Subject", "ID", "SUBJID", "subject_id"),
       "Period" = c("Period", "PERIOD", "period"),
       "Sequence" = c("Sequence", "SEQ", "sequence")
@@ -170,7 +170,7 @@ configure_plotly_for_shiny <- function(plotly_obj, height = 400, show_mode_bar =
 
 #' Shiny-safe plot wrapper for concentration-time profiles
 #'
-#' @param data Data frame with Time, Concentration, Subject, and Formulation columns
+#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
 #' @param log_scale Logical, whether to use log scale for concentration
 #' @param individual Logical, whether to show individual profiles
 #' @param mean_profile Logical, whether to show mean profiles
@@ -232,7 +232,7 @@ shiny_plot_be_confidence_intervals <- function(be_results, interactive = TRUE, h
 
 #' Shiny-safe plot wrapper for PK parameter box plots
 #'
-#' @param data PK parameter data with Subject, Formulation, and PK parameters
+#' @param data PK parameter data with Subject, Treatment, and PK parameters
 #' @param parameters Vector of PK parameters to plot (default: c("AUC0t", "Cmax"))
 #' @param log_scale Logical, whether to use log scale (default TRUE)
 #' @param show_individual_points Logical, whether to overlay individual points (default TRUE)
@@ -253,9 +253,9 @@ shiny_plot_pk_boxplots <- function(data, parameters = c("AUC0t", "Cmax"),
       return(list(plot = NULL, error = paste("Parameters not found in data:", paste(missing_params, collapse = ", ")), warnings = NULL))
     }
     
-    # Check if we have a Formulation column after standardization
-    if (!"Formulation" %in% names(data)) {
-      return(list(plot = NULL, error = "No treatment/formulation column found in data. Expected one of: Formulation, Treatment, Trt, Group", warnings = NULL))
+    # Check if we have a Treatment column after standardization
+    if (!"Treatment" %in% names(data)) {
+      return(list(plot = NULL, error = "No treatment/formulation column found in data. Expected one of: Treatment, Treatment, Trt, Group", warnings = NULL))
     }
     
     # Create the plot
@@ -332,8 +332,8 @@ create_individual_concentration_plot <- function(data, selected_subjects = NULL,
     
     # Add individual profiles for each selected subject
     for (subj in unique(plot_data$Subject)) {
-      for (form in unique(plot_data$Formulation)) {
-        subj_data <- plot_data[plot_data$Subject == subj & plot_data$Formulation == form, ]
+      for (form in unique(plot_data$Treatment)) {
+        subj_data <- plot_data[plot_data$Subject == subj & plot_data$Treatment == form, ]
         if (nrow(subj_data) > 0) {
           color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
           
@@ -347,7 +347,7 @@ create_individual_concentration_plot <- function(data, selected_subjects = NULL,
             name = paste("Subject", subj, "-", form),
             hovertemplate = paste(
               "<b>Subject:</b>", subj, "<br>",
-              "<b>Formulation:</b>", form, "<br>",
+              "<b>Treatment:</b>", form, "<br>",
               "<b>Time:</b> %{x}<br>",
               "<b>Concentration:</b> %{y}<br>",
               "<extra></extra>"
@@ -514,7 +514,7 @@ export_plot <- function(plot_object, filename, format = "auto",
 
 #' Plot concentration-time profile
 #'
-#' @param data Data frame with Time, Concentration, Subject, and Formulation columns
+#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
 #' @param log_scale Logical, whether to use log scale for concentration
 #' @param individual Logical, whether to show individual profiles
 #' @param mean_profile Logical, whether to show mean profiles
@@ -531,7 +531,7 @@ plot_concentration_time <- function(data, log_scale = FALSE, individual = TRUE,
 
 #' Plot concentration-time profile (static ggplot2 version)
 #'
-#' @param data Data frame with Time, Concentration, Subject, and Formulation columns
+#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
 #' @param log_scale Logical, whether to use log scale for concentration
 #' @param individual Logical, whether to show individual profiles
 #' @param mean_profile Logical, whether to show mean profiles
@@ -540,16 +540,16 @@ plot_concentration_time_static <- function(data, log_scale = FALSE, individual =
   # Use silent validation for better Shiny integration
   validation <- validate_conc_time_data(data, silent = FALSE)  # Keep original behavior for backward compatibility
   
-  p <- ggplot(data, aes(x = Time, y = Concentration, color = Formulation))
+  p <- ggplot(data, aes(x = Time, y = Concentration, color = Treatment))
   
   if (individual) {
-    p <- p + geom_line(aes(group = interaction(Subject, Formulation)), alpha = 0.3)
-    p <- p + geom_point(aes(group = interaction(Subject, Formulation)), alpha = 0.3, size = 0.8)
+    p <- p + geom_line(aes(group = interaction(Subject, Treatment)), alpha = 0.3)
+    p <- p + geom_point(aes(group = interaction(Subject, Treatment)), alpha = 0.3, size = 0.8)
   }
   
   if (mean_profile) {
     mean_data <- data %>%
-      group_by(Time, Formulation) %>%
+      group_by(Time, Treatment) %>%
       summarise(
         Mean_Conc = mean(Concentration, na.rm = TRUE),
         SE = sd(Concentration, na.rm = TRUE) / sqrt(n()),
@@ -589,7 +589,7 @@ plot_concentration_time_static <- function(data, log_scale = FALSE, individual =
 
 #' Plot concentration-time profile (interactive plotly version)
 #'
-#' @param data Data frame with Time, Concentration, Subject, and Formulation columns
+#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
 #' @param log_scale Logical, whether to use log scale for concentration
 #' @param individual Logical, whether to show individual profiles
 #' @param mean_profile Logical, whether to show mean profiles
@@ -604,8 +604,8 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
   if (individual) {
     # Add individual profiles with hover information
     for (subj in unique(data$Subject)) {
-      for (form in unique(data$Formulation)) {
-        subj_data <- data[data$Subject == subj & data$Formulation == form, ]
+      for (form in unique(data$Treatment)) {
+        subj_data <- data[data$Subject == subj & data$Treatment == form, ]
         if (nrow(subj_data) > 0) {
           color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
           
@@ -621,7 +621,7 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
             showlegend = subj == unique(data$Subject)[1],  # Show legend only for first subject
             hovertemplate = paste(
               "<b>Subject:</b>", subj, "<br>",
-              "<b>Formulation:</b>", form, "<br>",
+              "<b>Treatment:</b>", form, "<br>",
               "<b>Time:</b> %{x}<br>",
               "<b>Concentration:</b> %{y}<br>",
               "<extra></extra>"
@@ -635,7 +635,7 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
   if (mean_profile) {
     # Calculate mean data
     mean_data <- data %>%
-      group_by(Time, Formulation) %>%
+      group_by(Time, Treatment) %>%
       summarise(
         Mean_Conc = mean(Concentration, na.rm = TRUE),
         SE = sd(Concentration, na.rm = TRUE) / sqrt(n()),
@@ -644,8 +644,8 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
       )
     
     # Add mean profiles
-    for (form in unique(mean_data$Formulation)) {
-      form_data <- mean_data[mean_data$Formulation == form, ]
+    for (form in unique(mean_data$Treatment)) {
+      form_data <- mean_data[mean_data$Treatment == form, ]
       color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
       
       # Add error bars
@@ -665,7 +665,7 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
         name = paste("Mean", form),
         legendgroup = paste("mean", form),
         hovertemplate = paste(
-          "<b>Formulation:</b>", form, "<br>",
+          "<b>Treatment:</b>", form, "<br>",
           "<b>Time:</b> %{x}<br>",
           "<b>Mean Concentration:</b> %{y:.3f}<br>",
           "<b>SE:</b> %{text}<br>",
@@ -733,14 +733,14 @@ plot_be_results <- function(be_results) {
   for (param in c("AUC0t", "AUC0inf", "Cmax", "Tmax")) {
     if (param %in% names(pk_data)) {
       plot_data <- pk_data %>%
-        select(Subject, Period, Formulation, all_of(param)) %>%
+        select(Subject, Period, Treatment, all_of(param)) %>%
         rename(Value = all_of(param))
       
-      p <- ggplot(plot_data, aes(x = Formulation, y = Value, fill = Formulation)) +
+      p <- ggplot(plot_data, aes(x = Treatment, y = Value, fill = Treatment)) +
         geom_boxplot(alpha = 0.7) +
         geom_point(position = position_jitter(width = 0.2), alpha = 0.6) +
         labs(title = paste("Individual", param, "Values"),
-             y = param, x = "Formulation") +
+             y = param, x = "Treatment") +
         theme_minimal() +
         theme(legend.position = "none") +
         scale_fill_brewer(type = "qual", palette = "Set2")
@@ -1030,7 +1030,7 @@ plot_be_diagnostics <- function(be_results) {
   for (param in c("AUC0t", "AUC0inf", "Cmax")) {
     if (param %in% names(pk_data)) {
       # Create a simple linear model for residuals
-      formula_str <- paste("log(", param, ") ~ Formulation + Subject + Period")
+      formula_str <- paste("log(", param, ") ~ Treatment + Subject + Period")
       model_data <- pk_data[!is.na(pk_data[[param]]) & pk_data[[param]] > 0, ]
       
       if (nrow(model_data) > 0) {
@@ -1082,7 +1082,7 @@ plot_be_summary <- function(be_results) {
 
 #' Plot individual subject test vs reference comparison
 #'
-#' @param data Data frame with Time, Concentration, Subject, and Formulation columns
+#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
 #' @param log_scale Logical, whether to use log scale for concentration
 #' @param facet_wrap Logical, whether to use facet_wrap for individual subjects
 #' @param ncol Number of columns for faceting (default 4)
@@ -1098,7 +1098,7 @@ plot_subject_comparison <- function(data, log_scale = FALSE, facet_wrap = TRUE, 
 
 #' Plot individual subject test vs reference comparison (static version)
 #'
-#' @param data Data frame with Time, Concentration, Subject, and Formulation columns
+#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
 #' @param log_scale Logical, whether to use log scale for concentration
 #' @param facet_wrap Logical, whether to use facet_wrap for individual subjects
 #' @param ncol Number of columns for faceting (default 4)
@@ -1107,13 +1107,13 @@ plot_subject_comparison_static <- function(data, log_scale = FALSE, facet_wrap =
   validate_conc_time_data(data)
   
   # Ensure we have both Test and Reference data
-  if (!all(c("Test", "Reference") %in% data$Formulation)) {
+  if (!all(c("Test", "Reference") %in% data$Treatment)) {
     stop("Data must contain both 'Test' and 'Reference' formulations")
   }
   
-  p <- ggplot(data, aes(x = Time, y = Concentration, color = Formulation)) +
-    geom_line(aes(group = interaction(Subject, Formulation)), linewidth = 0.8) +
-    geom_point(aes(group = interaction(Subject, Formulation)), size = 1.2) +
+  p <- ggplot(data, aes(x = Time, y = Concentration, color = Treatment)) +
+    geom_line(aes(group = interaction(Subject, Treatment)), linewidth = 0.8) +
+    geom_point(aes(group = interaction(Subject, Treatment)), size = 1.2) +
     scale_color_manual(values = c("Reference" = "#E31A1C", "Test" = "#1F78B4"),
                        labels = c("Reference", "Test")) +
     labs(x = "Time", 
@@ -1127,6 +1127,8 @@ plot_subject_comparison_static <- function(data, log_scale = FALSE, facet_wrap =
     )
   
   if (facet_wrap) {
+    subject_levels <- sort(as.numeric(unique(data$Subject)))
+    data$Subject <- factor(data$Subject, levels = subject_levels)
     p <- p + facet_wrap(~ paste("Subject", Subject), ncol = ncol, scales = "free_y")
   }
   
@@ -1141,7 +1143,7 @@ plot_subject_comparison_static <- function(data, log_scale = FALSE, facet_wrap =
 
 #' Plot individual subject test vs reference comparison (interactive version)
 #'
-#' @param data Data frame with Time, Concentration, Subject, and Formulation columns
+#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
 #' @param log_scale Logical, whether to use log scale for concentration
 #' @param facet_wrap Logical, whether to use facet_wrap for individual subjects
 #' @param ncol Number of columns for faceting (default 4)
@@ -1150,7 +1152,7 @@ plot_subject_comparison_interactive <- function(data, log_scale = FALSE, facet_w
   validate_conc_time_data(data)
   
   # Ensure we have both Test and Reference data
-  if (!all(c("Test", "Reference") %in% data$Formulation)) {
+  if (!all(c("Test", "Reference") %in% data$Treatment)) {
     stop("Data must contain both 'Test' and 'Reference' formulations")
   }
   
@@ -1159,9 +1161,9 @@ plot_subject_comparison_interactive <- function(data, log_scale = FALSE, facet_w
     # This avoids complex subplot issues while maintaining functionality
     p <- plot_ly()
     
-    for (subj in unique(data$Subject)) {
-      for (form in unique(data$Formulation)) {
-        subj_data <- data[data$Subject == subj & data$Formulation == form, ]
+    for (subj in sort(as.numeric(unique(data$Subject)))) {
+      for (form in unique(data$Treatment)) {
+        subj_data <- data[data$Subject == subj & data$Treatment == form, ]
         if (nrow(subj_data) > 0) {
           color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
           
@@ -1176,7 +1178,7 @@ plot_subject_comparison_interactive <- function(data, log_scale = FALSE, facet_w
             showlegend = (subj == unique(data$Subject)[1] && form %in% c("Reference", "Test")),
             hovertemplate = paste(
               "<b>Subject:</b>", subj, "<br>",
-              "<b>Formulation:</b>", form, "<br>",
+              "<b>Treatment:</b>", form, "<br>",
               "<b>Time:</b> %{x}<br>",
               "<b>Concentration:</b> %{y}<br>",
               "<extra></extra>"
@@ -1210,8 +1212,8 @@ plot_subject_comparison_interactive <- function(data, log_scale = FALSE, facet_w
     p <- plot_ly()
     
     for (subj in unique(data$Subject)) {
-      for (form in unique(data$Formulation)) {
-        subj_data <- data[data$Subject == subj & data$Formulation == form, ]
+      for (form in unique(data$Treatment)) {
+        subj_data <- data[data$Subject == subj & data$Treatment == form, ]
         if (nrow(subj_data) > 0) {
           color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
           
@@ -1226,7 +1228,7 @@ plot_subject_comparison_interactive <- function(data, log_scale = FALSE, facet_w
             showlegend = subj == unique(data$Subject)[1],
             hovertemplate = paste(
               "<b>Subject:</b>", subj, "<br>",
-              "<b>Formulation:</b>", form, "<br>",
+              "<b>Treatment:</b>", form, "<br>",
               "<b>Time:</b> %{x}<br>",
               "<b>Concentration:</b> %{y}<br>",
               "<extra></extra>"
@@ -1261,7 +1263,7 @@ plot_subject_comparison_interactive <- function(data, log_scale = FALSE, facet_w
 
 #' Plot bioavailability ratios for each subject
 #'
-#' @param data PK parameter data with Subject, Formulation, and PK parameters
+#' @param data PK parameter data with Subject, Treatment, and PK parameters
 #' @param parameter PK parameter to plot ("AUC0t", "AUC0inf", "Cmax")
 #' @export
 plot_subject_ratios <- function(data, parameter = "AUC0t") {
@@ -1271,8 +1273,8 @@ plot_subject_ratios <- function(data, parameter = "AUC0t") {
   
   # Calculate ratios (Test/Reference) for each subject
   wide_data <- data %>%
-    select(Subject, Formulation, all_of(parameter)) %>%
-    reshape2::dcast(Subject ~ Formulation, value.var = parameter) %>%
+    select(Subject, Treatment, all_of(parameter)) %>%
+    reshape2::dcast(Subject ~ Treatment, value.var = parameter) %>%
     mutate(Ratio = Test / Reference,
            Ratio_Percent = Ratio * 100)
   
@@ -1304,7 +1306,7 @@ plot_subject_ratios <- function(data, parameter = "AUC0t") {
 
 #' Plot test vs reference scatter plot with identity line
 #'
-#' @param data PK parameter data with Subject, Formulation, and PK parameters  
+#' @param data PK parameter data with Subject, Treatment, and PK parameters  
 #' @param parameter PK parameter to plot ("AUC0t", "AUC0inf", "Cmax")
 #' @param log_scale Logical, whether to use log scale
 #' @export
@@ -1315,8 +1317,8 @@ plot_test_vs_reference <- function(data, parameter = "AUC0t", log_scale = TRUE) 
   
   # Create wide format for scatter plot
   wide_data <- data %>%
-    select(Subject, Formulation, all_of(parameter)) %>%
-    reshape2::dcast(Subject ~ Formulation, value.var = parameter)
+    select(Subject, Treatment, all_of(parameter)) %>%
+    reshape2::dcast(Subject ~ Treatment, value.var = parameter)
   
   # Remove subjects with missing data
   wide_data <- wide_data[complete.cases(wide_data), ]
@@ -1367,7 +1369,7 @@ plot_test_vs_reference <- function(data, parameter = "AUC0t", log_scale = TRUE) 
 #' connected by lines, with a cumulative trend line showing the overall T/R ratio
 #' as each subject is analyzed sequentially, plus bioequivalence limit lines.
 #'
-#' @param data PK parameter data with Subject, Formulation, and PK parameters
+#' @param data PK parameter data with Subject, Treatment, and PK parameters
 #' @param parameter PK parameter to plot ("AUC0t", "AUC0inf", "Cmax")
 #' @param subject_order Optional vector specifying the order of subjects for analysis.
 #'                      If NULL, subjects are ordered by their Subject ID (1, 2, 3, ...)
@@ -1385,8 +1387,8 @@ plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t",
   
   # Calculate ratios (Test/Reference) for each subject
   wide_data <- data %>%
-    select(Subject, Formulation, all_of(parameter)) %>%
-    reshape2::dcast(Subject ~ Formulation, value.var = parameter) %>%
+    select(Subject, Treatment, all_of(parameter)) %>%
+    reshape2::dcast(Subject ~ Treatment, value.var = parameter) %>%
     mutate(Ratio = Test / Reference,
            Ratio_Percent = Ratio * 100)
   
@@ -1579,7 +1581,7 @@ plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t",
 
 #' Create interactive box plots for PK parameters by treatment
 #'
-#' @param data PK parameter data with Subject, Formulation, and PK parameters
+#' @param data PK parameter data with Subject, Treatment, and PK parameters
 #' @param parameters Vector of PK parameters to plot (default: c("AUC0t", "Cmax"))
 #' @param log_scale Logical, whether to use log scale (default TRUE)
 #' @param show_individual_points Logical, whether to overlay individual points (default TRUE)
@@ -1598,7 +1600,7 @@ plot_pk_boxplots <- function(data, parameters = c("AUC0t", "Cmax"),
 
 #' Create interactive box plots for PK parameters (interactive version)
 #'
-#' @param data PK parameter data with Subject, Formulation, and PK parameters
+#' @param data PK parameter data with Subject, Treatment, and PK parameters
 #' @param parameters Vector of PK parameters to plot
 #' @param log_scale Logical, whether to use log scale
 #' @param show_individual_points Logical, whether to overlay individual points
@@ -1610,8 +1612,8 @@ plot_pk_boxplots_interactive <- function(data, parameters = c("AUC0t", "Cmax"),
   data <- standardize_column_names(data)
   
   # Check if we have required columns
-  if (!"Formulation" %in% names(data)) {
-    stop("No treatment/formulation column found in data. Expected one of: Formulation, Treatment, Trt, Group")
+  if (!"Treatment" %in% names(data)) {
+    stop("No treatment/formulation column found in data. Expected one of: Treatment, Treatment, Trt, Group")
   }
   
   # Validate parameters exist in data
@@ -1622,7 +1624,7 @@ plot_pk_boxplots_interactive <- function(data, parameters = c("AUC0t", "Cmax"),
   
   # Reshape data for plotting
   plot_data <- data %>%
-    select(Subject, Formulation, all_of(parameters)) %>%
+    select(Subject, Treatment, all_of(parameters)) %>%
     tidyr::pivot_longer(cols = all_of(parameters), 
                        names_to = "Parameter", 
                        values_to = "Value") %>%
@@ -1639,19 +1641,19 @@ plot_pk_boxplots_interactive <- function(data, parameters = c("AUC0t", "Cmax"),
     param_data <- plot_data[plot_data$Parameter == param, ]
     
     # Create box plot
-    p <- plot_ly(param_data, x = ~Formulation, y = ~Value, 
-                color = ~Formulation, colors = c("#E31A1C", "#1F78B4"),
+    p <- plot_ly(param_data, x = ~Treatment, y = ~Value, 
+                color = ~Treatment, colors = c("#E31A1C", "#1F78B4"),
                 type = "box", 
                 name = param,
                 hovertemplate = paste(
                   "<b>%{fullData.name}</b><br>",
-                  "Formulation: %{x}<br>",
+                  "Treatment: %{x}<br>",
                   "Value: %{y:.3f}<br>",
                   "<extra></extra>"
                 )) %>%
       layout(
         title = list(text = param, font = list(size = 14)),
-        xaxis = list(title = "Formulation"),
+        xaxis = list(title = "Treatment"),
         yaxis = list(
           title = paste(param, if (log_scale) "(log scale)" else ""),
           type = if (log_scale) "log" else "linear"
@@ -1661,13 +1663,13 @@ plot_pk_boxplots_interactive <- function(data, parameters = c("AUC0t", "Cmax"),
     # Add individual points if requested
     if (show_individual_points) {
       p <- p %>% add_trace(
-        x = param_data$Formulation, 
+        x = param_data$Treatment, 
         y = param_data$Value,
         type = "scatter", 
         mode = "markers",
         marker = list(
           size = 6,
-          color = ifelse(param_data$Formulation == "Reference", "#E31A1C", "#1F78B4"),
+          color = ifelse(param_data$Treatment == "Reference", "#E31A1C", "#1F78B4"),
           opacity = 0.7,
           line = list(width = 1, color = "white")
         ),
@@ -1675,7 +1677,7 @@ plot_pk_boxplots_interactive <- function(data, parameters = c("AUC0t", "Cmax"),
         hovertemplate = paste(
           "<b>", param, "</b><br>",
           "Subject: %{text}<br>",
-          "Formulation: %{x}<br>",
+          "Treatment: %{x}<br>",
           "Value: %{y:.3f}<br>",
           "<extra></extra>"
         ),
@@ -1707,7 +1709,7 @@ plot_pk_boxplots_interactive <- function(data, parameters = c("AUC0t", "Cmax"),
 
 #' Create static box plots for PK parameters (static version)
 #'
-#' @param data PK parameter data with Subject, Formulation, and PK parameters
+#' @param data PK parameter data with Subject, Treatment, and PK parameters
 #' @param parameters Vector of PK parameters to plot
 #' @param log_scale Logical, whether to use log scale
 #' @param show_individual_points Logical, whether to overlay individual points
@@ -1719,8 +1721,8 @@ plot_pk_boxplots_static <- function(data, parameters = c("AUC0t", "Cmax"),
   data <- standardize_column_names(data)
   
   # Check if we have required columns
-  if (!"Formulation" %in% names(data)) {
-    stop("No treatment/formulation column found in data. Expected one of: Formulation, Treatment, Trt, Group")
+  if (!"Treatment" %in% names(data)) {
+    stop("No treatment/formulation column found in data. Expected one of: Treatment, Treatment, Trt, Group")
   }
   
   # Validate parameters exist in data
@@ -1731,7 +1733,7 @@ plot_pk_boxplots_static <- function(data, parameters = c("AUC0t", "Cmax"),
   
   # Reshape data for plotting
   plot_data <- data %>%
-    select(Subject, Formulation, all_of(parameters)) %>%
+    select(Subject, Treatment, all_of(parameters)) %>%
     tidyr::pivot_longer(cols = all_of(parameters), 
                        names_to = "Parameter", 
                        values_to = "Value") %>%
@@ -1741,13 +1743,13 @@ plot_pk_boxplots_static <- function(data, parameters = c("AUC0t", "Cmax"),
     stop("No valid data found for plotting")
   }
   
-  p <- ggplot(plot_data, aes(x = Formulation, y = Value, fill = Formulation)) +
+  p <- ggplot(plot_data, aes(x = Treatment, y = Value, fill = Treatment)) +
     geom_boxplot(alpha = 0.7, outlier.shape = NA) +
     scale_fill_manual(values = c("Reference" = "#E31A1C", "Test" = "#1F78B4")) +
     facet_wrap(~ Parameter, scales = "free_y", ncol = 2) +
     labs(
       title = "PK Parameter Distributions by Treatment",
-      x = "Formulation",
+      x = "Treatment",
       y = if (log_scale) "Value (log scale)" else "Value"
     ) +
     theme_minimal() +
@@ -1758,7 +1760,7 @@ plot_pk_boxplots_static <- function(data, parameters = c("AUC0t", "Cmax"),
     )
   
   if (show_individual_points) {
-    p <- p + geom_point(aes(color = Formulation), 
+    p <- p + geom_point(aes(color = Treatment), 
                        position = position_jitter(width = 0.2), 
                        size = 2, alpha = 0.6) +
       scale_color_manual(values = c("Reference" = "#E31A1C", "Test" = "#1F78B4"))
@@ -2291,14 +2293,6 @@ plot_anova_diagnostics_static <- function(be_results, parameters = NULL) {
 #' @export
 create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
   
-  # Debug: Print data structure
-  cat("Data columns:", paste(names(data), collapse = ", "), "\n")
-  cat("Data dimensions:", nrow(data), "x", ncol(data), "\n")
-  cat("Subject types and sample values:\n")
-  cat("  Type:", class(data$subject), "\n")
-  cat("  Sample values:", paste(head(unique(data$subject), 10), collapse = ", "), "\n")
-  cat("  Unique subjects count:", length(unique(data$subject)), "\n")
-  
   # Find the actual parameter name (handle ln prefix)
   param_name <- parameter
   if (!parameter %in% names(data)) {
@@ -2313,7 +2307,7 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
   }
   
   # Use correct column names based on actual data structure
-  # The cumulative data uses: subject, treatment (not Subject, Formulation)
+  # The cumulative data uses: subject, treatment (not Subject, Treatment)
   # First, get unique PK parameter values per subject-treatment (ignore concentration-time data)
   pk_data <- data %>%
     filter(!is.na(.data[[param_name]])) %>%
@@ -2348,10 +2342,6 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
       mutate(TR_Ratio = (Test / Reference) * 100)
     cat("Used original scale data\n")
   }
-  
-  # Debug: Print available subjects before filtering
-  cat("Available subjects in data:", paste(sort(unique(tr_data$subject)), collapse = ", "), "\n")
-  cat("Subject order requested:", paste(subject_order, collapse = ", "), "\n")
   
   # Apply subject ordering (preserve numerical ordering) - INCLUDE ALL SUBJECTS
   tr_data <- tr_data %>%
@@ -2423,5 +2413,196 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     )
   
   cat("Plot created successfully\n")
+  return(p)
+}
+
+
+#' Create Lambda Z Regression Diagnostic Plots
+#'
+#' Generates a page of small plots (one per concentration profile) showing the
+#' observed data points on a log scale, the terminal phase points used for
+#' lambda z estimation highlighted, and the regression line through them.
+#'
+#' @param conc_data Data frame with Subject, Treatment, Period, Time, Concentration columns
+#' @param nca_subject_data Data frame of per-subject NCA results containing
+#'   lambda_z_terminal_times, lambda_z_terminal_concs, lambda_z_slope,
+#'   lambda_z_intercept (comma-separated strings for times/concs)
+#' @param subjects Optional character vector of subjects to include (NULL = all)
+#' @param ncol Number of columns in the facet grid (default 4)
+#' @return A ggplot2 object
+#' @export
+create_lambda_z_regression_plots <- function(conc_data, nca_subject_data, 
+                                              subjects = NULL, ncol = 4) {
+  
+  # Standardize column names
+  names(conc_data) <- gsub("^subject$", "Subject", names(conc_data), ignore.case = TRUE)
+  names(conc_data) <- gsub("^treatment$", "Treatment", names(conc_data), ignore.case = TRUE)
+  names(conc_data) <- gsub("^period$", "Period", names(conc_data), ignore.case = TRUE)
+  names(conc_data) <- gsub("^time$", "Time", names(conc_data), ignore.case = TRUE)
+  names(conc_data) <- gsub("^concentration$", "Concentration", names(conc_data), ignore.case = TRUE)
+  
+  # Filter subjects if specified
+  if (!is.null(subjects)) {
+    conc_data <- conc_data[conc_data$Subject %in% subjects, ]
+    nca_subject_data <- nca_subject_data[nca_subject_data$Subject %in% subjects, ]
+  }
+  
+  if (nrow(nca_subject_data) == 0 || nrow(conc_data) == 0) {
+    return(ggplot() + 
+             annotate("text", x = 0.5, y = 0.5, label = "No data available", size = 5) +
+             theme_void())
+  }
+  
+  # Build per-profile data for plotting
+  plot_data_list <- list()
+  regression_line_list <- list()
+  terminal_point_list <- list()
+  r_squared_list <- list()
+  
+  for (i in seq_len(nrow(nca_subject_data))) {
+    row <- nca_subject_data[i, ]
+    subj <- as.character(row$Subject)
+    trt <- as.character(row$Treatment)
+    period <- if ("Period" %in% names(row) && !is.na(row$Period)) as.character(row$Period) else NA
+    
+    # Build profile label
+    profile_label <- paste0("Subj ", subj, " - ", trt)
+    if (!is.na(period)) {
+      profile_label <- paste0(profile_label, " (P", period, ")")
+    }
+    
+    # Get raw concentration data for this profile
+    mask <- conc_data$Subject == subj & conc_data$Treatment == trt
+    if (!is.na(period) && "Period" %in% names(conc_data)) {
+      mask <- mask & conc_data$Period == period
+    }
+    profile_conc <- conc_data[mask, ]
+    
+    if (nrow(profile_conc) == 0) next
+    
+    # All observed points (exclude zero concentrations for log scale)
+    obs <- profile_conc[profile_conc$Concentration > 0, c("Time", "Concentration")]
+    if (nrow(obs) == 0) next
+    
+    obs$Profile <- profile_label
+    obs$PointType <- "Observed"
+    plot_data_list[[length(plot_data_list) + 1]] <- obs
+    
+    # Terminal phase points and regression line
+    has_fit <- !is.na(row$lambda_z_slope) && 
+               !is.na(row$lambda_z_intercept) &&
+               !is.na(row$lambda_z_terminal_times) &&
+               nchar(as.character(row$lambda_z_terminal_times)) > 0
+    
+    if (has_fit) {
+      term_times <- as.numeric(strsplit(as.character(row$lambda_z_terminal_times), ",")[[1]])
+      term_concs <- as.numeric(strsplit(as.character(row$lambda_z_terminal_concs), ",")[[1]])
+      slope <- as.numeric(row$lambda_z_slope)
+      intercept <- as.numeric(row$lambda_z_intercept)
+      
+      # Terminal points
+      if (length(term_times) > 0 && all(is.finite(term_concs)) && all(term_concs > 0)) {
+        term_df <- data.frame(
+          Time = term_times,
+          Concentration = term_concs,
+          Profile = profile_label,
+          PointType = "Terminal Phase"
+        )
+        terminal_point_list[[length(terminal_point_list) + 1]] <- term_df
+      }
+      
+      # Collect R² for annotation
+      r_sq <- if ("lambda_z_r_squared" %in% names(row) && !is.na(row$lambda_z_r_squared)) {
+        as.numeric(row$lambda_z_r_squared)
+      } else NA
+      if (!is.na(r_sq)) {
+        r_squared_list[[length(r_squared_list) + 1]] <- data.frame(
+          Profile = profile_label,
+          r_squared = r_sq,
+          stringsAsFactors = FALSE
+        )
+      }
+      
+      # Regression line (extend slightly beyond terminal range for visibility)
+      if (is.finite(slope) && is.finite(intercept)) {
+        line_times <- seq(min(term_times), max(term_times), length.out = 50)
+        line_concs <- exp(intercept + slope * line_times)
+        
+        reg_df <- data.frame(
+          Time = line_times,
+          Concentration = line_concs,
+          Profile = profile_label
+        )
+        regression_line_list[[length(regression_line_list) + 1]] <- reg_df
+      }
+    }
+  }
+  
+  if (length(plot_data_list) == 0) {
+    return(ggplot() + 
+             annotate("text", x = 0.5, y = 0.5, label = "No profiles with valid data", size = 5) +
+             theme_void())
+  }
+  
+  # Combine data
+  all_obs <- do.call(rbind, plot_data_list)
+  all_terminal <- if (length(terminal_point_list) > 0) do.call(rbind, terminal_point_list) else NULL
+  all_regression <- if (length(regression_line_list) > 0) do.call(rbind, regression_line_list) else NULL
+  
+  # Build plot
+  p <- ggplot(all_obs, aes(x = Time, y = Concentration)) +
+    # Observed points (open circles)
+    geom_point(color = "grey50", shape = 1, size = 1.5) +
+    geom_line(color = "grey70", linewidth = 0.3, alpha = 0.5)
+  
+  # Add regression line (behind terminal points)
+  if (!is.null(all_regression)) {
+    p <- p + geom_line(data = all_regression, aes(x = Time, y = Concentration),
+                       color = "#2166AC", linewidth = 0.8, linetype = "solid")
+  }
+  
+  # Add terminal phase points (filled, on top)
+  if (!is.null(all_terminal)) {
+    p <- p + geom_point(data = all_terminal, aes(x = Time, y = Concentration),
+                        color = "#D6604D", fill = "#D6604D", shape = 16, size = 2.5)
+  }
+  
+  # Build R² annotation data frame positioned at top-right of each panel
+  all_r_squared <- if (length(r_squared_list) > 0) do.call(rbind, r_squared_list) else NULL
+  if (!is.null(all_r_squared)) {
+    # Compute per-panel max x and max y for positioning
+    panel_ranges <- do.call(rbind, lapply(split(all_obs, all_obs$Profile), function(d) {
+      data.frame(Profile = d$Profile[1],
+                 x_max = max(d$Time, na.rm = TRUE),
+                 y_max = max(d$Concentration, na.rm = TRUE),
+                 stringsAsFactors = FALSE)
+    }))
+    all_r_squared <- merge(all_r_squared, panel_ranges, by = "Profile")
+    all_r_squared$label <- sprintf("R\u00b2 = %.4f", all_r_squared$r_squared)
+    
+    p <- p + geom_label(data = all_r_squared,
+                        aes(x = x_max, y = y_max, label = label),
+                        hjust = 1, vjust = 1,
+                        size = 2.5, fontface = "bold",
+                        fill = "white", alpha = 0.85,
+                        label.padding = unit(0.2, "lines"),
+                        label.size = 0.3, color = "#2166AC",
+                        inherit.aes = FALSE)
+  }
+  
+  p <- p +
+    scale_y_log10() +
+    facet_wrap(~ factor(Profile, levels = unique(Profile)), scales = "free", ncol = ncol) +
+    labs(x = "Time", y = "Concentration (log scale)") +
+    theme_bw(base_size = 10) +
+    theme(
+      strip.text = element_text(size = 8, face = "bold"),
+      strip.background = element_rect(fill = "#f0f0f0"),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 7),
+      axis.title = element_text(size = 9),
+      plot.margin = margin(5, 5, 5, 5)
+    )
+  
   return(p)
 }

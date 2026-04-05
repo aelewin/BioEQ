@@ -104,14 +104,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         cat("Generating concentration-time plots...\n")
         conc_data <- uploaded_data()
         
-        # Debug: Check data structure
-        if (!is.null(conc_data)) {
-          cat("Concentration data columns:", paste(names(conc_data), collapse = ", "), "\n")
-          cat("Concentration data rows:", nrow(conc_data), "\n")
-        } else {
-          cat("Concentration data is NULL\n")
-        }
-        
         # Get user-specified units from validation result
         concentration_label <- "Concentration (ng/mL)"
         time_label <- "Time (h)"
@@ -137,7 +129,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             "Time" = c("time", "Time", "TIME"),
             "Concentration" = c("concentration", "Concentration", "CONCENTRATION", "conc", "Conc"),
             "Subject" = c("subject", "Subject", "SUBJECT", "subj", "Subj", "ID", "id"),
-            "Formulation" = c("treatment", "Treatment", "TREATMENT", "formulation", "Formulation", "FORMULATION", "trt", "Trt")
+            "Treatment" = c("treatment", "Treatment", "TREATMENT", "formulation", "Treatment", "FORMULATION", "trt", "Trt")
           )
           
           # Standardize column names
@@ -153,14 +145,14 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           }
           
           # Map treatment values: T -> Test, R -> Reference for proper coloring
-          if ("Formulation" %in% names(standardized_data)) {
-            cat("Original formulation values:", paste(unique(standardized_data$Formulation), collapse = ", "), "\n")
-            standardized_data$Formulation <- ifelse(
-              standardized_data$Formulation == "T", "Test",
-              ifelse(standardized_data$Formulation == "R", "Reference", 
-                     standardized_data$Formulation)
+          if ("Treatment" %in% names(standardized_data)) {
+            cat("Original formulation values:", paste(unique(standardized_data$Treatment), collapse = ", "), "\n")
+            standardized_data$Treatment <- ifelse(
+              standardized_data$Treatment == "T", "Test",
+              ifelse(standardized_data$Treatment == "R", "Reference", 
+                     standardized_data$Treatment)
             )
-            cat("Mapped formulation values:", paste(unique(standardized_data$Formulation), collapse = ", "), "\n")
+            cat("Mapped formulation values:", paste(unique(standardized_data$Treatment), collapse = ", "), "\n")
           }
           
           cat("Standardized columns:", paste(names(standardized_data), collapse = ", "), "\n")
@@ -227,12 +219,12 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           pk_data <- pk_data %>%
             dplyr::select(subject, treatment, period, sequence, Cmax, AUC0t, AUC0inf) %>%
             dplyr::distinct() %>%
-            dplyr::rename(Formulation = treatment)
+            dplyr::rename(Treatment = treatment)
         } else {
           pk_data <- nca_results()
           # Add formulation column if missing
-          if (!"Formulation" %in% names(pk_data) && "treatment" %in% names(pk_data)) {
-            pk_data <- pk_data %>% dplyr::rename(Formulation = treatment)
+          if (!"Treatment" %in% names(pk_data) && "treatment" %in% names(pk_data)) {
+            pk_data <- pk_data %>% dplyr::rename(Treatment = treatment)
           }
         }
         
@@ -310,12 +302,13 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         cat("Setting up cumulative bioequivalence analysis...\n")
         be_data <- be_results()
         config <- analysis_config()
+        nca_data <- nca_results()
         
         # Get the selected ANOVA method and PK parameters
-        anova_method <- if (!is.null(config) && !is.null(config$anova_method)) {
-          config$anova_method
+        anova_method <- if (!is.null(config) && !is.null(config$anova_model)) {
+          config$anova_model
         } else {
-          "fixed_effects"
+          "fixed"
         }
         
         selected_params <- if (!is.null(config) && !is.null(config$selected_pk_params)) {
@@ -335,12 +328,26 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         cat("Selected parameters:", paste(selected_params, collapse = ", "), "\n")
         cat("Study design:", study_design, "\n")
         
-        # Check what data is available in BE results
-        if (!is.null(be_data)) {
+        # Try different data sources for cumulative analysis
+        pk_data <- NULL
+        
+        # For ABEL analysis, use NCA results directly (they contain Subject, Treatment, Period, PK params)
+        if (!is.null(nca_data)) {
+          if ("subject_data" %in% names(nca_data)) {
+            pk_data <- nca_data$subject_data
+            cat("Using subject_data from NCA results\n")
+          } else if ("nca_results" %in% names(nca_data)) {
+            pk_data <- nca_data$nca_results
+            cat("Using nca_results from NCA results\n")
+          } else if (is.data.frame(nca_data)) {
+            pk_data <- nca_data
+            cat("Using NCA results data frame directly\n")
+          }
+        }
+        
+        # Fallback: try BE results (for older analysis types)
+        if (is.null(pk_data) && !is.null(be_data)) {
           cat("BE results structure:", paste(names(be_data), collapse = ", "), "\n")
-          
-          # Try different data sources in order of preference
-          pk_data <- NULL
           
           if ("merged_data" %in% names(be_data)) {
             pk_data <- be_data$merged_data
@@ -351,45 +358,28 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           } else if ("data" %in% names(be_data)) {
             pk_data <- be_data$data
             cat("Using data from BE results\n")
-          } else {
-            # Try using NCA results directly
-            nca_data <- nca_results()
-            if (!is.null(nca_data) && "nca_results" %in% names(nca_data)) {
-              pk_data <- nca_data$nca_results
-              cat("Using NCA results data for cumulative analysis\n")
-            }
           }
+        }
+        
+        if (!is.null(pk_data) && nrow(pk_data) > 0) {
+          cat("Found PK data with", nrow(pk_data), "rows and", ncol(pk_data), "columns\n")
+          cat("Available columns:", paste(names(pk_data), collapse = ", "), "\n")
           
-          if (!is.null(pk_data) && nrow(pk_data) > 0) {
-            cat("Found PK data with", nrow(pk_data), "rows and", ncol(pk_data), "columns\n")
-            cat("Available columns:", paste(names(pk_data), collapse = ", "), "\n")
-            
-            # Debug: Check subjects in pk_data
-            if ("subject" %in% names(pk_data)) {
-              pk_subjects <- sort(unique(pk_data$subject))
-              cat("Subjects in PK data:", paste(pk_subjects, collapse = ", "), "\n")
-              cat("Subject 113 in PK data:", "113" %in% as.character(pk_data$subject), "\n")
-            }
-            
-            # Setup cumulative analysis data using the new approach
-            cumulative_setup <- generate_cumulative_be_plots(
-              data = pk_data,
-              parameters = selected_params,
-              anova_method = anova_method,
-              be_limits = c(0.8, 1.25),
-              interactive = TRUE,
-              study_design = study_design
-            )
-            
-            plot_objects$cumulative_be <- cumulative_setup
-            cat("✓ Cumulative bioequivalence analysis setup complete\n")
-          } else {
-            cat("No suitable PK data found for cumulative analysis\n")
-            plot_objects$cumulative_be <- list(error = "No PK data available for cumulative analysis")
-          }
+          # Setup cumulative analysis data using the new approach
+          cumulative_setup <- generate_cumulative_be_plots(
+            data = pk_data,
+            parameters = selected_params,
+            anova_method = anova_method,
+            be_limits = c(0.8, 1.25),
+            interactive = TRUE,
+            study_design = study_design
+          )
+          
+          plot_objects$cumulative_be <- cumulative_setup
+          cat("✓ Cumulative bioequivalence analysis setup complete\n")
         } else {
-          cat("No BE results available for cumulative analysis\n")
-          plot_objects$cumulative_be <- list(error = "No BE results available")
+          cat("No suitable PK data found for cumulative analysis\n")
+          plot_objects$cumulative_be <- list(error = "No PK data available for cumulative analysis")
         }
         
       }, error = function(e) {
@@ -406,6 +396,17 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     
     # Concentration-Time Plot Tab
     output$concentration_plot_display <- renderUI({
+      # Check if PK parameters data was uploaded (not concentration-time data)
+      if (!is.null(validation_result()) && !is.null(validation_result()$data_type)) {
+        if (validation_result()$data_type == "pk_parameters") {
+          return(div(class = "alert alert-warning text-center",
+            icon("exclamation-triangle"), 
+            strong(" Concentration-Time Data Not Available"), br(),
+            "Only PK parameters were uploaded. Concentration-time profiles require raw concentration-time data."
+          ))
+        }
+      }
+      
       req(plot_values$plot_objects)
       plot_data <- plot_values$plot_objects[["concentration"]]
       
@@ -534,6 +535,17 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     
     # Individual Subjects Plot Tab
     output$individual_subjects_display <- renderUI({
+      # Check if PK parameters data was uploaded (not concentration-time data)
+      if (!is.null(validation_result()) && !is.null(validation_result()$data_type)) {
+        if (validation_result()$data_type == "pk_parameters") {
+          return(div(class = "alert alert-warning text-center",
+            icon("exclamation-triangle"), 
+            strong(" Concentration-Time Data Not Available"), br(),
+            "Only PK parameters were uploaded. Individual subject profiles require raw concentration-time data."
+          ))
+        }
+      }
+      
       req(plot_values$plot_objects)
       plot_data <- plot_values$plot_objects[["individual_subjects"]]
       
@@ -647,8 +659,8 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       
       # Get subject choices from the data
       conc_data <- plot_data$data
-      test_subjects <- sort(unique(conc_data$Subject[conc_data$Formulation == "Test"]))
-      ref_subjects <- sort(unique(conc_data$Subject[conc_data$Formulation == "Reference"]))
+      test_subjects <- sort(as.numeric(unique(conc_data$Subject[conc_data$Treatment == "Test"])))
+      ref_subjects <- sort(as.numeric(unique(conc_data$Subject[conc_data$Treatment == "Reference"])))
       
       div(class = "plot-card",
         div(class = "plot-card-header",
@@ -664,7 +676,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           div(class = "subject-selection-controls", style = "margin-bottom: 20px;",
             fluidRow(
               column(6,
-                h6("Test Formulation Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+                h6("Test Treatment Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
                 selectInput(ns("test_subjects_select"), 
                            label = NULL,
                            choices = test_subjects,
@@ -674,7 +686,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
                 checkboxInput(ns("select_all_test"), "Select All Test", value = FALSE)
               ),
               column(6,
-                h6("Reference Formulation Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+                h6("Reference Treatment Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
                 selectInput(ns("ref_subjects_select"), 
                            label = NULL,
                            choices = ref_subjects,
@@ -950,7 +962,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       }
       
       conc_data <- individual_data$data
-      test_subjects <- unique(conc_data$Subject[conc_data$Formulation == "Test"])
+      test_subjects <- unique(conc_data$Subject[conc_data$Treatment == "Test"])
       
       if (input$select_all_test) {
         updateSelectInput(session, "test_subjects_select", selected = test_subjects)
@@ -970,7 +982,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       }
       
       conc_data <- individual_data$data
-      ref_subjects <- unique(conc_data$Subject[conc_data$Formulation == "Reference"])
+      ref_subjects <- unique(conc_data$Subject[conc_data$Treatment == "Reference"])
       
       if (input$select_all_ref) {
         updateSelectInput(session, "ref_subjects_select", selected = ref_subjects)
@@ -1180,7 +1192,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     # Individual subjects plot update handler
     observeEvent(input$update_individual_plot, {
       req(plot_values$plot_objects$individual_subjects)
-      req(input$test_subjects_select, input$ref_subjects_select)
       
       individual_data <- plot_values$plot_objects$individual_subjects
       
@@ -1207,13 +1218,13 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         
         # Add test formulation data for selected test subjects
         if (length(selected_test) > 0) {
-          test_data <- conc_data[conc_data$Subject %in% selected_test & conc_data$Formulation == "Test", ]
+          test_data <- conc_data[conc_data$Subject %in% selected_test & conc_data$Treatment == "Test", ]
           plot_data <- rbind(plot_data, test_data)
         }
         
         # Add reference formulation data for selected reference subjects  
         if (length(selected_ref) > 0) {
-          ref_data <- conc_data[conc_data$Subject %in% selected_ref & conc_data$Formulation == "Reference", ]
+          ref_data <- conc_data[conc_data$Subject %in% selected_ref & conc_data$Treatment == "Reference", ]
           plot_data <- rbind(plot_data, ref_data)
         }
         
@@ -1249,5 +1260,203 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         cat("Cleaned up temp directory:", temp_dir_path, "\n")
       }
     })
+    
+    # =======================================================================
+    # LAMBDA Z REGRESSION PLOTS TAB
+    # =======================================================================
+    
+    # Method display name lookup
+    lambda_z_method_names <- c(
+      "manual" = "Manual (Fixed Points)",
+      "ars" = "ARS (Adjusted R-Squared)",
+      "aic" = "AIC (Akaike Information Criterion)",
+      "ttt" = "TTT (Two-Times-Tmax)"
+    )
+    
+    # Reactive: available subjects for lambda z tab
+    lambda_z_subjects <- reactive({
+      req(nca_results())
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data)
+      subjects <- unique(as.character(subject_data$Subject))
+      subjects[order(as.numeric(subjects))]
+    })
+    
+    # Reactive: current page of subjects
+    lambda_z_page <- reactiveVal(1)
+    lambda_z_per_page <- 8  # profiles per page (2 rows of 4)
+    
+    output$lambda_z_regression_display <- renderUI({
+      # Check if PK parameters data was uploaded (not concentration-time data)
+      if (!is.null(validation_result()) && !is.null(validation_result()$data_type)) {
+        if (validation_result()$data_type == "pk_parameters") {
+          return(div(class = "alert alert-warning text-center",
+            icon("exclamation-triangle"), 
+            strong(" Concentration-Time Data Not Available"), br(),
+            "Lambda Z regression plots require raw concentration-time data."
+          ))
+        }
+      }
+      
+      req(nca_results())
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      
+      if (is.null(subject_data) || !"lambda_z_terminal_times" %in% names(subject_data)) {
+        return(div(class = "alert alert-info text-center",
+          icon("info-circle"), " Lambda Z regression plots will appear here once analysis is complete."
+        ))
+      }
+      
+      # Get method info
+      lz_method_code <- if (!is.null(nca_res$lambda_z_method)) nca_res$lambda_z_method else {
+        if ("lambda_z_method" %in% names(subject_data)) subject_data$lambda_z_method[1] else "unknown"
+      }
+      lz_method_display <- lambda_z_method_names[lz_method_code]
+      if (is.na(lz_method_display)) lz_method_display <- lz_method_code
+      
+      all_subjects <- sort(unique(as.character(subject_data$Subject)))
+      
+      div(class = "plot-card",
+        div(class = "plot-card-header",
+          icon("chart-area"), "Lambda Z Terminal Phase Regression"
+        ),
+        div(class = "plot-card-body",
+          # Method label
+          div(style = "margin-bottom: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid #2166AC;",
+            tags$span(style = "font-weight: 600; color: #495057;", 
+              paste0("Lambda Z Method: ", lz_method_display)),
+            tags$span(style = "color: #6c757d; margin-left: 15px; font-size: 0.9em;",
+              icon("circle", style = "color: #D6604D; font-size: 8px;"), " Terminal phase points used",
+              "    ",
+              icon("minus", style = "color: #2166AC;"), " Regression fit"
+            )
+          ),
+          
+          # Subject filter and pagination controls
+          fluidRow(
+            column(6,
+              selectInput(ns("lambda_z_subject_filter"),
+                label = "Filter Subjects",
+                choices = c("All Subjects" = "all", setNames(all_subjects, paste("Subject", all_subjects))),
+                selected = "all",
+                width = "100%"
+              )
+            ),
+            column(6,
+              div(style = "text-align: right; margin-top: 25px;",
+                actionButton(ns("lambda_z_prev_page"), icon("arrow-left"), class = "btn btn-sm btn-default"),
+                tags$span(id = ns("lambda_z_page_label"), style = "margin: 0 10px; font-weight: 600;",
+                  textOutput(ns("lambda_z_page_text"), inline = TRUE)
+                ),
+                actionButton(ns("lambda_z_next_page"), icon("arrow-right"), class = "btn btn-sm btn-default")
+              )
+            )
+          ),
+          
+          # Plot output
+          div(style = "margin-top: 10px;",
+            plotOutput(ns("lambda_z_regression_plot"), height = "700px")
+          )
+        )
+      )
+    })
+    
+    # Page text
+    output$lambda_z_page_text <- renderText({
+      req(nca_results())
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data)
+      
+      # Determine subjects to show based on filter
+      filter_val <- input$lambda_z_subject_filter
+      if (is.null(filter_val) || filter_val == "all") {
+        all_subjects <- unique(as.character(subject_data$Subject))
+        all_subjects <- all_subjects[order(as.numeric(all_subjects))]
+      } else {
+        all_subjects <- filter_val
+      }
+      
+      # Count profiles (subject x treatment x period)
+      n_profiles <- nrow(subject_data[subject_data$Subject %in% all_subjects, ])
+      total_pages <- max(1, ceiling(n_profiles / lambda_z_per_page))
+      current_page <- min(lambda_z_page(), total_pages)
+      
+      paste0("Page ", current_page, " of ", total_pages)
+    })
+    
+    # Pagination handlers
+    observeEvent(input$lambda_z_prev_page, {
+      current <- lambda_z_page()
+      if (current > 1) lambda_z_page(current - 1)
+    })
+    
+    observeEvent(input$lambda_z_next_page, {
+      req(nca_results())
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data)
+      
+      filter_val <- input$lambda_z_subject_filter
+      if (is.null(filter_val) || filter_val == "all") {
+        n_profiles <- nrow(subject_data)
+      } else {
+        n_profiles <- nrow(subject_data[subject_data$Subject %in% filter_val, ])
+      }
+      
+      total_pages <- max(1, ceiling(n_profiles / lambda_z_per_page))
+      current <- lambda_z_page()
+      if (current < total_pages) lambda_z_page(current + 1)
+    })
+    
+    # Reset page when filter changes
+    observeEvent(input$lambda_z_subject_filter, {
+      lambda_z_page(1)
+    })
+    
+    # Render lambda z regression plots
+    output$lambda_z_regression_plot <- renderPlot({
+      req(nca_results(), uploaded_data())
+      
+      nca_res <- nca_results()
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data, "lambda_z_terminal_times" %in% names(subject_data))
+      
+      conc_data <- uploaded_data()
+      
+      # Filter by subject if specified
+      filter_val <- input$lambda_z_subject_filter
+      if (!is.null(filter_val) && filter_val != "all") {
+        page_subject_data <- subject_data[subject_data$Subject %in% filter_val, ]
+      } else {
+        page_subject_data <- subject_data
+      }
+      
+      # Sort by numeric Subject
+      page_subject_data <- page_subject_data[order(as.numeric(as.character(page_subject_data$Subject))), ]
+      
+      # Apply pagination
+      n_profiles <- nrow(page_subject_data)
+      total_pages <- max(1, ceiling(n_profiles / lambda_z_per_page))
+      current_page <- min(lambda_z_page(), total_pages)
+      
+      start_row <- (current_page - 1) * lambda_z_per_page + 1
+      end_row <- min(current_page * lambda_z_per_page, n_profiles)
+      
+      page_subject_data <- page_subject_data[start_row:end_row, ]
+      
+      # Get the subjects on this page
+      page_subjects <- unique(as.character(page_subject_data$Subject))
+      
+      # Create the plots
+      create_lambda_z_regression_plots(
+        conc_data = conc_data,
+        nca_subject_data = page_subject_data,
+        subjects = page_subjects,
+        ncol = 4
+      )
+    }, res = 96)
   })
 }

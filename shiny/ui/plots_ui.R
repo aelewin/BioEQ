@@ -280,6 +280,19 @@ plots_ui <- function(id) {
                     )
                   )
                 )
+              ),
+              
+              # Lambda Z Regression Tab
+              tabPanel(tags$span(icon("chart-area"), " Lambda Z Regression"),
+                value = "lambda_z_regression",
+                br(),
+                fluidRow(
+                  column(12,
+                    div(class = "plot-display-area",
+                      uiOutput(ns("lambda_z_regression_display"))
+                    )
+                  )
+                )
               )
               
             ) # close tabsetPanel

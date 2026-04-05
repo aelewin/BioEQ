@@ -306,8 +306,8 @@ calculate_confidence_intervals <- function(test_values, ref_values, alpha = 0.05
     stop("CI calculation not implemented for design: ", design)
   }
   
-  # Calculate confidence interval
-  t_critical <- qt(0.95, df)
+  # Calculate confidence interval using alpha (for two one-sided tests)
+  t_critical <- qt(1 - alpha, df)
   
   ci_lower_log <- diff_mean - t_critical * se
   ci_upper_log <- diff_mean + t_critical * se
