@@ -778,24 +778,36 @@ observeEvent(input$run_analysis, {
       # Use the uploaded data directly as "NCA results"
       nca_results <- analysis_data
       
-      # Add log-transformed versions of common parameters if they don't exist
-      pk_params_to_log <- c("AUC0t", "AUC0inf", "Cmax")
-      for (param in pk_params_to_log) {
-        if (param %in% names(nca_results) && !paste0("ln", param) %in% names(nca_results)) {
-          # Check if the parameter is numeric
-          param_values <- nca_results[[param]]
-          if (is.numeric(param_values) && all(param_values > 0, na.rm = TRUE)) {
-            nca_results[[paste0("ln", param)]] <- log(param_values)
-            cat(sprintf("📊 Added log-transformed parameter: ln%s\n", param))
-          } else {
-            # Check what type of data we have for debugging
-            if (!is.numeric(param_values)) {
-              cat(sprintf("⚠️ Skipping log transformation for %s: non-numeric data (type: %s)\n", param, class(param_values)[1]))
-              cat(sprintf("  First few values: %s\n", paste(head(param_values, 3), collapse = ", ")))
-            } else if (any(param_values <= 0, na.rm = TRUE)) {
-              cat(sprintf("⚠️ Skipping log transformation for %s: contains non-positive values\n", param))
-              negative_count <- sum(param_values <= 0, na.rm = TRUE)
-              cat(sprintf("  Found %d non-positive values out of %d total\n", negative_count, length(param_values)))
+      # Add log-transformed versions of PK parameters if they don't exist.
+      # Uses fuzzy case-insensitive matching to handle column name variants from
+      # different software exports (e.g., AUCt, AUClast, AUCT all map to lnAUC0t).
+      pk_log_mappings <- list(
+        "lnAUC0t"   = c("AUC0t",   "AUCt",    "AUC0-t",  "AUC_t",   "AUClast",
+                        "AUC_last","auct",    "auc0t",   "auclast", "AUC0T",   "AUCT"),
+        "lnAUC0inf" = c("AUC0inf", "AUCinf",  "AUC0-inf","AUC_inf", "AUCinfinity",
+                        "aucinf",  "auc0inf", "AUC0INF", "AUCINF"),
+        "lnCmax"    = c("Cmax",    "CMAX",    "cmax",    "CMax",    "C_max",   "c_max")
+      )
+      col_names_lower <- tolower(names(nca_results))
+      for (ln_name in names(pk_log_mappings)) {
+        if (!ln_name %in% names(nca_results)) {
+          # Case-insensitive search for first matching candidate column
+          candidates <- pk_log_mappings[[ln_name]]
+          match_idx  <- match(tolower(candidates), col_names_lower)
+          match_idx  <- match_idx[!is.na(match_idx)]
+          if (length(match_idx) > 0) {
+            match_col    <- names(nca_results)[match_idx[1]]
+            param_values <- nca_results[[match_col]]
+            if (is.numeric(param_values) && all(param_values > 0, na.rm = TRUE)) {
+              nca_results[[ln_name]] <- log(param_values)
+              cat(sprintf("📊 Added log-transformed parameter: %s (from column '%s')\n", ln_name, match_col))
+            } else if (!is.numeric(param_values)) {
+              cat(sprintf("⚠️ Skipping log transformation for %s: non-numeric data in '%s' (type: %s)\n",
+                          ln_name, match_col, class(param_values)[1]))
+            } else {
+              n_nonpos <- sum(param_values <= 0, na.rm = TRUE)
+              cat(sprintf("⚠️ Skipping log transformation for %s: %d non-positive values in '%s'\n",
+                          ln_name, n_nonpos, match_col))
             }
           }
         }

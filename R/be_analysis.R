@@ -372,12 +372,27 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
           }
         }
         
-        if (!is.null(param_anova) && !is.null(param_anova$pe_estimate)) {
-          # Extract from existing ANOVA results
-          pe <- param_anova$pe_estimate
-          ci_lo_val <- param_anova$ci_lower
-          ci_hi_val <- param_anova$ci_upper
-          df_val <- param_anova$residual_df
+        if (!is.null(param_anova) && !is.null(param_anova$treatment_coef) &&
+            !is.na(param_anova$treatment_coef)) {
+          # Recompute CIs from model coefficients using the same Wald approach as
+          # extract_be_from_anova(), ensuring the BE decision is consistent regardless
+          # of which ANOVA model was used (lm confint vs nlme profile likelihood)
+          treatment_diff_abel <- param_anova$treatment_coef
+          treatment_se_abel   <- param_anova$treatment_se
+          df_val              <- param_anova$residual_df
+
+          if (!is.null(treatment_se_abel) && !is.na(treatment_se_abel) &&
+              !is.null(df_val) && !is.na(df_val) && df_val > 0) {
+            t_crit    <- qt(1 - alpha, df_val)  # one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
+            pe        <- 100 * exp(treatment_diff_abel)
+            ci_lo_val <- 100 * exp(treatment_diff_abel - t_crit * treatment_se_abel)
+            ci_hi_val <- 100 * exp(treatment_diff_abel + t_crit * treatment_se_abel)
+          } else {
+            # Fallback to stored values if coefficient SE is unavailable
+            pe        <- param_anova$pe_estimate
+            ci_lo_val <- param_anova$ci_lower
+            ci_hi_val <- param_anova$ci_upper
+          }
           
           # Fixed limits for non-scaling parameters
           fixed_lower <- 80.0
@@ -632,7 +647,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
           stringsAsFactors = FALSE
         ),
         treatment_coef = log(gmr),  # Log of GMR
-        treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha/2, anova_df),  # Back-calculate SE
+        treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha, anova_df),  # Back-calculate SE; one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
         residual_mse = sw_r^2,
         residual_df = anova_df,
         n_observations = n_total * design_info$n_periods,
@@ -1180,7 +1195,7 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
       next
     }
     
-    t_critical <- qt(1 - alpha/2, df)
+    t_critical <- qt(1 - alpha, df)  # one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
     ci_lower_log <- treatment_diff - t_critical * treatment_se
     ci_upper_log <- treatment_diff + t_critical * treatment_se
     
