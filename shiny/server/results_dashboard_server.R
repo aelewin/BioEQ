@@ -36,191 +36,160 @@ log_param_to_display_name <- function(log_param_name) {
 }
 
 #' Calculate PK Comparison Statistics
-#' 
+#'
 #' @param nca_data Data frame with NCA results containing subject_data
 #' @param param_name Name of the parameter to analyze
-#' @return List with individual and summary statistics
+#' @return List with individual_data, overall_summary, replicate_summaries,
+#'         is_replicate, unit, parameter
 calculate_pk_comparison <- function(nca_data, param_name) {
   if (is.null(nca_data) || is.null(nca_data$subject_data)) {
     return(NULL)
   }
-  
-  # Extract subject data - already mapped with standard column names
+
   subject_data <- nca_data$subject_data
-  
-  # Check if parameter exists
+
   if (!param_name %in% names(subject_data)) {
     return(NULL)
   }
-  
-  # Expected columns from mapped data: Subject, Treatment, Period, Sequence
+
   required_cols <- c("Subject", "Treatment", param_name)
   if (!all(required_cols %in% names(subject_data))) {
-    available <- names(subject_data)
     return(list(
-      error = paste0("Required columns not found. Available columns: ", 
-                    paste(available, collapse = ", "))
+      error = paste0("Required columns not found. Available: ",
+                     paste(names(subject_data), collapse = ", "))
     ))
   }
-  
-  # Detect if this is a replicate design by checking periods per subject
+
+  # ── Helper: descriptive stats for a numeric vector ──────────────────────────
+  calc_prod_stats <- function(values, label) {
+    v <- values[!is.na(values) & !is.infinite(values) & is.finite(values)]
+    if (length(v) == 0) {
+      return(data.frame(Product = label, N = 0L,
+                        Geom_Mean = NA_real_, Arith_Mean = NA_real_,
+                        CV_pct = NA_real_, Min = NA_real_,
+                        Median = NA_real_, Max = NA_real_,
+                        stringsAsFactors = FALSE))
+    }
+    gm   <- exp(mean(log(v)))
+    cv   <- if (length(v) > 1) 100 * sqrt(exp(var(log(v))) - 1) else NA_real_
+    data.frame(Product = label, N = length(v),
+               Geom_Mean = gm, Arith_Mean = mean(v),
+               CV_pct = cv, Min = min(v),
+               Median = median(v), Max = max(v),
+               stringsAsFactors = FALSE)
+  }
+
+  # ── Design detection ────────────────────────────────────────────────────────
   periods_per_subject <- subject_data %>%
     group_by(Subject) %>%
     summarise(n_periods = n_distinct(Period), .groups = "drop") %>%
     pull(n_periods) %>%
     max()
-  
+
   is_replicate <- periods_per_subject > 2
-  
-  # Extract parameter data
+
   param_data <- subject_data %>%
     select(Subject, Treatment, Period, all_of(param_name)) %>%
     rename(Value = !!param_name) %>%
     filter(!is.na(Value))
-  
+
   if (nrow(param_data) == 0) {
     return(list(error = "No data available for this parameter"))
   }
-  
+
+  test_data <- param_data %>% filter(Treatment == "T")
+  ref_data  <- param_data %>% filter(Treatment == "R")
+
+  # ── REPLICATE DESIGN ────────────────────────────────────────────────────────
   if (is_replicate) {
-    # REPLICATE DESIGN: Calculate T1/R1, T2/R2, and Tavg/Ravg
-    
-    # Separate Test and Reference data
-    test_data <- param_data %>% filter(Treatment == "T")
-    ref_data <- param_data %>% filter(Treatment == "R")
-    
-    # For each subject, get all Test and Reference values by period
+
     test_by_subject <- test_data %>%
       group_by(Subject) %>%
       arrange(Period) %>%
       summarise(
-        T1 = if(n() >= 1) Value[1] else NA_real_,
-        T2 = if(n() >= 2) Value[2] else NA_real_,
+        T1     = if (n() >= 1) Value[1] else NA_real_,
+        T2     = if (n() >= 2) Value[2] else NA_real_,
         T_mean = mean(Value, na.rm = TRUE),
-        T_n = n(),
+        T_n    = n(),
         .groups = "drop"
       )
-    
+
     ref_by_subject <- ref_data %>%
       group_by(Subject) %>%
       arrange(Period) %>%
       summarise(
-        R1 = if(n() >= 1) Value[1] else NA_real_,
-        R2 = if(n() >= 2) Value[2] else NA_real_,
+        R1     = if (n() >= 1) Value[1] else NA_real_,
+        R2     = if (n() >= 2) Value[2] else NA_real_,
         R_mean = mean(Value, na.rm = TRUE),
-        R_n = n(),
+        R_n    = n(),
         .groups = "drop"
       )
-    
-    # Merge Test and Reference data
+
     comparison_data <- full_join(test_by_subject, ref_by_subject, by = "Subject") %>%
       mutate(
-        # Individual period ratios
-        Ratio_T1_R1 = T1 / R1,
-        Ratio_T2_R2 = T2 / R2,
-        # Average ratio
-        Ratio_Tavg_Ravg = T_mean / R_mean,
-        # Flag missing data
-        Missing_Test = replace_na(T_n < periods_per_subject / 2, FALSE),
-        Missing_Ref = replace_na(R_n < periods_per_subject / 2, FALSE),
-        Subject = as.character(Subject)
+        Ratio       = T_mean / R_mean,
+        Missing_T   = replace_na(T_n < periods_per_subject / 2, FALSE),
+        Missing_R   = replace_na(R_n < periods_per_subject / 2, FALSE),
+        Subject     = as.character(Subject)
       ) %>%
       arrange(as.numeric(Subject))
-    
-    # Calculate summary statistics for each ratio type
-    calc_stats <- function(values, label) {
-      valid_values <- values[!is.na(values) & !is.infinite(values)]
-      if (length(valid_values) == 0) {
-        return(data.frame(
-          Ratio_Type = label,
-          N = 0,
-          Geometric_Mean = NA,
-          CV_percent = NA,
-          Min = NA,
-          Median = NA,
-          Max = NA
-        ))
-      }
-      
-      data.frame(
-        Ratio_Type = label,
-        N = length(valid_values),
-        Geometric_Mean = exp(mean(log(valid_values))),
-        CV_percent = 100 * sqrt(exp(var(log(valid_values))) - 1),
-        Min = min(valid_values),
-        Median = median(valid_values),
-        Max = max(valid_values)
-      )
-    }
-    
-    summary_stats <- bind_rows(
-      calc_stats(comparison_data$Ratio_T1_R1, "T1/R1"),
-      calc_stats(comparison_data$Ratio_T2_R2, "T2/R2"),
-      calc_stats(comparison_data$Ratio_Tavg_Ravg, "T_avg/R_avg")
+
+    # Overall summary: T (all), R (all), GMR
+    all_T   <- c(comparison_data$T1, comparison_data$T2)
+    all_R   <- c(comparison_data$R1, comparison_data$R2)
+    ratios  <- comparison_data$Ratio
+    overall_summary <- bind_rows(
+      calc_prod_stats(all_T,  "T (all)"),
+      calc_prod_stats(all_R,  "R (all)"),
+      calc_prod_stats(ratios, "GMR (T/R)")
     )
-    
+
+    # Per-replicate summaries (T1, T2, R1, R2)
+    replicate_summaries <- list(
+      T1 = calc_prod_stats(comparison_data$T1, "T1"),
+      T2 = calc_prod_stats(comparison_data$T2, "T2"),
+      R1 = calc_prod_stats(comparison_data$R1, "R1"),
+      R2 = calc_prod_stats(comparison_data$R2, "R2")
+    )
+
   } else {
-    # 2x2x2 CROSSOVER DESIGN: Simple T/R ratio per subject
-    
-    test_data <- param_data %>% filter(Treatment == "T")
-    ref_data <- param_data %>% filter(Treatment == "R")
-    
+    # ── 2×2 CROSSOVER ─────────────────────────────────────────────────────────
     comparison_data <- full_join(
       test_data %>% select(Subject, Value) %>% rename(Test = Value),
-      ref_data %>% select(Subject, Value) %>% rename(Reference = Value),
+      ref_data  %>% select(Subject, Value) %>% rename(Reference = Value),
       by = "Subject"
     ) %>%
       mutate(
-        Ratio = Test / Reference,
+        Ratio   = Test / Reference,
         Subject = as.character(Subject)
       ) %>%
       arrange(as.numeric(Subject))
-    
-    # Calculate summary statistics
-    valid_ratios <- comparison_data$Ratio[!is.na(comparison_data$Ratio) & !is.infinite(comparison_data$Ratio)]
-    
-    if (length(valid_ratios) > 0) {
-      summary_stats <- data.frame(
-        Statistic = c("N", "Geometric Mean Ratio", "CV%", "Min", "Median", "Max"),
-        Value = c(
-          length(valid_ratios),
-          exp(mean(log(valid_ratios))),
-          100 * sqrt(exp(var(log(valid_ratios))) - 1),
-          min(valid_ratios),
-          median(valid_ratios),
-          max(valid_ratios)
-        )
-      )
-    } else {
-      summary_stats <- data.frame(
-        Statistic = "No valid ratios",
-        Value = NA
-      )
-    }
+
+    overall_summary <- bind_rows(
+      calc_prod_stats(comparison_data$Test,      "Test (T)"),
+      calc_prod_stats(comparison_data$Reference, "Reference (R)"),
+      calc_prod_stats(comparison_data$Ratio,     "GMR (T/R)")
+    )
+
+    replicate_summaries <- NULL
   }
-  
-  # Determine units based on parameter
+
+  # ── Units ────────────────────────────────────────────────────────────────────
   unit <- ""
-  if (grepl("AUC", param_name)) {
-    unit <- "ng·h/mL"
-  } else if (param_name == "Cmax") {
-    unit <- "ng/mL"
-  } else if (param_name %in% c("Tmax", "t_half", "Tlast")) {
-    unit <- "h"
-  } else if (param_name %in% c("CL_F", "CLss_F")) {
-    unit <- "mL/h"
-  } else if (param_name %in% c("Vd_F", "Vss_F")) {
-    unit <- "mL"
-  } else if (grepl("^(log|ln)", param_name)) {
-    unit <- paste0("ln(", sub("^(log|ln)", "", param_name), ")")
-  }
-  
+  if      (grepl("AUC", param_name))                  unit <- "ng\u00b7h/mL"
+  else if (param_name == "Cmax")                       unit <- "ng/mL"
+  else if (param_name %in% c("Tmax","t_half","Tlast")) unit <- "h"
+  else if (param_name %in% c("CL_F","CLss_F"))         unit <- "mL/h"
+  else if (param_name %in% c("Vd_F","Vss_F"))          unit <- "mL"
+  else if (grepl("^(log|ln)", param_name))             unit <- paste0("ln(", sub("^(log|ln)","",param_name), ")")
+
   return(list(
-    individual_data = comparison_data,
-    summary_stats = summary_stats,
-    is_replicate = is_replicate,
-    unit = unit,
-    parameter = param_name
+    individual_data     = comparison_data,
+    overall_summary     = overall_summary,
+    replicate_summaries = replicate_summaries,
+    is_replicate        = is_replicate,
+    unit                = unit,
+    parameter           = param_name
   ))
 }
 
@@ -2858,12 +2827,63 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               paste(" Analysis based on", nrow(comparison_results$individual_data), "subjects",
                    if(comparison_results$is_replicate) " (Replicate Design)" else " (2x2x2 Crossover)")
             ),
-            
-            # Single consolidated statistics table (removed redundant h6 label)
-            div(
-              class = "stats-subsection",
+
+            # Overall summary table (3 rows: T, R, GMR)
+            div(class = "stats-subsection mb-3",
+              h6(class = "text-muted", "Overall Summary"),
               DT::dataTableOutput(session$ns("pk_comparison_consolidated_table"))
-            )
+            ),
+
+            # Replicate-only: per-replicate summary cards (T1, T2, R1, R2)
+            if (comparison_results$is_replicate && !is.null(comparison_results$replicate_summaries)) {
+              rep_sums <- comparison_results$replicate_summaries
+              col_names_rep <- c("N", "Geom. Mean", "Arith. Mean", "CV%", "Min", "Median", "Max")
+
+              render_rep_row <- function(row_df) {
+                tags$tr(
+                  tags$td(as.character(row_df$N), style = "text-align:right;"),
+                  tags$td(sprintf("%.4f", row_df$Geom_Mean),  style = "text-align:right;"),
+                  tags$td(sprintf("%.4f", row_df$Arith_Mean), style = "text-align:right;"),
+                  tags$td(if (!is.na(row_df$CV_pct)) sprintf("%.2f", row_df$CV_pct) else "—", style = "text-align:right;"),
+                  tags$td(sprintf("%.4f", row_df$Min),    style = "text-align:right;"),
+                  tags$td(sprintf("%.4f", row_df$Median), style = "text-align:right;"),
+                  tags$td(sprintf("%.4f", row_df$Max),    style = "text-align:right;")
+                )
+              }
+
+              render_rep_table <- function(label, row_df) {
+                div(class = "card mb-2",
+                  div(class = "card-header py-1",
+                    tags$small(class = "font-weight-bold text-muted", label)
+                  ),
+                  div(class = "card-body py-2",
+                    div(class = "table-responsive",
+                      tags$table(class = "table table-sm table-bordered mb-0",
+                        tags$thead(class = "table-light",
+                          tags$tr(lapply(col_names_rep, function(h) tags$th(h, style = "text-align:right;")))
+                        ),
+                        tags$tbody(
+                          if (!is.null(row_df) && row_df$N > 0) render_rep_row(row_df)
+                          else tags$tr(tags$td(colspan = "7", "No data", style = "text-align:center; color:#999;"))
+                        )
+                      )
+                    )
+                  )
+                )
+              }
+
+              tagList(
+                h6(class = "text-muted mt-2", "Per-Replicate Summaries"),
+                div(class = "row",
+                  div(class = "col-md-6", render_rep_table("Test — Replicate 1 (T1)", rep_sums$T1)),
+                  div(class = "col-md-6", render_rep_table("Test — Replicate 2 (T2)", rep_sums$T2))
+                ),
+                div(class = "row",
+                  div(class = "col-md-6", render_rep_table("Reference — Replicate 1 (R1)", rep_sums$R1)),
+                  div(class = "col-md-6", render_rep_table("Reference — Replicate 2 (R2)", rep_sums$R2))
+                )
+              )
+            }
           )
         )
       )
@@ -2883,12 +2903,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       formatted_data <- comparison_results$individual_data
       
       if (comparison_results$is_replicate) {
-        # REPLICATE DESIGN: Show T1, R1, T2, R2, averages, and all ratios
+        # REPLICATE DESIGN: T1, T2, T Mean, R1, R2, R Mean, T/R Ratio
         display_data <- formatted_data %>%
-          select(Subject, T1, R1, T2, R2, T_mean, R_mean, Ratio_T1_R1, Ratio_T2_R2, Ratio_Tavg_Ravg) %>%
+          select(Subject, T1, T2, T_mean, R1, R2, R_mean, Ratio) %>%
           mutate(across(where(is.numeric), ~round(., 3)))
-        
-        # Add missing data indicators
+
         display_data <- display_data %>%
           mutate(
             Notes = case_when(
@@ -2899,26 +2918,25 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               TRUE ~ ""
             )
           )
-        
-        col_names <- c("Subject", "T1", "R1", "T2", "R2", "T avg", "R avg", 
-                      "T1/R1", "T2/R2", "Tavg/Ravg", "Notes")
-        
+
+        col_names <- c("Subject", "T1", "T2", "T Mean", "R1", "R2", "R Mean",
+                       "T/R Ratio", "Notes")
+
       } else {
-        # 2x2x2 CROSSOVER: Simple T, R, and Ratio
+        # 2x2x2 CROSSOVER: Subject, Test, Reference, Ratio
         display_data <- formatted_data %>%
           select(Subject, Test, Reference, Ratio) %>%
           mutate(across(where(is.numeric), ~round(., 3)))
-        
-        # Add missing data indicators
+
         display_data <- display_data %>%
           mutate(
             Notes = case_when(
-              is.na(Test) ~ "Missing Test",
+              is.na(Test)      ~ "Missing Test",
               is.na(Reference) ~ "Missing Ref",
               TRUE ~ ""
             )
           )
-        
+
         col_names <- c("Subject", "Test", "Reference", "T/R Ratio", "Notes")
       }
       
@@ -2940,43 +2958,30 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       )
     })
     
-    # Render consolidated statistics table
+    # Render overall summary table (shared by 2x2 and replicate)
     output$pk_comparison_consolidated_table <- DT::renderDataTable({
       param <- selected_comparison_param()
       if (is.null(param)) return(NULL)
-      
+
       nca_res <- nca_results()
       comparison_results <- calculate_pk_comparison(nca_res, param)
-      
-      if (is.null(comparison_results)) return(NULL)
-      
-      # Format summary stats based on design type
-      summary_stats <- comparison_results$summary_stats
-      
-      if (comparison_results$is_replicate) {
-        # REPLICATE DESIGN: Show stats for each ratio type
-        display_data <- summary_stats %>%
-          mutate(across(where(is.numeric), ~round(., 4)))
-        
-        col_names <- c("Ratio Type", "N", "Geometric Mean", "CV%", "Min", "Median", "Max")
-        
-      } else {
-        # 2x2x2 CROSSOVER: Standard summary
-        display_data <- summary_stats %>%
-          mutate(across(where(is.numeric), ~round(., 4)))
-        
-        col_names <- c("Statistic", "Value")
-      }
-      
+      if (is.null(comparison_results) || !is.null(comparison_results$error)) return(NULL)
+
+      display_data <- comparison_results$overall_summary %>%
+        mutate(across(where(is.numeric), ~round(., 4)))
+
+      col_names <- c("Product", "N", "Geom. Mean", "Arith. Mean", "CV%",
+                     "Min", "Median", "Max")
+
+      gmr_row <- which(grepl("GMR", display_data$Product))
+
       DT::datatable(
         display_data,
         options = list(
           pageLength = 10,
-          dom = 't',  # Just table, no pagination needed for summary
+          dom = 't',
           ordering = FALSE,
-          columnDefs = list(
-            list(className = 'dt-center', targets = '_all')
-          ),
+          columnDefs = list(list(className = 'dt-center', targets = '_all')),
           scrollX = TRUE
         ),
         rownames = FALSE,
@@ -2984,8 +2989,13 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       ) %>%
         DT::formatStyle(
           columns = colnames(display_data),
-          backgroundColor = '#f9f9f9',
-          fontWeight = 'bold'
+          backgroundColor = '#f9f9f9'
+        ) %>%
+        DT::formatStyle(
+          columns = colnames(display_data),
+          rows = gmr_row,
+          fontWeight = 'bold',
+          backgroundColor = '#e8f4f8'
         )
     })
     
