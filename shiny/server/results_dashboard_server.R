@@ -39,8 +39,7 @@ log_param_to_display_name <- function(log_param_name) {
 #'
 #' @param nca_data Data frame with NCA results containing subject_data
 #' @param param_name Name of the parameter to analyze
-#' @return List with individual_data, overall_summary, replicate_summaries,
-#'         is_replicate, unit, parameter
+#' @return List with individual_data, means_table, is_replicate, unit, parameter
 calculate_pk_comparison <- function(nca_data, param_name) {
   if (is.null(nca_data) || is.null(nca_data$subject_data)) {
     return(NULL)
@@ -60,20 +59,21 @@ calculate_pk_comparison <- function(nca_data, param_name) {
     ))
   }
 
-  # ── Helper: descriptive stats for a numeric vector ──────────────────────────
-  calc_prod_stats <- function(values, label) {
-    v <- values[!is.na(values) & !is.infinite(values) & is.finite(values)]
+  # ── Helper: SAS MEANS-style descriptive stats (arithmetic) ──────────────────
+  calc_sas_means <- function(values, label) {
+    v <- values[!is.na(values) & is.finite(values)]
     if (length(v) == 0) {
       return(data.frame(Product = label, N = 0L,
-                        Geom_Mean = NA_real_, Arith_Mean = NA_real_,
+                        Mean = NA_real_, SD = NA_real_,
                         CV_pct = NA_real_, Min = NA_real_,
                         Median = NA_real_, Max = NA_real_,
                         stringsAsFactors = FALSE))
     }
-    gm   <- exp(mean(log(v)))
-    cv   <- if (length(v) > 1) 100 * sqrt(exp(var(log(v))) - 1) else NA_real_
+    m  <- mean(v)
+    s  <- if (length(v) > 1) sd(v) else NA_real_
+    cv <- if (!is.na(s) && m != 0) (s / m) * 100 else NA_real_
     data.frame(Product = label, N = length(v),
-               Geom_Mean = gm, Arith_Mean = mean(v),
+               Mean = m, SD = s,
                CV_pct = cv, Min = min(v),
                Median = median(v), Max = max(v),
                stringsAsFactors = FALSE)
@@ -89,7 +89,7 @@ calculate_pk_comparison <- function(nca_data, param_name) {
   is_replicate <- periods_per_subject > 2
 
   param_data <- subject_data %>%
-    select(Subject, Treatment, Period, all_of(param_name)) %>%
+    select(Subject, Sequence, Treatment, Period, all_of(param_name)) %>%
     rename(Value = !!param_name) %>%
     filter(!is.na(Value))
 
@@ -103,23 +103,39 @@ calculate_pk_comparison <- function(nca_data, param_name) {
   # ── REPLICATE DESIGN ────────────────────────────────────────────────────────
   if (is_replicate) {
 
-    test_by_subject <- test_data %>%
+    # Build a sequence-level design map: within each (Sequence, Treatment),
+    # rank the periods in ascending order. This tells us e.g. in RTRT sequence
+    # that period 2 = T1 and period 4 = T2 for ALL subjects in that sequence,
+    # regardless of which periods they individually completed.
+    design_map <- param_data %>%
+      distinct(Sequence, Treatment, Period) %>%
+      arrange(Sequence, Treatment, as.numeric(Period)) %>%
+      group_by(Sequence, Treatment) %>%
+      mutate(rep_num = row_number()) %>%
+      ungroup()
+
+    # Label every observation with its design rep number (T1/T2/R1/R2)
+    param_labeled <- param_data %>%
+      left_join(design_map, by = c("Sequence", "Treatment", "Period"))
+
+    test_labeled <- param_labeled %>% filter(Treatment == "T")
+    ref_labeled  <- param_labeled %>% filter(Treatment == "R")
+
+    test_by_subject <- test_labeled %>%
       group_by(Subject) %>%
-      arrange(Period) %>%
       summarise(
-        T1     = if (n() >= 1) Value[1] else NA_real_,
-        T2     = if (n() >= 2) Value[2] else NA_real_,
+        T1     = { v <- Value[rep_num == 1]; if (length(v) > 0) v[1] else NA_real_ },
+        T2     = { v <- Value[rep_num == 2]; if (length(v) > 0) v[1] else NA_real_ },
         T_mean = mean(Value, na.rm = TRUE),
         T_n    = n(),
         .groups = "drop"
       )
 
-    ref_by_subject <- ref_data %>%
+    ref_by_subject <- ref_labeled %>%
       group_by(Subject) %>%
-      arrange(Period) %>%
       summarise(
-        R1     = if (n() >= 1) Value[1] else NA_real_,
-        R2     = if (n() >= 2) Value[2] else NA_real_,
+        R1     = { v <- Value[rep_num == 1]; if (length(v) > 0) v[1] else NA_real_ },
+        R2     = { v <- Value[rep_num == 2]; if (length(v) > 0) v[1] else NA_real_ },
         R_mean = mean(Value, na.rm = TRUE),
         R_n    = n(),
         .groups = "drop"
@@ -127,30 +143,44 @@ calculate_pk_comparison <- function(nca_data, param_name) {
 
     comparison_data <- full_join(test_by_subject, ref_by_subject, by = "Subject") %>%
       mutate(
-        Ratio       = T_mean / R_mean,
-        Missing_T   = replace_na(T_n < periods_per_subject / 2, FALSE),
-        Missing_R   = replace_na(R_n < periods_per_subject / 2, FALSE),
-        Subject     = as.character(Subject)
+        Ratio     = T_mean / R_mean,
+        Missing_T = replace_na(T_n < max(T_n, na.rm = TRUE), FALSE),
+        Missing_R = replace_na(R_n < max(R_n, na.rm = TRUE), FALSE),
+        Subject   = as.character(Subject)
       ) %>%
       arrange(as.numeric(Subject))
 
-    # Overall summary: T (all), R (all), GMR
-    all_T   <- c(comparison_data$T1, comparison_data$T2)
-    all_R   <- c(comparison_data$R1, comparison_data$R2)
-    ratios  <- comparison_data$Ratio
-    overall_summary <- bind_rows(
-      calc_prod_stats(all_T,  "T (all)"),
-      calc_prod_stats(all_R,  "R (all)"),
-      calc_prod_stats(ratios, "GMR (T/R)")
-    )
+    n_T_reps <- max(comparison_data$T_n, na.rm = TRUE)
+    n_R_reps <- max(comparison_data$R_n, na.rm = TRUE)
 
-    # Per-replicate summaries (T1, T2, R1, R2)
-    replicate_summaries <- list(
-      T1 = calc_prod_stats(comparison_data$T1, "T1"),
-      T2 = calc_prod_stats(comparison_data$T2, "T2"),
-      R1 = calc_prod_stats(comparison_data$R1, "R1"),
-      R2 = calc_prod_stats(comparison_data$R2, "R2")
-    )
+    # Build SAS MEANS-style rows: per replicate + combined if >1
+    means_rows <- list()
+
+    if (n_T_reps >= 2) {
+      means_rows <- c(means_rows,
+        list(calc_sas_means(comparison_data$T1, "T1")),
+        list(calc_sas_means(comparison_data$T2, "T2")),
+        list(calc_sas_means(c(comparison_data$T1, comparison_data$T2), "T (Total)"))
+      )
+    } else {
+      means_rows <- c(means_rows,
+        list(calc_sas_means(comparison_data$T1, "T"))
+      )
+    }
+
+    if (n_R_reps >= 2) {
+      means_rows <- c(means_rows,
+        list(calc_sas_means(comparison_data$R1, "R1")),
+        list(calc_sas_means(comparison_data$R2, "R2")),
+        list(calc_sas_means(c(comparison_data$R1, comparison_data$R2), "R (Total)"))
+      )
+    } else {
+      means_rows <- c(means_rows,
+        list(calc_sas_means(comparison_data$R1, "R"))
+      )
+    }
+
+    means_table <- bind_rows(means_rows)
 
   } else {
     # ── 2×2 CROSSOVER ─────────────────────────────────────────────────────────
@@ -165,13 +195,10 @@ calculate_pk_comparison <- function(nca_data, param_name) {
       ) %>%
       arrange(as.numeric(Subject))
 
-    overall_summary <- bind_rows(
-      calc_prod_stats(comparison_data$Test,      "Test (T)"),
-      calc_prod_stats(comparison_data$Reference, "Reference (R)"),
-      calc_prod_stats(comparison_data$Ratio,     "GMR (T/R)")
+    means_table <- bind_rows(
+      calc_sas_means(comparison_data$Test,      "T"),
+      calc_sas_means(comparison_data$Reference, "R")
     )
-
-    replicate_summaries <- NULL
   }
 
   # ── Units ────────────────────────────────────────────────────────────────────
@@ -184,12 +211,11 @@ calculate_pk_comparison <- function(nca_data, param_name) {
   else if (grepl("^(log|ln)", param_name))             unit <- paste0("ln(", sub("^(log|ln)","",param_name), ")")
 
   return(list(
-    individual_data     = comparison_data,
-    overall_summary     = overall_summary,
-    replicate_summaries = replicate_summaries,
-    is_replicate        = is_replicate,
-    unit                = unit,
-    parameter           = param_name
+    individual_data = comparison_data,
+    means_table     = means_table,
+    is_replicate    = is_replicate,
+    unit            = unit,
+    parameter       = param_name
   ))
 }
 
@@ -2798,7 +2824,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         return(div(class = "alert alert-warning", "No NCA results available"))
       }
       
-      # Calculate comparison statistics
       comparison_results <- calculate_pk_comparison(nca_res, param)
       
       if (is.null(comparison_results) || !is.null(comparison_results$error)) {
@@ -2809,17 +2834,15 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         ))
       }
       
-      # Format the right panel display
       tagList(
         div(
           class = "panel panel-default",
           div(class = "panel-heading",
-            h4(class = "panel-title", 
-               icon("calculator"), 
+            h4(class = "panel-title",
+               icon("calculator"),
                "Summary Statistics")
           ),
           div(class = "panel-body",
-            # Sample size info at the top
             div(
               class = "alert alert-info",
               style = "margin-bottom: 20px;",
@@ -2827,63 +2850,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               paste(" Analysis based on", nrow(comparison_results$individual_data), "subjects",
                    if(comparison_results$is_replicate) " (Replicate Design)" else " (2x2x2 Crossover)")
             ),
-
-            # Overall summary table (3 rows: T, R, GMR)
-            div(class = "stats-subsection mb-3",
-              h6(class = "text-muted", "Overall Summary"),
-              DT::dataTableOutput(session$ns("pk_comparison_consolidated_table"))
-            ),
-
-            # Replicate-only: per-replicate summary cards (T1, T2, R1, R2)
-            if (comparison_results$is_replicate && !is.null(comparison_results$replicate_summaries)) {
-              rep_sums <- comparison_results$replicate_summaries
-              col_names_rep <- c("N", "Geom. Mean", "Arith. Mean", "CV%", "Min", "Median", "Max")
-
-              render_rep_row <- function(row_df) {
-                tags$tr(
-                  tags$td(as.character(row_df$N), style = "text-align:right;"),
-                  tags$td(sprintf("%.4f", row_df$Geom_Mean),  style = "text-align:right;"),
-                  tags$td(sprintf("%.4f", row_df$Arith_Mean), style = "text-align:right;"),
-                  tags$td(if (!is.na(row_df$CV_pct)) sprintf("%.2f", row_df$CV_pct) else "—", style = "text-align:right;"),
-                  tags$td(sprintf("%.4f", row_df$Min),    style = "text-align:right;"),
-                  tags$td(sprintf("%.4f", row_df$Median), style = "text-align:right;"),
-                  tags$td(sprintf("%.4f", row_df$Max),    style = "text-align:right;")
-                )
-              }
-
-              render_rep_table <- function(label, row_df) {
-                div(class = "card mb-2",
-                  div(class = "card-header py-1",
-                    tags$small(class = "font-weight-bold text-muted", label)
-                  ),
-                  div(class = "card-body py-2",
-                    div(class = "table-responsive",
-                      tags$table(class = "table table-sm table-bordered mb-0",
-                        tags$thead(class = "table-light",
-                          tags$tr(lapply(col_names_rep, function(h) tags$th(h, style = "text-align:right;")))
-                        ),
-                        tags$tbody(
-                          if (!is.null(row_df) && row_df$N > 0) render_rep_row(row_df)
-                          else tags$tr(tags$td(colspan = "7", "No data", style = "text-align:center; color:#999;"))
-                        )
-                      )
-                    )
-                  )
-                )
-              }
-
-              tagList(
-                h6(class = "text-muted mt-2", "Per-Replicate Summaries"),
-                div(class = "row",
-                  div(class = "col-md-6", render_rep_table("Test — Replicate 1 (T1)", rep_sums$T1)),
-                  div(class = "col-md-6", render_rep_table("Test — Replicate 2 (T2)", rep_sums$T2))
-                ),
-                div(class = "row",
-                  div(class = "col-md-6", render_rep_table("Reference — Replicate 1 (R1)", rep_sums$R1)),
-                  div(class = "col-md-6", render_rep_table("Reference — Replicate 2 (R2)", rep_sums$R2))
-                )
-              )
-            }
+            DT::dataTableOutput(session$ns("pk_comparison_consolidated_table"))
           )
         )
       )
@@ -2958,7 +2925,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       )
     })
     
-    # Render overall summary table (shared by 2x2 and replicate)
+    # Render summary statistics table (SAS MEANS style)
     output$pk_comparison_consolidated_table <- DT::renderDataTable({
       param <- selected_comparison_param()
       if (is.null(param)) return(NULL)
@@ -2967,13 +2934,10 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       comparison_results <- calculate_pk_comparison(nca_res, param)
       if (is.null(comparison_results) || !is.null(comparison_results$error)) return(NULL)
 
-      display_data <- comparison_results$overall_summary %>%
+      display_data <- comparison_results$means_table %>%
         mutate(across(where(is.numeric), ~round(., 4)))
 
-      col_names <- c("Product", "N", "Geom. Mean", "Arith. Mean", "CV%",
-                     "Min", "Median", "Max")
-
-      gmr_row <- which(grepl("GMR", display_data$Product))
+      col_names <- c("Group", "N", "Mean", "Std Dev", "CV%", "Min", "Median", "Max")
 
       DT::datatable(
         display_data,
@@ -2982,7 +2946,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           dom = 't',
           ordering = FALSE,
           columnDefs = list(list(className = 'dt-center', targets = '_all')),
-          scrollX = TRUE
+          scrollX = TRUE,
+          rowCallback = DT::JS(
+            "function(row, data, index) {",
+            "  if (data[0] && data[0].indexOf('Total') >= 0) {",
+            "    $(row).css({'font-weight': 'bold', 'background-color': '#e8f4f8'});",
+            "  }",
+            "}"
+          )
         ),
         rownames = FALSE,
         colnames = col_names
@@ -2990,12 +2961,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         DT::formatStyle(
           columns = colnames(display_data),
           backgroundColor = '#f9f9f9'
-        ) %>%
-        DT::formatStyle(
-          columns = colnames(display_data),
-          rows = gmr_row,
-          fontWeight = 'bold',
-          backgroundColor = '#e8f4f8'
         )
     })
     

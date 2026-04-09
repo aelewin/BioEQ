@@ -251,10 +251,13 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
         }
       }, error = function(e) c(NA, NA))
       
+      n_periods <- if ("Period" %in% names(data)) length(unique(data$Period)) else NA_integer_
+
       return(list(
         n_subjects = n_subjects,
         n_treatments = n_treatments,
         treatments = treatments,
+        n_periods = n_periods,
         n_timepoints = n_timepoints,
         timepoints = timepoints,
         total_observations = total_obs,
@@ -353,10 +356,13 @@ create_data_summary_enhanced <- function(data, pk_param_info = NULL) {
         missing_pct <- 0
       }
       
+      n_periods <- if ("Period" %in% names(data)) length(unique(data$Period)) else NA_integer_
+
       return(list(
         n_subjects = n_subjects,
         n_treatments = n_treatments,
         treatments = treatments,
+        n_periods = n_periods,
         n_pk_parameters = length(pk_cols),
         pk_parameters = pk_cols,
         pk_parameter_details = pk_details,  # Include detailed info about log-transform status
@@ -802,6 +808,7 @@ output$data_summary <- renderText({
       "Study Design: ", summary$design_type, "\n",
       "Subjects: ", summary$n_subjects, "\n",
       "Treatments: ", paste(summary$treatments, collapse = ", "), " (", summary$n_treatments, " total)\n",
+      if (!is.null(summary$n_periods) && !is.na(summary$n_periods)) paste0("Periods: ", summary$n_periods, "\n") else "",
       "Time Points: ", summary$n_timepoints, " (", 
       if(!is.na(summary$time_range[1]) && !is.na(summary$time_range[2])) {
         paste0(round(summary$time_range[1], 2), " - ", round(summary$time_range[2], 2), " hours")
@@ -823,7 +830,8 @@ output$data_summary <- renderText({
       "Data Type: PK Parameters\n",
       "Study Design: ", summary$design_type, "\n",
       "Subjects: ", summary$n_subjects, "\n",
-      "Treatments: ", paste(summary$treatments, collapse = ", "), " (", summary$n_treatments, " total)\n"
+      "Treatments: ", paste(summary$treatments, collapse = ", "), " (", summary$n_treatments, " total)\n",
+      if (!is.null(summary$n_periods) && !is.na(summary$n_periods)) paste0("Periods: ", summary$n_periods, "\n") else ""
     )
     
     # Add group information if available

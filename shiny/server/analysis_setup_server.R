@@ -152,17 +152,26 @@ output$detected_design <- renderUI({
       replicate_result <- tryCatch({
         detect_replicate_design(data)
       }, error = function(e) {
+        cat("[WARN] detect_replicate_design failed:", e$message, "\n")
         NULL
       })
     }
-    
+
+    # Use period count as authoritative fallback — works even when detect_replicate_design
+    # fails or returns is_replicate=FALSE (e.g. on concentration-time data with many rows)
+    n_p_data <- if ("Period" %in% names(data)) length(unique(data$Period)) else 2L
+
     # Determine detected design
     detected_design <- if (!is.null(replicate_result) && isTRUE(replicate_result$is_replicate)) {
       paste0(replicate_result$design_type, " (", replicate_result$n_periods, " periods)")
+    } else if (is_crossover && n_p_data >= 4) {
+      paste0("2\u00d72\u00d7", n_p_data, " Replicate Design (", n_p_data, " periods)")
+    } else if (is_crossover && n_p_data == 3) {
+      "2\u00d72\u00d73 Partial Replicate Design (3 periods)"
     } else if (is_crossover && n_treatments == 2) {
-      "2×2×2 Crossover Design"
+      "2\u00d72\u00d72 Crossover Design"
     } else if (is_crossover) {
-      paste0(n_treatments, "×", n_treatments, " Crossover Design")
+      paste0(n_treatments, "\u00d7", n_treatments, " Crossover Design")
     } else {
       "Parallel Group Design"
     }
@@ -359,8 +368,21 @@ output$settings_summary <- renderUI({
       treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
       is_crossover <- all(treatments_per_subject == n_treatments)
       
-      if (is_crossover && n_treatments == 2) "2×2×2" else 
-      if (is_crossover) paste0(n_treatments, "×", n_treatments) else "Parallel"
+      if (!is_crossover) {
+        "Parallel"
+      } else {
+        rr <- tryCatch(detect_replicate_design(data), error = function(e) NULL)
+        if (!is.null(rr) && isTRUE(rr$is_replicate)) {
+          paste0("Replicate (", rr$design_name, ")")
+        } else if ("Period" %in% names(data)) {
+          n_p <- length(unique(data$Period))
+          if (n_p >= 4) "2×2×4 Full Replicate"
+          else if (n_p == 3) "2×2×3 Partial Replicate"
+          else "2×2×2"
+        } else {
+          "2×2×2"
+        }
+      }
     }, error = function(e) {
       "Error detecting design"
     })
@@ -625,15 +647,28 @@ observeEvent(input$run_analysis, {
       treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
       is_crossover <- all(treatments_per_subject == n_treatments)
       
-      detected_design <- if (is_crossover && n_treatments == 2) {
-        "2x2x2"
-      } else if (is_crossover) {
-        "replicate"
-      } else {
+      detected_design <- if (!is_crossover) {
         "parallel"
+      } else {
+        # Use detect_replicate_design() for accurate period/replicate detection
+        replicate_result <- tryCatch(
+          detect_replicate_design(data),
+          error = function(e) NULL
+        )
+        # Always use period count as the authoritative source for replicate detection
+        n_p <- if (!is.null(replicate_result) && !is.null(replicate_result$n_periods)) {
+          replicate_result$n_periods
+        } else if ("Period" %in% names(data)) {
+          length(unique(data$Period))
+        } else {
+          2L
+        }
+        if (n_p >= 4) "2x2x4" else if (n_p == 3) "2x2x3" else "2x2x2"
       }
       
       analysis_config$detected_design <- detected_design
+      cat(sprintf("[INFO] Auto-detected design: %s (%d treatments, crossover=%s)\n",
+                  detected_design, n_treatments, is_crossover))
     }
     Sys.sleep(0.5)
     
@@ -1035,8 +1070,8 @@ observeEvent(input$run_analysis, {
           vals <- nca_results[[param]]
           if (!is.numeric(vals)) return(NULL)
           
-          test_vals <- vals[nca_results$Treatment == "Test"]
-          ref_vals <- vals[nca_results$Treatment == "Reference"]
+          test_vals <- vals[nca_results$Treatment %in% c("T", "Test")]
+          ref_vals <- vals[nca_results$Treatment %in% c("R", "Reference")]
           
           test_vals <- test_vals[!is.na(test_vals)]
           ref_vals <- ref_vals[!is.na(ref_vals)]
