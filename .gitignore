@@ -34,3 +34,11 @@ data/
 
 # Shiny templates
 shiny/inst/templates/
+
+# Secrets and environment files
+.env
+.env.*
+!.env.example
+.Renviron
+config/
+secrets/

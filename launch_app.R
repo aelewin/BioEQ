@@ -18,4 +18,7 @@ cat("Press Ctrl+C to stop the application.\n\n")
 
 # Change to shiny directory and launch app
 setwd("shiny")
-shiny::runApp(host = "0.0.0.0", port = 4000, launch.browser = TRUE)
+# SECURITY: Default to localhost; override with BIOEQ_HOST env var for proxy deployments
+host <- Sys.getenv("BIOEQ_HOST", unset = "127.0.0.1")
+port <- as.integer(Sys.getenv("BIOEQ_PORT", unset = "4000"))
+shiny::runApp(host = host, port = port, launch.browser = TRUE)

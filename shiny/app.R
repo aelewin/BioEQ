@@ -214,10 +214,7 @@ ui <- dashboardPage(
           $('#' + data.id).removeClass(data.class);
         });
         
-        // Handle custom JS injection
-        Shiny.addCustomMessageHandler('addCustomJS', function(data) {
-          eval(data.script);
-        });
+        // SECURITY: Removed unsafe eval()-based addCustomJS handler (CWE-95)
       });
     ")),
     
@@ -226,6 +223,11 @@ ui <- dashboardPage(
       tags$title("BioEQ Analysis Platform"),
       tags$link(rel = "icon", href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧪</text></svg>"),
       tags$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
+      # Security headers (CWE-693)
+      tags$meta(`http-equiv` = "X-Frame-Options", content = "SAMEORIGIN"),
+      tags$meta(`http-equiv` = "X-Content-Type-Options", content = "nosniff"),
+      tags$meta(`http-equiv` = "X-XSS-Protection", content = "1; mode=block"),
+      tags$meta(`http-equiv` = "Referrer-Policy", content = "strict-origin-when-cross-origin"),
       tags$link(rel = "stylesheet", type = "text/css", href = "custom.css"),
       tags$style(HTML("
         /* Modern Professional Navy Blue Theme */
