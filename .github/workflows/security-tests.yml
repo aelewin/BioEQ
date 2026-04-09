@@ -1,0 +1,74 @@
+name: Security Tests
+
+on:
+  push:
+    branches: [main, develop, 'copilot/**']
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  security-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.3.0'
+
+      - name: Install dependencies
+        run: |
+          install.packages(c("testthat", "tools"), repos = "https://cran.rstudio.com/")
+        shell: Rscript {0}
+
+      - name: Run security function tests
+        run: |
+          library(testthat)
+          results <- test_file("tests/test_security_functions.R", reporter = "summary")
+          if (any(as.data.frame(results)$failed > 0)) stop("Security function tests failed")
+        shell: Rscript {0}
+
+      - name: Run vulnerability proof tests
+        run: |
+          library(testthat)
+          results <- test_file("tests/test_vulnerability_proofs.R", reporter = "summary")
+          if (any(as.data.frame(results)$failed > 0)) stop("Vulnerability proof tests failed")
+        shell: Rscript {0}
+
+      - name: Run integration tests
+        run: |
+          library(testthat)
+          results <- test_file("tests/test_app_security_integration.R", reporter = "summary")
+          if (any(as.data.frame(results)$failed > 0)) stop("Integration tests failed")
+        shell: Rscript {0}
+
+      - name: Run dependency tests
+        run: |
+          library(testthat)
+          results <- test_file("tests/test_dependencies.R", reporter = "summary")
+          if (any(as.data.frame(results)$failed > 0)) stop("Dependency tests failed")
+        shell: Rscript {0}
+
+      - name: Run security config tests
+        run: |
+          library(testthat)
+          results <- test_file("tests/test_security_config.R", reporter = "summary")
+          if (any(as.data.frame(results)$failed > 0)) stop("Security config tests failed")
+        shell: Rscript {0}
+
+      - name: Run performance tests
+        run: |
+          library(testthat)
+          results <- test_file("tests/test_performance.R", reporter = "summary")
+          if (any(as.data.frame(results)$failed > 0)) stop("Performance tests failed")
+        shell: Rscript {0}
+
+      - name: Run functional regression tests
+        run: |
+          library(testthat)
+          results <- test_file("tests/test_functionality.R", reporter = "summary")
+          if (any(as.data.frame(results)$failed > 0)) stop("Functional regression tests failed")
+        shell: Rscript {0}
