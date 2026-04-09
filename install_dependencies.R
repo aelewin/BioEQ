@@ -7,83 +7,116 @@ cat("Installing BioEQ dependencies...\n")
 # Set CRAN repository
 options(repos = c(CRAN = "https://cran.rstudio.com/"))
 
-# Required packages (core functionality)
+# ---------------------------------------------------------------------------
+# REQUIRED packages — app will not function without these
+# ---------------------------------------------------------------------------
 required_packages <- c(
+  # Shiny UI
   "shiny",
-  "shinydashboard", 
-  "DT",
-  "readr",
-  "dplyr", 
-  "readxl",
+  "shinydashboard",
   "bslib",
-  "ggplot2",
-  "gridExtra",
-  "replicateBE"
-)
-
-# Optional packages (enhanced functionality)
-optional_packages <- c(
   "shinyjs",
-  "digest",
-  "shinycssloaders", 
-  "rmarkdown",
-  "knitr",
-  "officer",
-  "flextable",
-  "zip",
+  "DT",
+  "shinycssloaders",
+  # Data I/O
+  "readr",
+  "readxl",
+  "writexl",
+  # Data manipulation
+  "dplyr",
+  "tidyr",
+  "reshape2",
+  # Plotting
+  "ggplot2",
   "plotly",
   "htmlwidgets",
+  "gridExtra",
+  "scales",
+  # Statistics / BE analysis
+  "nlme",
+  "lme4",
+  "lmerTest",
+  "replicateBE",
+  "PowerTOST",
+  # Utilities
+  "digest",
+  "zip"
+)
+
+# ---------------------------------------------------------------------------
+# REPORT packages — needed for PDF/Word/HTML report export only.
+# The app runs fully without these; a warning is shown in-app when absent.
+# ---------------------------------------------------------------------------
+report_packages <- c(
+  "rmarkdown",
+  "knitr",
+  "officer",    # Word (.docx) reports
+  "flextable"   # Word table formatting
+)
+
+# ---------------------------------------------------------------------------
+# DEVELOPMENT / TESTING packages — only needed when running tests
+# ---------------------------------------------------------------------------
+dev_packages <- c(
   "testthat"
 )
 
+# ---------------------------------------------------------------------------
 # Function to install packages if not already installed
+# ---------------------------------------------------------------------------
 install_if_missing <- function(packages, package_type = "required") {
   cat(sprintf("\nChecking %s packages...\n", package_type))
-  
-  missing_packages <- packages[!packages %in% installed.packages()[,"Package"]]
-  
+
+  missing_packages <- packages[!packages %in% installed.packages()[, "Package"]]
+
   if (length(missing_packages) > 0) {
-    cat(sprintf("Installing %s %s packages: %s\n", 
-                length(missing_packages), 
+    cat(sprintf("Installing %d %s package(s): %s\n",
+                length(missing_packages),
                 package_type,
                 paste(missing_packages, collapse = ", ")))
-    
+
     tryCatch({
       install.packages(missing_packages, dependencies = TRUE)
-      cat(sprintf("✓ Successfully installed %s packages\n", package_type))
+      cat(sprintf("\u2713 Successfully installed %s packages\n", package_type))
     }, error = function(e) {
-      cat(sprintf("✗ Error installing %s packages: %s\n", package_type, e$message))
+      cat(sprintf("\u2717 Error installing %s packages: %s\n", package_type, e$message))
       if (package_type == "required") {
         stop("Failed to install required packages. Please install manually.")
       }
     })
   } else {
-    cat(sprintf("✓ All %s packages already installed\n", package_type))
+    cat(sprintf("\u2713 All %s packages already installed\n", package_type))
   }
 }
 
-# Install required packages
+# Install all groups
 install_if_missing(required_packages, "required")
+install_if_missing(report_packages,   "report (optional)")
+install_if_missing(dev_packages,      "development/testing (optional)")
 
-# Install optional packages (don't fail if these don't work)
-install_if_missing(optional_packages, "optional")
-
-cat("\n" %+% "=" %+% rep("=", 50) %+% "\n")
+cat(paste0("\n", strrep("=", 52), "\n"))
 cat("BioEQ dependency installation complete!\n")
 cat("\nTo launch the Shiny app:\n")
-cat("  cd shiny\n")
-cat("  R -e \"shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)\"\n")
-cat("\nOr run: Rscript launch_app.R\n")
-cat("=" %+% rep("=", 50) %+% "\n")
+cat("  Rscript launch_app.R\n")
+cat(paste0(strrep("=", 52), "\n"))
 
-# Verify critical packages can be loaded
-cat("\nVerifying installation...\n")
-critical_packages <- c("shiny", "shinydashboard", "DT", "dplyr")
-for (pkg in critical_packages) {
+# Verify all required packages can be loaded
+cat("\nVerifying required packages...\n")
+failed <- character(0)
+for (pkg in required_packages) {
   tryCatch({
-    library(pkg, character.only = TRUE)
-    cat(sprintf("✓ %s loaded successfully\n", pkg))
+    library(pkg, character.only = TRUE, quietly = TRUE)
+    cat(sprintf("\u2713 %s\n", pkg))
   }, error = function(e) {
-    cat(sprintf("✗ %s failed to load: %s\n", pkg, e$message))
+    cat(sprintf("\u2717 %s  -- %s\n", pkg, e$message))
+    failed <<- c(failed, pkg)
   })
+}
+
+if (length(failed) > 0) {
+  cat(sprintf("\n\u26A0  %d required package(s) failed to load: %s\n",
+              length(failed), paste(failed, collapse = ", ")))
+  cat("Please install them manually and re-run this script.\n")
+} else {
+  cat("\n\u2713 All required packages verified.\n")
 }
