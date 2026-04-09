@@ -152,17 +152,26 @@ output$detected_design <- renderUI({
       replicate_result <- tryCatch({
         detect_replicate_design(data)
       }, error = function(e) {
+        cat("[WARN] detect_replicate_design failed:", e$message, "\n")
         NULL
       })
     }
-    
+
+    # Use period count as authoritative fallback — works even when detect_replicate_design
+    # fails or returns is_replicate=FALSE (e.g. on concentration-time data with many rows)
+    n_p_data <- if ("Period" %in% names(data)) length(unique(data$Period)) else 2L
+
     # Determine detected design
     detected_design <- if (!is.null(replicate_result) && isTRUE(replicate_result$is_replicate)) {
       paste0(replicate_result$design_type, " (", replicate_result$n_periods, " periods)")
+    } else if (is_crossover && n_p_data >= 4) {
+      paste0("2\u00d72\u00d7", n_p_data, " Replicate Design (", n_p_data, " periods)")
+    } else if (is_crossover && n_p_data == 3) {
+      "2\u00d72\u00d73 Partial Replicate Design (3 periods)"
     } else if (is_crossover && n_treatments == 2) {
-      "2×2×2 Crossover Design"
+      "2\u00d72\u00d72 Crossover Design"
     } else if (is_crossover) {
-      paste0(n_treatments, "×", n_treatments, " Crossover Design")
+      paste0(n_treatments, "\u00d7", n_treatments, " Crossover Design")
     } else {
       "Parallel Group Design"
     }
@@ -359,8 +368,21 @@ output$settings_summary <- renderUI({
       treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
       is_crossover <- all(treatments_per_subject == n_treatments)
       
-      if (is_crossover && n_treatments == 2) "2×2×2" else 
-      if (is_crossover) paste0(n_treatments, "×", n_treatments) else "Parallel"
+      if (!is_crossover) {
+        "Parallel"
+      } else {
+        rr <- tryCatch(detect_replicate_design(data), error = function(e) NULL)
+        if (!is.null(rr) && isTRUE(rr$is_replicate)) {
+          paste0("Replicate (", rr$design_name, ")")
+        } else if ("Period" %in% names(data)) {
+          n_p <- length(unique(data$Period))
+          if (n_p >= 4) "2×2×4 Full Replicate"
+          else if (n_p == 3) "2×2×3 Partial Replicate"
+          else "2×2×2"
+        } else {
+          "2×2×2"
+        }
+      }
     }, error = function(e) {
       "Error detecting design"
     })
@@ -625,15 +647,28 @@ observeEvent(input$run_analysis, {
       treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
       is_crossover <- all(treatments_per_subject == n_treatments)
       
-      detected_design <- if (is_crossover && n_treatments == 2) {
-        "2x2x2"
-      } else if (is_crossover) {
-        "replicate"
-      } else {
+      detected_design <- if (!is_crossover) {
         "parallel"
+      } else {
+        # Use detect_replicate_design() for accurate period/replicate detection
+        replicate_result <- tryCatch(
+          detect_replicate_design(data),
+          error = function(e) NULL
+        )
+        # Always use period count as the authoritative source for replicate detection
+        n_p <- if (!is.null(replicate_result) && !is.null(replicate_result$n_periods)) {
+          replicate_result$n_periods
+        } else if ("Period" %in% names(data)) {
+          length(unique(data$Period))
+        } else {
+          2L
+        }
+        if (n_p >= 4) "2x2x4" else if (n_p == 3) "2x2x3" else "2x2x2"
       }
       
       analysis_config$detected_design <- detected_design
+      cat(sprintf("[INFO] Auto-detected design: %s (%d treatments, crossover=%s)\n",
+                  detected_design, n_treatments, is_crossover))
     }
     Sys.sleep(0.5)
     
@@ -778,24 +813,36 @@ observeEvent(input$run_analysis, {
       # Use the uploaded data directly as "NCA results"
       nca_results <- analysis_data
       
-      # Add log-transformed versions of common parameters if they don't exist
-      pk_params_to_log <- c("AUC0t", "AUC0inf", "Cmax")
-      for (param in pk_params_to_log) {
-        if (param %in% names(nca_results) && !paste0("ln", param) %in% names(nca_results)) {
-          # Check if the parameter is numeric
-          param_values <- nca_results[[param]]
-          if (is.numeric(param_values) && all(param_values > 0, na.rm = TRUE)) {
-            nca_results[[paste0("ln", param)]] <- log(param_values)
-            cat(sprintf("📊 Added log-transformed parameter: ln%s\n", param))
-          } else {
-            # Check what type of data we have for debugging
-            if (!is.numeric(param_values)) {
-              cat(sprintf("⚠️ Skipping log transformation for %s: non-numeric data (type: %s)\n", param, class(param_values)[1]))
-              cat(sprintf("  First few values: %s\n", paste(head(param_values, 3), collapse = ", ")))
-            } else if (any(param_values <= 0, na.rm = TRUE)) {
-              cat(sprintf("⚠️ Skipping log transformation for %s: contains non-positive values\n", param))
-              negative_count <- sum(param_values <= 0, na.rm = TRUE)
-              cat(sprintf("  Found %d non-positive values out of %d total\n", negative_count, length(param_values)))
+      # Add log-transformed versions of PK parameters if they don't exist.
+      # Uses fuzzy case-insensitive matching to handle column name variants from
+      # different software exports (e.g., AUCt, AUClast, AUCT all map to lnAUC0t).
+      pk_log_mappings <- list(
+        "lnAUC0t"   = c("AUC0t",   "AUCt",    "AUC0-t",  "AUC_t",   "AUClast",
+                        "AUC_last","auct",    "auc0t",   "auclast", "AUC0T",   "AUCT"),
+        "lnAUC0inf" = c("AUC0inf", "AUCinf",  "AUC0-inf","AUC_inf", "AUCinfinity",
+                        "aucinf",  "auc0inf", "AUC0INF", "AUCINF"),
+        "lnCmax"    = c("Cmax",    "CMAX",    "cmax",    "CMax",    "C_max",   "c_max")
+      )
+      col_names_lower <- tolower(names(nca_results))
+      for (ln_name in names(pk_log_mappings)) {
+        if (!ln_name %in% names(nca_results)) {
+          # Case-insensitive search for first matching candidate column
+          candidates <- pk_log_mappings[[ln_name]]
+          match_idx  <- match(tolower(candidates), col_names_lower)
+          match_idx  <- match_idx[!is.na(match_idx)]
+          if (length(match_idx) > 0) {
+            match_col    <- names(nca_results)[match_idx[1]]
+            param_values <- nca_results[[match_col]]
+            if (is.numeric(param_values) && all(param_values > 0, na.rm = TRUE)) {
+              nca_results[[ln_name]] <- log(param_values)
+              cat(sprintf("📊 Added log-transformed parameter: %s (from column '%s')\n", ln_name, match_col))
+            } else if (!is.numeric(param_values)) {
+              cat(sprintf("⚠️ Skipping log transformation for %s: non-numeric data in '%s' (type: %s)\n",
+                          ln_name, match_col, class(param_values)[1]))
+            } else {
+              n_nonpos <- sum(param_values <= 0, na.rm = TRUE)
+              cat(sprintf("⚠️ Skipping log transformation for %s: %d non-positive values in '%s'\n",
+                          ln_name, n_nonpos, match_col))
             }
           }
         }
@@ -1023,8 +1070,8 @@ observeEvent(input$run_analysis, {
           vals <- nca_results[[param]]
           if (!is.numeric(vals)) return(NULL)
           
-          test_vals <- vals[nca_results$Treatment == "Test"]
-          ref_vals <- vals[nca_results$Treatment == "Reference"]
+          test_vals <- vals[nca_results$Treatment %in% c("T", "Test")]
+          ref_vals <- vals[nca_results$Treatment %in% c("R", "Reference")]
           
           test_vals <- test_vals[!is.na(test_vals)]
           ref_vals <- ref_vals[!is.na(ref_vals)]

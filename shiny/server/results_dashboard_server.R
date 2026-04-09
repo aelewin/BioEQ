@@ -36,191 +36,186 @@ log_param_to_display_name <- function(log_param_name) {
 }
 
 #' Calculate PK Comparison Statistics
-#' 
+#'
 #' @param nca_data Data frame with NCA results containing subject_data
 #' @param param_name Name of the parameter to analyze
-#' @return List with individual and summary statistics
+#' @return List with individual_data, means_table, is_replicate, unit, parameter
 calculate_pk_comparison <- function(nca_data, param_name) {
   if (is.null(nca_data) || is.null(nca_data$subject_data)) {
     return(NULL)
   }
-  
-  # Extract subject data - already mapped with standard column names
+
   subject_data <- nca_data$subject_data
-  
-  # Check if parameter exists
+
   if (!param_name %in% names(subject_data)) {
     return(NULL)
   }
-  
-  # Expected columns from mapped data: Subject, Treatment, Period, Sequence
+
   required_cols <- c("Subject", "Treatment", param_name)
   if (!all(required_cols %in% names(subject_data))) {
-    available <- names(subject_data)
     return(list(
-      error = paste0("Required columns not found. Available columns: ", 
-                    paste(available, collapse = ", "))
+      error = paste0("Required columns not found. Available: ",
+                     paste(names(subject_data), collapse = ", "))
     ))
   }
-  
-  # Detect if this is a replicate design by checking periods per subject
+
+  # ── Helper: SAS MEANS-style descriptive stats (arithmetic) ──────────────────
+  calc_sas_means <- function(values, label) {
+    v <- values[!is.na(values) & is.finite(values)]
+    if (length(v) == 0) {
+      return(data.frame(Product = label, N = 0L,
+                        Mean = NA_real_, SD = NA_real_,
+                        CV_pct = NA_real_, Min = NA_real_,
+                        Median = NA_real_, Max = NA_real_,
+                        stringsAsFactors = FALSE))
+    }
+    m  <- mean(v)
+    s  <- if (length(v) > 1) sd(v) else NA_real_
+    cv <- if (!is.na(s) && m != 0) (s / m) * 100 else NA_real_
+    data.frame(Product = label, N = length(v),
+               Mean = m, SD = s,
+               CV_pct = cv, Min = min(v),
+               Median = median(v), Max = max(v),
+               stringsAsFactors = FALSE)
+  }
+
+  # ── Design detection ────────────────────────────────────────────────────────
   periods_per_subject <- subject_data %>%
     group_by(Subject) %>%
     summarise(n_periods = n_distinct(Period), .groups = "drop") %>%
     pull(n_periods) %>%
     max()
-  
+
   is_replicate <- periods_per_subject > 2
-  
-  # Extract parameter data
+
   param_data <- subject_data %>%
-    select(Subject, Treatment, Period, all_of(param_name)) %>%
+    select(Subject, Sequence, Treatment, Period, all_of(param_name)) %>%
     rename(Value = !!param_name) %>%
     filter(!is.na(Value))
-  
+
   if (nrow(param_data) == 0) {
     return(list(error = "No data available for this parameter"))
   }
-  
+
+  test_data <- param_data %>% filter(Treatment == "T")
+  ref_data  <- param_data %>% filter(Treatment == "R")
+
+  # ── REPLICATE DESIGN ────────────────────────────────────────────────────────
   if (is_replicate) {
-    # REPLICATE DESIGN: Calculate T1/R1, T2/R2, and Tavg/Ravg
-    
-    # Separate Test and Reference data
-    test_data <- param_data %>% filter(Treatment == "T")
-    ref_data <- param_data %>% filter(Treatment == "R")
-    
-    # For each subject, get all Test and Reference values by period
-    test_by_subject <- test_data %>%
+
+    # Build a sequence-level design map: within each (Sequence, Treatment),
+    # rank the periods in ascending order. This tells us e.g. in RTRT sequence
+    # that period 2 = T1 and period 4 = T2 for ALL subjects in that sequence,
+    # regardless of which periods they individually completed.
+    design_map <- param_data %>%
+      distinct(Sequence, Treatment, Period) %>%
+      arrange(Sequence, Treatment, as.numeric(Period)) %>%
+      group_by(Sequence, Treatment) %>%
+      mutate(rep_num = row_number()) %>%
+      ungroup()
+
+    # Label every observation with its design rep number (T1/T2/R1/R2)
+    param_labeled <- param_data %>%
+      left_join(design_map, by = c("Sequence", "Treatment", "Period"))
+
+    test_labeled <- param_labeled %>% filter(Treatment == "T")
+    ref_labeled  <- param_labeled %>% filter(Treatment == "R")
+
+    test_by_subject <- test_labeled %>%
       group_by(Subject) %>%
-      arrange(Period) %>%
       summarise(
-        T1 = if(n() >= 1) Value[1] else NA_real_,
-        T2 = if(n() >= 2) Value[2] else NA_real_,
+        T1     = { v <- Value[rep_num == 1]; if (length(v) > 0) v[1] else NA_real_ },
+        T2     = { v <- Value[rep_num == 2]; if (length(v) > 0) v[1] else NA_real_ },
         T_mean = mean(Value, na.rm = TRUE),
-        T_n = n(),
+        T_n    = n(),
         .groups = "drop"
       )
-    
-    ref_by_subject <- ref_data %>%
+
+    ref_by_subject <- ref_labeled %>%
       group_by(Subject) %>%
-      arrange(Period) %>%
       summarise(
-        R1 = if(n() >= 1) Value[1] else NA_real_,
-        R2 = if(n() >= 2) Value[2] else NA_real_,
+        R1     = { v <- Value[rep_num == 1]; if (length(v) > 0) v[1] else NA_real_ },
+        R2     = { v <- Value[rep_num == 2]; if (length(v) > 0) v[1] else NA_real_ },
         R_mean = mean(Value, na.rm = TRUE),
-        R_n = n(),
+        R_n    = n(),
         .groups = "drop"
       )
-    
-    # Merge Test and Reference data
+
     comparison_data <- full_join(test_by_subject, ref_by_subject, by = "Subject") %>%
       mutate(
-        # Individual period ratios
-        Ratio_T1_R1 = T1 / R1,
-        Ratio_T2_R2 = T2 / R2,
-        # Average ratio
-        Ratio_Tavg_Ravg = T_mean / R_mean,
-        # Flag missing data
-        Missing_Test = replace_na(T_n < periods_per_subject / 2, FALSE),
-        Missing_Ref = replace_na(R_n < periods_per_subject / 2, FALSE),
-        Subject = as.character(Subject)
+        Ratio     = T_mean / R_mean,
+        Missing_T = replace_na(T_n < max(T_n, na.rm = TRUE), FALSE),
+        Missing_R = replace_na(R_n < max(R_n, na.rm = TRUE), FALSE),
+        Subject   = as.character(Subject)
       ) %>%
       arrange(as.numeric(Subject))
-    
-    # Calculate summary statistics for each ratio type
-    calc_stats <- function(values, label) {
-      valid_values <- values[!is.na(values) & !is.infinite(values)]
-      if (length(valid_values) == 0) {
-        return(data.frame(
-          Ratio_Type = label,
-          N = 0,
-          Geometric_Mean = NA,
-          CV_percent = NA,
-          Min = NA,
-          Median = NA,
-          Max = NA
-        ))
-      }
-      
-      data.frame(
-        Ratio_Type = label,
-        N = length(valid_values),
-        Geometric_Mean = exp(mean(log(valid_values))),
-        CV_percent = 100 * sqrt(exp(var(log(valid_values))) - 1),
-        Min = min(valid_values),
-        Median = median(valid_values),
-        Max = max(valid_values)
+
+    n_T_reps <- max(comparison_data$T_n, na.rm = TRUE)
+    n_R_reps <- max(comparison_data$R_n, na.rm = TRUE)
+
+    # Build SAS MEANS-style rows: per replicate + combined if >1
+    means_rows <- list()
+
+    if (n_T_reps >= 2) {
+      means_rows <- c(means_rows,
+        list(calc_sas_means(comparison_data$T1, "T1")),
+        list(calc_sas_means(comparison_data$T2, "T2")),
+        list(calc_sas_means(c(comparison_data$T1, comparison_data$T2), "T (Total)"))
+      )
+    } else {
+      means_rows <- c(means_rows,
+        list(calc_sas_means(comparison_data$T1, "T"))
       )
     }
-    
-    summary_stats <- bind_rows(
-      calc_stats(comparison_data$Ratio_T1_R1, "T1/R1"),
-      calc_stats(comparison_data$Ratio_T2_R2, "T2/R2"),
-      calc_stats(comparison_data$Ratio_Tavg_Ravg, "T_avg/R_avg")
-    )
-    
+
+    if (n_R_reps >= 2) {
+      means_rows <- c(means_rows,
+        list(calc_sas_means(comparison_data$R1, "R1")),
+        list(calc_sas_means(comparison_data$R2, "R2")),
+        list(calc_sas_means(c(comparison_data$R1, comparison_data$R2), "R (Total)"))
+      )
+    } else {
+      means_rows <- c(means_rows,
+        list(calc_sas_means(comparison_data$R1, "R"))
+      )
+    }
+
+    means_table <- bind_rows(means_rows)
+
   } else {
-    # 2x2x2 CROSSOVER DESIGN: Simple T/R ratio per subject
-    
-    test_data <- param_data %>% filter(Treatment == "T")
-    ref_data <- param_data %>% filter(Treatment == "R")
-    
+    # ── 2×2 CROSSOVER ─────────────────────────────────────────────────────────
     comparison_data <- full_join(
       test_data %>% select(Subject, Value) %>% rename(Test = Value),
-      ref_data %>% select(Subject, Value) %>% rename(Reference = Value),
+      ref_data  %>% select(Subject, Value) %>% rename(Reference = Value),
       by = "Subject"
     ) %>%
       mutate(
-        Ratio = Test / Reference,
+        Ratio   = Test / Reference,
         Subject = as.character(Subject)
       ) %>%
       arrange(as.numeric(Subject))
-    
-    # Calculate summary statistics
-    valid_ratios <- comparison_data$Ratio[!is.na(comparison_data$Ratio) & !is.infinite(comparison_data$Ratio)]
-    
-    if (length(valid_ratios) > 0) {
-      summary_stats <- data.frame(
-        Statistic = c("N", "Geometric Mean Ratio", "CV%", "Min", "Median", "Max"),
-        Value = c(
-          length(valid_ratios),
-          exp(mean(log(valid_ratios))),
-          100 * sqrt(exp(var(log(valid_ratios))) - 1),
-          min(valid_ratios),
-          median(valid_ratios),
-          max(valid_ratios)
-        )
-      )
-    } else {
-      summary_stats <- data.frame(
-        Statistic = "No valid ratios",
-        Value = NA
-      )
-    }
+
+    means_table <- bind_rows(
+      calc_sas_means(comparison_data$Test,      "T"),
+      calc_sas_means(comparison_data$Reference, "R")
+    )
   }
-  
-  # Determine units based on parameter
+
+  # ── Units ────────────────────────────────────────────────────────────────────
   unit <- ""
-  if (grepl("AUC", param_name)) {
-    unit <- "ng·h/mL"
-  } else if (param_name == "Cmax") {
-    unit <- "ng/mL"
-  } else if (param_name %in% c("Tmax", "t_half", "Tlast")) {
-    unit <- "h"
-  } else if (param_name %in% c("CL_F", "CLss_F")) {
-    unit <- "mL/h"
-  } else if (param_name %in% c("Vd_F", "Vss_F")) {
-    unit <- "mL"
-  } else if (grepl("^(log|ln)", param_name)) {
-    unit <- paste0("ln(", sub("^(log|ln)", "", param_name), ")")
-  }
-  
+  if      (grepl("AUC", param_name))                  unit <- "ng\u00b7h/mL"
+  else if (param_name == "Cmax")                       unit <- "ng/mL"
+  else if (param_name %in% c("Tmax","t_half","Tlast")) unit <- "h"
+  else if (param_name %in% c("CL_F","CLss_F"))         unit <- "mL/h"
+  else if (param_name %in% c("Vd_F","Vss_F"))          unit <- "mL"
+  else if (grepl("^(log|ln)", param_name))             unit <- paste0("ln(", sub("^(log|ln)","",param_name), ")")
+
   return(list(
     individual_data = comparison_data,
-    summary_stats = summary_stats,
-    is_replicate = is_replicate,
-    unit = unit,
-    parameter = param_name
+    means_table     = means_table,
+    is_replicate    = is_replicate,
+    unit            = unit,
+    parameter       = param_name
   ))
 }
 
@@ -1934,83 +1929,128 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       param_mean <- param_result$param_mean
       cv_percent <- param_result$cv_percent
       
-      # ── Summary card: 3-column layout harmonized with RSABE/ABEL ──
-      summary_card <- div(class = "card mb-3",
-        div(class = "card-header bg-primary text-white",
-          h5(class = "card-title mb-0",
-            icon("calculator"),
-            sprintf(" ANOVA Results for %s", param_name)
-          )
-        ),
-        div(class = "card-body",
-          div(class = "row",
-            # Column 1: Model Summary
-            div(class = "col-md-4",
-              h6(icon("flask"), " Model Summary:"),
-              tags$table(class = "table table-sm table-borderless",
-                tags$tbody(
-                  tags$tr(tags$td(strong("ANOVA Method:")), tags$td(method_name)),
-                  if (!is.null(param_result$n_observations)) 
-                    tags$tr(tags$td(strong("Observations:")), tags$td(param_result$n_observations)),
-                  if (!is.null(param_result$residual_mse))
-                    tags$tr(tags$td(strong("Residual MSE:")), tags$td(sprintf("%.6f", param_result$residual_mse))),
-                  if (!is.null(param_result$residual_df))
-                    tags$tr(tags$td(strong("Residual DF:")), tags$td(sprintf("%.0f", param_result$residual_df)))
-                )
-              )
-            ),
-            # Column 2: Model Diagnostics
-            div(class = "col-md-4",
-              h6(icon("chart-line"), " Model Diagnostics:"),
-              tags$table(class = "table table-sm table-borderless",
-                tags$tbody(
-                  if (!is.null(param_result$r_squared) && !is.na(param_result$r_squared))
-                    tags$tr(tags$td(strong("R\u00b2:")), tags$td(sprintf("%.6f", param_result$r_squared))),
-                  if (!is.null(param_result$adj_r_squared) && !is.na(param_result$adj_r_squared))
-                    tags$tr(tags$td(strong("Adj R\u00b2:")), tags$td(sprintf("%.6f", param_result$adj_r_squared))),
-                  if (!is.na(cv_percent))
-                    tags$tr(tags$td(strong("C.V.:")), tags$td(sprintf("%.4f%%", cv_percent))),
-                  if (!is.na(root_mse))
-                    tags$tr(tags$td(strong("Root MSE:")), tags$td(sprintf("%.4f", root_mse))),
-                  if (!is.na(param_mean))
-                    tags$tr(tags$td(strong(paste0(param_name, " Mean:"))), tags$td(sprintf("%.4f", param_mean))),
-                  if (!is.null(param_result$aic))
-                    tags$tr(tags$td(strong("AIC:")), tags$td(sprintf("%.2f", param_result$aic)))
-                )
-              )
-            ),
-            # Column 3: Treatment Effect
-            div(class = "col-md-4",
-              h6(icon("exchange-alt"), " Treatment Effect:"),
-              if (!is.null(param_result$treatment_coef) && !is.na(param_result$treatment_coef)) {
-                trt_pval <- param_result$treatment_pval %||% NA
+      # ── Summary card: critical variability and BE data up front ──
+      # ── Header: model + parameter ─────────────────────────────────────────────
+      model_header <- div(class = "mb-3",
+        strong(param_name), " \u2014 ", method_name,
+        if (!is.null(param_result$n_observations))
+          tags$span(class = "text-muted ms-2",
+            sprintf("  (N = %g observations)", param_result$n_observations))
+      )
+
+      # ── Summary card: 3 focused columns ───────────────────────────────────────
+      summary_card <- {
+        # Intra-subject stats (within-subject residual error)
+        intra_cv  <- param_result$cv_intra_pct %||% NA
+        mse_intra <- param_result$residual_mse  %||% NA
+        df_intra  <- param_result$residual_df   %||% NA
+
+        # Inter-subject stats (Subject(Sequence) MS / variance component)
+        inter_cv  <- param_result$cv_inter_pct %||% NA
+        mse_intr  <- param_result$mse_inter    %||% NA
+        df_intr   <- param_result$df_inter     %||% NA
+        f_intr    <- param_result$f_inter      %||% NA
+        p_intr    <- param_result$p_inter      %||% NA
+
+        # BE assessment — derive from model coefficients directly (authoritative)
+        tcoef <- param_result$treatment_coef %||% NA
+        tse   <- param_result$treatment_se   %||% NA
+        tdf   <- param_result$residual_df    %||% NA
+        if (!is.na(tcoef) && !is.na(tse) && !is.na(tdf) && tdf > 0) {
+          t_crit_be  <- qt(0.95, tdf)
+          gmr_val    <- 100 * exp(tcoef)
+          ci_lo_be   <- 100 * exp(tcoef - t_crit_be * tse)
+          ci_hi_be   <- 100 * exp(tcoef + t_crit_be * tse)
+          be_pass    <- ci_lo_be >= 80.0 && ci_hi_be <= 125.0
+        } else {
+          gmr_val <- ci_lo_be <- ci_hi_be <- NA
+          be_pass <- FALSE
+        }
+
+        div(class = "card mb-3",
+          div(class = "card-body",
+            div(class = "row",
+              # ── Column 1: Intra-subject ───────────────────────────────────────
+              div(class = "col-md-4",
+                h6(icon("user"), " Intra-subject (within-subject):"),
                 tags$table(class = "table table-sm table-borderless",
                   tags$tbody(
-                    tags$tr(tags$td(strong("Effect (T\u2212R):")), tags$td(sprintf("%.6f", param_result$treatment_coef))),
-                    tags$tr(tags$td(strong("Standard Error:")), tags$td(sprintf("%.6f", param_result$treatment_se))),
-                    if (!is.na(trt_pval)) tags$tr(
-                      tags$td(strong("P-value:")),
-                      tags$td(format.pval(trt_pval, digits = 4))
+                    tags$tr(
+                      tags$td(strong("CV%:")),
+                      tags$td(if (!is.na(intra_cv)) sprintf("%.2f%%", intra_cv) else "\u2014")
                     ),
-                    if (!is.na(trt_pval)) tags$tr(
-                      tags$td(strong("Significance:")),
-                      tags$td(class = if (trt_pval < 0.05) "text-danger font-weight-bold" else "text-success font-weight-bold",
-                        if (trt_pval < 0.05) "Significant (p < 0.05)" else "Not Significant")
+                    tags$tr(
+                      tags$td(strong("MSE (residual):")),
+                      tags$td(if (!is.na(mse_intra)) sprintf("%.6f", mse_intra) else "\u2014")
                     ),
-                    if (!is.null(param_result$pe_estimate) && !is.na(param_result$pe_estimate))
-                      tags$tr(tags$td(strong("GMR (PE):")), tags$td(sprintf("%.2f%%", param_result$pe_estimate)))
+                    tags$tr(
+                      tags$td(strong("DF:")),
+                      tags$td(if (!is.na(df_intra)) sprintf("%.0f", df_intra) else "\u2014")
+                    )
                   )
                 )
-              } else {
-                tags$p(class = "text-muted", "Treatment effect not available")
-              }
+              ),
+              # ── Column 2: Inter-subject ───────────────────────────────────────
+              div(class = "col-md-4",
+                h6(icon("users"), " Inter-subject (between-subject):"),
+                tags$table(class = "table table-sm table-borderless",
+                  tags$tbody(
+                    tags$tr(
+                      tags$td(strong("CV%:")),
+                      tags$td(if (!is.na(inter_cv)) sprintf("%.2f%%", inter_cv) else "\u2014")
+                    ),
+                    tags$tr(
+                      tags$td(strong("MSE (Subj(Seq)):")),
+                      tags$td(if (!is.na(mse_intr)) sprintf("%.6f", mse_intr) else "\u2014")
+                    ),
+                    tags$tr(
+                      tags$td(strong("DF:")),
+                      tags$td(if (!is.na(df_intr)) sprintf("%.0f", df_intr) else "\u2014")
+                    ),
+                    if (!is.na(f_intr))
+                      tags$tr(
+                        tags$td(strong("F value:")),
+                        tags$td(sprintf("%.2f", f_intr))
+                      ),
+                    if (!is.na(p_intr))
+                      tags$tr(
+                        tags$td(strong("Pr > F:")),
+                        tags$td(format.pval(p_intr, digits = 4))
+                      )
+                  )
+                )
+              ),
+              # ── Column 3: BE Assessment ───────────────────────────────────────
+              div(class = "col-md-4",
+                h6(icon("check-circle"), " Bioequivalence Assessment:"),
+                tags$table(class = "table table-sm table-borderless",
+                  tags$tbody(
+                    tags$tr(
+                      tags$td(strong("GMR (PE):")),
+                      tags$td(if (!is.na(gmr_val)) sprintf("%.2f%%", gmr_val) else "\u2014")
+                    ),
+                    tags$tr(
+                      tags$td(strong("90% CI:")),
+                      tags$td(if (!is.na(ci_lo_be) && !is.na(ci_hi_be))
+                        sprintf("%.2f%% \u2013 %.2f%%", ci_lo_be, ci_hi_be) else "\u2014")
+                    ),
+                    tags$tr(tags$td(strong("BE Limits:")), tags$td("80.00% \u2013 125.00%")),
+                    if (!is.na(ci_lo_be) && !is.na(ci_hi_be))
+                      tags$tr(
+                        tags$td(strong("Decision:")),
+                        tags$td(class = if (be_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
+                          if (be_pass) "PASS" else "FAIL")
+                      )
+                  )
+                )
+              )
             )
           )
         )
-      )
-      
-      # ── ANOVA Tables ──
-      # Helper to render any ANOVA-style data.frame as a styled HTML table
+      }
+
+      # ── ANOVA Table ──────────────────────────────────────────────────────────
+      # Helper to render the SAS-style ANOVA data.frame as an HTML table
       render_anova_table <- function(df, header_class = "table-primary") {
         tags$table(class = "table table-striped table-hover table-sm",
           tags$thead(class = header_class,
@@ -2031,7 +2071,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                     else if (col_name %in% c("Df", "NumDF", "DenDF")) as.character(round(val))
                     else if (col_name %in% c("Sum Sq", "Sum.Sq", "Mean Sq", "Mean.Sq", "Sum of Sq", "RSS")) sprintf("%.4f", val)
                     else if (col_name %in% c("F value", "F.value", "F-value")) sprintf("%.2f", val)
-                    else if (col_name == "AIC") sprintf("%.2f", val)
                     else sprintf("%.4f", val)
                   } else as.character(val)
                   tags$td(formatted)
@@ -2041,7 +2080,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           )
         )
       }
-      
+
       anova_tables_div <- div(class = "mt-4",
         
         # Table 1: Comprehensive ANOVA (Model/Error/Corrected Total)
@@ -2229,6 +2268,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       
       # Combine all components
       return(div(
+        model_header,
         summary_card,
         anova_tables_div,
         log_scale_panel
@@ -2784,7 +2824,6 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         return(div(class = "alert alert-warning", "No NCA results available"))
       }
       
-      # Calculate comparison statistics
       comparison_results <- calculate_pk_comparison(nca_res, param)
       
       if (is.null(comparison_results) || !is.null(comparison_results$error)) {
@@ -2795,17 +2834,15 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         ))
       }
       
-      # Format the right panel display
       tagList(
         div(
           class = "panel panel-default",
           div(class = "panel-heading",
-            h4(class = "panel-title", 
-               icon("calculator"), 
+            h4(class = "panel-title",
+               icon("calculator"),
                "Summary Statistics")
           ),
           div(class = "panel-body",
-            # Sample size info at the top
             div(
               class = "alert alert-info",
               style = "margin-bottom: 20px;",
@@ -2813,12 +2850,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               paste(" Analysis based on", nrow(comparison_results$individual_data), "subjects",
                    if(comparison_results$is_replicate) " (Replicate Design)" else " (2x2x2 Crossover)")
             ),
-            
-            # Single consolidated statistics table (removed redundant h6 label)
-            div(
-              class = "stats-subsection",
-              DT::dataTableOutput(session$ns("pk_comparison_consolidated_table"))
-            )
+            DT::dataTableOutput(session$ns("pk_comparison_consolidated_table"))
           )
         )
       )
@@ -2838,12 +2870,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       formatted_data <- comparison_results$individual_data
       
       if (comparison_results$is_replicate) {
-        # REPLICATE DESIGN: Show T1, R1, T2, R2, averages, and all ratios
+        # REPLICATE DESIGN: T1, T2, T Mean, R1, R2, R Mean, T/R Ratio
         display_data <- formatted_data %>%
-          select(Subject, T1, R1, T2, R2, T_mean, R_mean, Ratio_T1_R1, Ratio_T2_R2, Ratio_Tavg_Ravg) %>%
+          select(Subject, T1, T2, T_mean, R1, R2, R_mean, Ratio) %>%
           mutate(across(where(is.numeric), ~round(., 3)))
-        
-        # Add missing data indicators
+
         display_data <- display_data %>%
           mutate(
             Notes = case_when(
@@ -2854,26 +2885,25 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               TRUE ~ ""
             )
           )
-        
-        col_names <- c("Subject", "T1", "R1", "T2", "R2", "T avg", "R avg", 
-                      "T1/R1", "T2/R2", "Tavg/Ravg", "Notes")
-        
+
+        col_names <- c("Subject", "T1", "T2", "T Mean", "R1", "R2", "R Mean",
+                       "T/R Ratio", "Notes")
+
       } else {
-        # 2x2x2 CROSSOVER: Simple T, R, and Ratio
+        # 2x2x2 CROSSOVER: Subject, Test, Reference, Ratio
         display_data <- formatted_data %>%
           select(Subject, Test, Reference, Ratio) %>%
           mutate(across(where(is.numeric), ~round(., 3)))
-        
-        # Add missing data indicators
+
         display_data <- display_data %>%
           mutate(
             Notes = case_when(
-              is.na(Test) ~ "Missing Test",
+              is.na(Test)      ~ "Missing Test",
               is.na(Reference) ~ "Missing Ref",
               TRUE ~ ""
             )
           )
-        
+
         col_names <- c("Subject", "Test", "Reference", "T/R Ratio", "Notes")
       }
       
@@ -2895,52 +2925,42 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       )
     })
     
-    # Render consolidated statistics table
+    # Render summary statistics table (SAS MEANS style)
     output$pk_comparison_consolidated_table <- DT::renderDataTable({
       param <- selected_comparison_param()
       if (is.null(param)) return(NULL)
-      
+
       nca_res <- nca_results()
       comparison_results <- calculate_pk_comparison(nca_res, param)
-      
-      if (is.null(comparison_results)) return(NULL)
-      
-      # Format summary stats based on design type
-      summary_stats <- comparison_results$summary_stats
-      
-      if (comparison_results$is_replicate) {
-        # REPLICATE DESIGN: Show stats for each ratio type
-        display_data <- summary_stats %>%
-          mutate(across(where(is.numeric), ~round(., 4)))
-        
-        col_names <- c("Ratio Type", "N", "Geometric Mean", "CV%", "Min", "Median", "Max")
-        
-      } else {
-        # 2x2x2 CROSSOVER: Standard summary
-        display_data <- summary_stats %>%
-          mutate(across(where(is.numeric), ~round(., 4)))
-        
-        col_names <- c("Statistic", "Value")
-      }
-      
+      if (is.null(comparison_results) || !is.null(comparison_results$error)) return(NULL)
+
+      display_data <- comparison_results$means_table %>%
+        mutate(across(where(is.numeric), ~round(., 4)))
+
+      col_names <- c("Group", "N", "Mean", "Std Dev", "CV%", "Min", "Median", "Max")
+
       DT::datatable(
         display_data,
         options = list(
           pageLength = 10,
-          dom = 't',  # Just table, no pagination needed for summary
+          dom = 't',
           ordering = FALSE,
-          columnDefs = list(
-            list(className = 'dt-center', targets = '_all')
-          ),
-          scrollX = TRUE
+          columnDefs = list(list(className = 'dt-center', targets = '_all')),
+          scrollX = TRUE,
+          rowCallback = DT::JS(
+            "function(row, data, index) {",
+            "  if (data[0] && data[0].indexOf('Total') >= 0) {",
+            "    $(row).css({'font-weight': 'bold', 'background-color': '#e8f4f8'});",
+            "  }",
+            "}"
+          )
         ),
         rownames = FALSE,
         colnames = col_names
       ) %>%
         DT::formatStyle(
           columns = colnames(display_data),
-          backgroundColor = '#f9f9f9',
-          fontWeight = 'bold'
+          backgroundColor = '#f9f9f9'
         )
     })
     

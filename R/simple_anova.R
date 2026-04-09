@@ -253,6 +253,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
       treatment_coef <- NA
       treatment_se <- NA
       treatment_pval <- NA
+      subj_seq_analysis <- NULL
       
       # Method-specific model fitting
       switch(anova_model,
@@ -307,43 +308,163 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           model_summary <- summary(model)
           model_aic <- AIC(model)
           
-          # Create comprehensive ANOVA table (Model/Error/Corrected Total)
-          comprehensive_anova <- data.frame(
-            Source = c("Model", "Error", "Corrected Total"),
-            Df = c(
-              sum(anova_table$Df[-nrow(anova_table)]),  # Model DF
-              anova_table$Df[nrow(anova_table)],        # Error DF  
-              sum(anova_table$Df)                       # Total DF
-            ),
-            `Sum Sq` = c(
-              sum(anova_table$`Sum Sq`[-nrow(anova_table)]),  # Model SS
-              anova_table$`Sum Sq`[nrow(anova_table)],        # Error SS
-              sum(anova_table$`Sum Sq`)                       # Total SS
-            ),
-            `Mean Sq` = c(
-              sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)]),  # Model MS
-              anova_table$`Mean Sq`[nrow(anova_table)],  # Error MS
-              NA                                          # Total MS (not applicable)
-            ),
-            `F value` = c(
-              (sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)])) / 
-              anova_table$`Mean Sq`[nrow(anova_table)],  # Model F
-              NA,                                         # Error F (not applicable)
-              NA                                          # Total F (not applicable)
-            ),
-            `Pr(>F)` = c(
-              pf((sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)])) / 
-                 anova_table$`Mean Sq`[nrow(anova_table)], 
-                 sum(anova_table$Df[-nrow(anova_table)]), 
-                 anova_table$Df[nrow(anova_table)], lower.tail = FALSE),  # Model p-value
-              NA,                                                          # Error p-value (not applicable)
-              NA                                                           # Total p-value (not applicable)
-            ),
-            check.names = FALSE,
-            stringsAsFactors = FALSE
-          )
-          rownames(comprehensive_anova) <- comprehensive_anova$Source
-          
+          # Build SAS-style source-level ANOVA table for crossover; generic fallback otherwise
+          if (study_design == "crossover" && !has_groups) {
+            at_rows      <- rownames(anova_table)
+            seq_row      <- at_rows[at_rows == "seq"]
+            subj_seq_row <- at_rows[grepl("subj.*seq|seq.*subj", at_rows) & at_rows != "seq"]
+            prd_row      <- at_rows[at_rows == "prd"]
+            drug_row     <- at_rows[grepl("^drug", at_rows)]
+            resid_row    <- at_rows[grepl("^Resid", at_rows)]
+
+            if (length(seq_row) == 1 && length(subj_seq_row) == 1 &&
+                length(prd_row) == 1 && length(drug_row) == 1 && length(resid_row) == 1) {
+
+              # Sequence tested vs Subject(Sequence) MS — between-subject error (SAS PROC GLM convention)
+              ms_seq      <- anova_table[seq_row,      "Mean Sq"]
+              ms_subj_seq <- anova_table[subj_seq_row, "Mean Sq"]
+              df_seq      <- anova_table[seq_row,      "Df"]
+              df_subj_seq <- anova_table[subj_seq_row, "Df"]
+              f_seq       <- ms_seq / ms_subj_seq
+              p_seq       <- pf(f_seq, df_seq, df_subj_seq, lower.tail = FALSE)
+
+              # Period and Treatment tested vs Residual (within-subject error) — correct
+              f_prd  <- anova_table[prd_row,  "F value"]
+              p_prd  <- anova_table[prd_row,  "Pr(>F)"]
+              f_drug <- anova_table[drug_row, "F value"]
+              p_drug <- anova_table[drug_row, "Pr(>F)"]
+
+              comprehensive_anova <- data.frame(
+                Source = c("Sequence", "Subject(Sequence)", "Period", "Treatment", "Residual"),
+                Df = c(
+                  anova_table[seq_row,      "Df"],
+                  anova_table[subj_seq_row, "Df"],
+                  anova_table[prd_row,      "Df"],
+                  anova_table[drug_row,     "Df"],
+                  anova_table[resid_row,    "Df"]
+                ),
+                `Sum Sq` = c(
+                  anova_table[seq_row,      "Sum Sq"],
+                  anova_table[subj_seq_row, "Sum Sq"],
+                  anova_table[prd_row,      "Sum Sq"],
+                  anova_table[drug_row,     "Sum Sq"],
+                  anova_table[resid_row,    "Sum Sq"]
+                ),
+                `Mean Sq` = c(
+                  anova_table[seq_row,      "Mean Sq"],
+                  anova_table[subj_seq_row, "Mean Sq"],
+                  anova_table[prd_row,      "Mean Sq"],
+                  anova_table[drug_row,     "Mean Sq"],
+                  anova_table[resid_row,    "Mean Sq"]
+                ),
+                `F value` = c(f_seq, NA, f_prd, f_drug, NA),
+                `Pr(>F)`  = c(p_seq, NA, p_prd, p_drug, NA),
+                check.names = FALSE,
+                stringsAsFactors = FALSE
+              )
+              rownames(comprehensive_anova) <- comprehensive_anova$Source
+
+              # Populate subj_seq_analysis so the dashboard error-term table renders
+              subj_seq_analysis <- list(
+                error_term = list(
+                  df = df_subj_seq,
+                  ss = anova_table[subj_seq_row, "Sum Sq"],
+                  ms = ms_subj_seq
+                ),
+                hypothesis_tests = list(
+                  period = list(
+                    df      = anova_table[prd_row,  "Df"],
+                    ss      = anova_table[prd_row,  "Sum Sq"],
+                    ms      = anova_table[prd_row,  "Mean Sq"],
+                    f_value = f_prd,
+                    p_value = p_prd
+                  ),
+                  drug = list(
+                    df      = anova_table[drug_row, "Df"],
+                    ss      = anova_table[drug_row, "Sum Sq"],
+                    ms      = anova_table[drug_row, "Mean Sq"],
+                    f_value = f_drug,
+                    p_value = p_drug
+                  )
+                )
+              )
+
+            } else {
+              # Unexpected row names: fall back to generic 3-row summary
+              cat(sprintf("  ⚠️  Expected crossover ANOVA rows not found (rows: %s); using generic summary\n",
+                          paste(at_rows, collapse = ", ")))
+              comprehensive_anova <- data.frame(
+                Source = c("Model", "Error", "Corrected Total"),
+                Df = c(
+                  sum(anova_table$Df[-nrow(anova_table)]),
+                  anova_table$Df[nrow(anova_table)],
+                  sum(anova_table$Df)
+                ),
+                `Sum Sq` = c(
+                  sum(anova_table$`Sum Sq`[-nrow(anova_table)]),
+                  anova_table$`Sum Sq`[nrow(anova_table)],
+                  sum(anova_table$`Sum Sq`)
+                ),
+                `Mean Sq` = c(
+                  sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)]),
+                  anova_table$`Mean Sq`[nrow(anova_table)],
+                  NA
+                ),
+                `F value` = c(
+                  (sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)])) /
+                    anova_table$`Mean Sq`[nrow(anova_table)],
+                  NA, NA
+                ),
+                `Pr(>F)` = c(
+                  pf((sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)])) /
+                       anova_table$`Mean Sq`[nrow(anova_table)],
+                     sum(anova_table$Df[-nrow(anova_table)]),
+                     anova_table$Df[nrow(anova_table)], lower.tail = FALSE),
+                  NA, NA
+                ),
+                check.names = FALSE,
+                stringsAsFactors = FALSE
+              )
+              rownames(comprehensive_anova) <- comprehensive_anova$Source
+            }
+
+          } else {
+            # Parallel design or crossover with groups: generic 3-row summary
+            comprehensive_anova <- data.frame(
+              Source = c("Model", "Error", "Corrected Total"),
+              Df = c(
+                sum(anova_table$Df[-nrow(anova_table)]),
+                anova_table$Df[nrow(anova_table)],
+                sum(anova_table$Df)
+              ),
+              `Sum Sq` = c(
+                sum(anova_table$`Sum Sq`[-nrow(anova_table)]),
+                anova_table$`Sum Sq`[nrow(anova_table)],
+                sum(anova_table$`Sum Sq`)
+              ),
+              `Mean Sq` = c(
+                sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)]),
+                anova_table$`Mean Sq`[nrow(anova_table)],
+                NA
+              ),
+              `F value` = c(
+                (sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)])) /
+                  anova_table$`Mean Sq`[nrow(anova_table)],
+                NA, NA
+              ),
+              `Pr(>F)` = c(
+                pf((sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)])) /
+                     anova_table$`Mean Sq`[nrow(anova_table)],
+                   sum(anova_table$Df[-nrow(anova_table)]),
+                   anova_table$Df[nrow(anova_table)], lower.tail = FALSE),
+                NA, NA
+              ),
+              check.names = FALSE,
+              stringsAsFactors = FALSE
+            )
+            rownames(comprehensive_anova) <- comprehensive_anova$Source
+          }
+
           # Extract treatment effect
           coeffs <- coef(model)
           if (drug_coef_name %in% names(coeffs)) {
@@ -502,19 +623,10 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           cat("  [DEBUG] ANOVA table obtained\n")
           cat(sprintf("  [DEBUG] ANOVA table dimensions: %d rows, %d cols\n", nrow(anova_table), ncol(anova_table)))
           
-          # For nlme, we need to create Type III SS manually since drop1() doesn't work well
-          # We'll get the anova table and derive the other tables
-          cat("  [DEBUG] Creating Type III SS table...\n")
-          type3_ss <- tryCatch({
-            # Try to get marginal effects
-            cat("  [DEBUG] Attempting marginal anova...\n")
-            anova(model, type = "marginal")
-          }, error = function(e) {
-            # Fallback: use sequential sums of squares as approximation
-            cat("  [DEBUG] Marginal anova not available, using sequential as approximation\n")
-            anova_table
-          })
-          cat("  [DEBUG] Type III SS table created\n")
+          # Type III SS via marginal anova is not supported by nlme; suppress to avoid
+          # showing Type I SS under a Type III label
+          cat("  [DEBUG] Skipping Type III SS for nlme (not supported)\n")
+          type3_ss <- NULL
           cat("  [DEBUG] Type III SS table created\n")
           
           # Create comprehensive ANOVA table (Model/Error/Corrected Total) for nlme
@@ -629,10 +741,18 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             anova_table
           })
           
+          # Extract treatment DF (Satterthwaite approximation) before building comprehensive table
+          coeffs_tmp      <- model_summary$coefficients
+          df_val_comp     <- if (drug_coef_name %in% rownames(coeffs_tmp)) {
+            as.numeric(coeffs_tmp[drug_coef_name, "df"])
+          } else {
+            nrow(complete_data) - length(lme4::fixef(model))
+          }
+
           # Create comprehensive ANOVA table for lmerTest (Satterthwaite)
           residuals_vec <- residuals(model)
           residual_ss <- sum(residuals_vec^2)
-          residual_df <- nrow(complete_data) - length(fixef(model))
+          residual_df <- df_val_comp  # Satterthwaite DF for within-subject residual
           residual_ms <- residual_ss / residual_df
           
           # Calculate model SS
@@ -708,10 +828,18 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             anova_table
           })
           
+          # Extract treatment DF (Kenward-Roger approximation) before building comprehensive table
+          coeffs_tmp      <- model_summary$coefficients
+          df_val_comp     <- if (drug_coef_name %in% rownames(coeffs_tmp)) {
+            as.numeric(coeffs_tmp[drug_coef_name, "df"])
+          } else {
+            nrow(complete_data) - length(lme4::fixef(model))
+          }
+
           # Create comprehensive ANOVA table for lmerTest (Kenward-Roger)
           residuals_vec <- residuals(model)
           residual_ss <- sum(residuals_vec^2)
-          residual_df <- nrow(complete_data) - length(fixef(model))
+          residual_df <- df_val_comp  # Kenward-Roger DF for within-subject residual
           residual_ms <- residual_ss / residual_df
           
           # Calculate model SS
@@ -849,7 +977,50 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
       cv_percent <- if (!is.na(param_mean) && !is.na(root_mse) && param_mean != 0) {
         (root_mse / param_mean) * 100
       } else NA
-      
+
+      # ── Intra-subject CV% (within-subject) ──────────────────────────────────
+      # CV% = sqrt(Residual MSE) * 100  (SAS/WinNonlin/Phoenix convention)
+      cv_intra_pct <- if (!is.na(residual_mse) && residual_mse > 0) {
+        sqrt(residual_mse) * 100
+      } else NA
+
+      # ── Inter-subject stats (between-subject) ────────────────────────────────
+      # For fixed model: MSE_inter = Subject(Seq) MS (from ANOVA table directly)
+      #   CV% = sqrt(MS_subj_seq) * 100; F = MS_subj_seq / MS_residual
+      # For mixed models: MSE_inter = random-intercept variance component (REML)
+      cv_inter_pct <- NA
+      mse_inter    <- NA
+      df_inter     <- NA
+      f_inter      <- NA
+      p_inter      <- NA
+      n_subjects   <- length(unique(complete_data$subj))
+      if (anova_model == "fixed") {
+        ms_ss <- tryCatch(subj_seq_analysis$error_term$ms, error = function(e) NA)
+        df_ss <- tryCatch(subj_seq_analysis$error_term$df, error = function(e) NA)
+        if (!is.null(ms_ss) && !is.na(ms_ss) && !is.na(residual_mse) &&
+            !is.null(df_ss)  && !is.na(df_ss)  && !is.na(residual_df)) {
+          mse_inter    <- ms_ss
+          cv_inter_pct <- sqrt(ms_ss) * 100
+          df_inter     <- df_ss
+          f_inter      <- ms_ss / residual_mse
+          p_inter      <- pf(f_inter, df_ss, residual_df, lower.tail = FALSE)
+        }
+      } else if (anova_model == "nlme") {
+        tryCatch({
+          vc           <- nlme::VarCorr(model)
+          mse_inter    <- as.numeric(vc[1, "Variance"])
+          cv_inter_pct <- sqrt(mse_inter) * 100
+          df_inter     <- n_subjects - nlevels(complete_data$seq)
+        }, error = function(e) NULL)
+      } else if (anova_model %in% c("satterthwaite", "kenward-roger")) {
+        tryCatch({
+          vc           <- lme4::VarCorr(model)
+          mse_inter    <- as.numeric(vc$subject[1, 1])
+          cv_inter_pct <- sqrt(mse_inter) * 100
+          df_inter     <- n_subjects - nlevels(complete_data$seq)
+        }, error = function(e) NULL)
+      }
+
       cat(sprintf("  [DEBUG] About to create results list for %s\n", param))
       cat(sprintf("  [DEBUG] Variable checks before assignment:\n"))
       cat(sprintf("    pe_estimate: %s (exists: %s)\n", 
@@ -893,8 +1064,16 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         param_mean = param_mean,
         root_mse = root_mse,
         cv_percent = cv_percent,
+        cv_intra_pct = cv_intra_pct,
+        cv_inter_pct = cv_inter_pct,
+        mse_inter = mse_inter,
+        df_inter = df_inter,
+        f_inter = f_inter,
+        p_inter = p_inter,
+        n_subjects = n_subjects,
         treatment_se = treatment_se,
-        treatment_pval = treatment_pval
+        treatment_pval = treatment_pval,
+        subj_seq_analysis = subj_seq_analysis
       )
       
     }, error = function(e) {

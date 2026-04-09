@@ -13,6 +13,17 @@ for (pkg in required_packages) {
   }
 }
 
+# Consistent color palette for treatments and replicate periods
+# T1 = dark blue, T2 = light blue, R1 = dark red, R2 = light red/salmon
+BIOEQ_COLORS <- c(
+  "T1"        = "#1F78B4",  # Dark blue  — Test replicate 1
+  "T2"        = "#A6CEE3",  # Light blue — Test replicate 2
+  "R1"        = "#E31A1C",  # Dark red   — Reference replicate 1
+  "R2"        = "#FB9A99",  # Light red  — Reference replicate 2
+  "Test"      = "#1F78B4",  # Fallback for 2x2x2
+  "Reference" = "#E31A1C"   # Fallback for 2x2x2
+)
+
 #' Validate concentration-time data structure
 #'
 #' @param data Data frame to validate
@@ -330,29 +341,65 @@ create_individual_concentration_plot <- function(data, selected_subjects = NULL,
     # Start with empty plotly object
     p <- plot_ly()
     
+    # Does data have per-replicate labels?
+    has_tp_indiv <- "TreatmentPeriod" %in% names(plot_data) && !all(is.na(plot_data$TreatmentPeriod))
+
     # Add individual profiles for each selected subject
     for (subj in unique(plot_data$Subject)) {
-      for (form in unique(plot_data$Treatment)) {
-        subj_data <- plot_data[plot_data$Subject == subj & plot_data$Treatment == form, ]
-        if (nrow(subj_data) > 0) {
-          color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
-          
-          p <- p %>% add_trace(
-            x = subj_data$Time, 
-            y = subj_data$Concentration,
-            type = "scatter", mode = "lines+markers",
-            line = list(color = color_val, width = 2),
-            marker = list(color = color_val, size = 6),
-            opacity = 0.8,
-            name = paste("Subject", subj, "-", form),
-            hovertemplate = paste(
-              "<b>Subject:</b>", subj, "<br>",
-              "<b>Treatment:</b>", form, "<br>",
-              "<b>Time:</b> %{x}<br>",
-              "<b>Concentration:</b> %{y}<br>",
-              "<extra></extra>"
+      if (has_tp_indiv) {
+        for (tp in sort(unique(plot_data$TreatmentPeriod[!is.na(plot_data$TreatmentPeriod)]))) {
+          subj_data <- plot_data[
+            !is.na(plot_data$TreatmentPeriod) &
+            plot_data$Subject == subj &
+            plot_data$TreatmentPeriod == tp, ]
+          if (nrow(subj_data) > 0) {
+            color_val <- unname(BIOEQ_COLORS[tp])
+            if (is.na(color_val)) color_val <- "#888888"
+
+            p <- p %>% add_trace(
+              x = subj_data$Time,
+              y = subj_data$Concentration,
+              type = "scatter", mode = "lines+markers",
+              line   = list(color = color_val, width = 2),
+              marker = list(color = color_val, size  = 6),
+              opacity = 0.8,
+              name = paste("Subject", subj, "-", tp),
+              legendgroup = tp,
+              hovertemplate = paste0(
+                "<b>Subject:</b> ",      subj, "<br>",
+                "<b>Period:</b> ",       tp,   "<br>",
+                "<b>Time:</b> %{x}<br>",
+                "<b>Concentration:</b> %{y}<br>",
+                "<extra></extra>"
+              )
             )
-          )
+          }
+        }
+      } else {
+        for (form in unique(plot_data$Treatment)) {
+          subj_data <- plot_data[plot_data$Subject == subj & plot_data$Treatment == form, ]
+          if (nrow(subj_data) > 0) {
+            color_val <- unname(BIOEQ_COLORS[form])
+            if (is.na(color_val)) color_val <- "#1F78B4"
+
+            p <- p %>% add_trace(
+              x = subj_data$Time,
+              y = subj_data$Concentration,
+              type = "scatter", mode = "lines+markers",
+              line   = list(color = color_val, width = 2),
+              marker = list(color = color_val, size  = 6),
+              opacity = 0.8,
+              name = paste("Subject", subj, "-", form),
+              legendgroup = form,
+              hovertemplate = paste0(
+                "<b>Subject:</b> ",      subj, "<br>",
+                "<b>Treatment:</b> ",    form, "<br>",
+                "<b>Time:</b> %{x}<br>",
+                "<b>Concentration:</b> %{y}<br>",
+                "<extra></extra>"
+              )
+            )
+          }
         }
       }
     }
@@ -596,83 +643,123 @@ plot_concentration_time_static <- function(data, log_scale = FALSE, individual =
 #' @export
 plot_concentration_time_interactive <- function(data, log_scale = FALSE, individual = TRUE, mean_profile = TRUE) {
   # Use silent validation for better Shiny integration
-  validation <- validate_conc_time_data(data, silent = FALSE)  # Keep original behavior for backward compatibility
-  
+  validation <- validate_conc_time_data(data, silent = FALSE)
+
+  # Does data have per-replicate period labels (T1/T2/R1/R2)?
+  has_tp <- "TreatmentPeriod" %in% names(data) && !all(is.na(data$TreatmentPeriod))
+
   # Start with empty plotly object
   p <- plot_ly()
-  
+
   if (individual) {
-    # Add individual profiles with hover information
-    for (subj in unique(data$Subject)) {
-      for (form in unique(data$Treatment)) {
-        subj_data <- data[data$Subject == subj & data$Treatment == form, ]
-        if (nrow(subj_data) > 0) {
-          color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
-          
-          p <- p %>% add_trace(
-            x = subj_data$Time, 
-            y = subj_data$Concentration,
-            type = "scatter", mode = "lines+markers",
-            line = list(color = color_val, width = 1),
-            marker = list(color = color_val, size = 4),
-            opacity = 0.4,
-            name = paste(form, "- Subject", subj),
-            legendgroup = form,
-            showlegend = subj == unique(data$Subject)[1],  # Show legend only for first subject
-            hovertemplate = paste(
-              "<b>Subject:</b>", subj, "<br>",
-              "<b>Treatment:</b>", form, "<br>",
-              "<b>Time:</b> %{x}<br>",
-              "<b>Concentration:</b> %{y}<br>",
-              "<extra></extra>"
+    if (has_tp) {
+      # Replicate design: one trace per (subject, TreatmentPeriod), colored distinctly
+      all_subs <- unique(data$Subject)
+      all_tps  <- sort(unique(data$TreatmentPeriod[!is.na(data$TreatmentPeriod)]))
+
+      for (subj in all_subs) {
+        for (tp in all_tps) {
+          subj_data <- data[
+            !is.na(data$TreatmentPeriod) &
+            data$Subject == subj &
+            data$TreatmentPeriod == tp, ]
+          if (nrow(subj_data) > 0) {
+            color_val <- unname(BIOEQ_COLORS[tp])
+            if (is.na(color_val)) color_val <- "#888888"
+
+            p <- p %>% add_trace(
+              x = subj_data$Time,
+              y = subj_data$Concentration,
+              type = "scatter", mode = "lines+markers",
+              line   = list(color = color_val, width = 1),
+              marker = list(color = color_val, size  = 4),
+              opacity = 0.4,
+              name = tp,
+              legendgroup = tp,
+              showlegend = (subj == all_subs[1]),
+              hovertemplate = paste0(
+                "<b>Subject:</b> ", subj, "<br>",
+                "<b>Period:</b> ",  tp, "<br>",
+                "<b>Time:</b> %{x}<br>",
+                "<b>Concentration:</b> %{y}<br>",
+                "<extra></extra>"
+              )
             )
-          )
+          }
+        }
+      }
+    } else {
+      # 2x2x2: original Treatment-based coloring
+      for (subj in unique(data$Subject)) {
+        for (form in unique(data$Treatment)) {
+          subj_data <- data[data$Subject == subj & data$Treatment == form, ]
+          if (nrow(subj_data) > 0) {
+            color_val <- unname(BIOEQ_COLORS[form])
+            if (is.na(color_val)) color_val <- "#1F78B4"
+
+            p <- p %>% add_trace(
+              x = subj_data$Time,
+              y = subj_data$Concentration,
+              type = "scatter", mode = "lines+markers",
+              line   = list(color = color_val, width = 1),
+              marker = list(color = color_val, size  = 4),
+              opacity = 0.4,
+              name = paste(form, "- Subject", subj),
+              legendgroup = form,
+              showlegend = (subj == unique(data$Subject)[1]),
+              hovertemplate = paste0(
+                "<b>Subject:</b> ", subj, "<br>",
+                "<b>Treatment:</b> ", form, "<br>",
+                "<b>Time:</b> %{x}<br>",
+                "<b>Concentration:</b> %{y}<br>",
+                "<extra></extra>"
+              )
+            )
+          }
         }
       }
     }
   }
-  
+
   if (mean_profile) {
-    # Calculate mean data
+    # Mean profiles always by Treatment (T/R overall — all replicates pooled)
     mean_data <- data %>%
       group_by(Time, Treatment) %>%
       summarise(
         Mean_Conc = mean(Concentration, na.rm = TRUE),
-        SE = sd(Concentration, na.rm = TRUE) / sqrt(n()),
-        N = n(),
-        .groups = 'drop'
+        SE        = sd(Concentration,   na.rm = TRUE) / sqrt(n()),
+        N         = n(),
+        .groups   = 'drop'
       )
-    
-    # Add mean profiles
+
     for (form in unique(mean_data$Treatment)) {
       form_data <- mean_data[mean_data$Treatment == form, ]
-      color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
-      
-      # Add error bars
+      color_val <- unname(BIOEQ_COLORS[form])
+      if (is.na(color_val)) color_val <- "#1F78B4"
+
       p <- p %>% add_trace(
-        x = form_data$Time, 
+        x = form_data$Time,
         y = form_data$Mean_Conc,
         error_y = list(
-          type = "data",
-          array = form_data$SE,
-          color = color_val,
+          type      = "data",
+          array     = form_data$SE,
+          color     = color_val,
           thickness = 2,
-          width = 3
+          width     = 3
         ),
         type = "scatter", mode = "lines+markers",
-        line = list(color = color_val, width = 3),
-        marker = list(color = color_val, size = 8),
+        line   = list(color = color_val, width = 3),
+        marker = list(color = color_val, size  = 8),
         name = paste("Mean", form),
         legendgroup = paste("mean", form),
-        hovertemplate = paste(
-          "<b>Treatment:</b>", form, "<br>",
+        hovertemplate = paste0(
+          "<b>Treatment:</b> ", form, "<br>",
           "<b>Time:</b> %{x}<br>",
           "<b>Mean Concentration:</b> %{y:.3f}<br>",
-          "<b>SE:</b> %{text}<br>",
           "<b>N:</b> %{text}<br>",
           "<extra></extra>"
         ),
-        text = paste("SE:", round(form_data$SE, 3), "| N:", form_data$N)
+        text = paste("N:", form_data$N)
       )
     }
   }

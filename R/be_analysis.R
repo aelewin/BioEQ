@@ -121,9 +121,9 @@ perform_average_be <- function(data, design = "auto", params = list()) {
   results <- switch(design,
     "2x2x2" = be_crossover_2x2x2(data, alpha, be_limits, parameters, anova_model, anova_results, be_limits_per_param),
     "parallel" = be_parallel(data, alpha, be_limits, parameters, welch_correction, be_limits_per_param),
-    "replicate" = be_replicate(data, alpha, be_limits, parameters),
-    "2x2x3" = be_replicate(data, alpha, be_limits, parameters, design = "2x2x3"),
-    "2x2x4" = be_replicate(data, alpha, be_limits, parameters, design = "2x2x4"),
+    "replicate" = be_replicate(data, alpha, be_limits, parameters, anova_results = anova_results, be_limits_per_param = be_limits_per_param),
+    "2x2x3" = be_replicate(data, alpha, be_limits, parameters, anova_results = anova_results, be_limits_per_param = be_limits_per_param),
+    "2x2x4" = be_replicate(data, alpha, be_limits, parameters, anova_results = anova_results, be_limits_per_param = be_limits_per_param),
     stop("Unsupported study design for ABE: ", design)
   )
   
@@ -372,12 +372,27 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
           }
         }
         
-        if (!is.null(param_anova) && !is.null(param_anova$pe_estimate)) {
-          # Extract from existing ANOVA results
-          pe <- param_anova$pe_estimate
-          ci_lo_val <- param_anova$ci_lower
-          ci_hi_val <- param_anova$ci_upper
-          df_val <- param_anova$residual_df
+        if (!is.null(param_anova) && !is.null(param_anova$treatment_coef) &&
+            !is.na(param_anova$treatment_coef)) {
+          # Recompute CIs from model coefficients using the same Wald approach as
+          # extract_be_from_anova(), ensuring the BE decision is consistent regardless
+          # of which ANOVA model was used (lm confint vs nlme profile likelihood)
+          treatment_diff_abel <- param_anova$treatment_coef
+          treatment_se_abel   <- param_anova$treatment_se
+          df_val              <- param_anova$residual_df
+
+          if (!is.null(treatment_se_abel) && !is.na(treatment_se_abel) &&
+              !is.null(df_val) && !is.na(df_val) && df_val > 0) {
+            t_crit    <- qt(1 - alpha, df_val)  # one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
+            pe        <- 100 * exp(treatment_diff_abel)
+            ci_lo_val <- 100 * exp(treatment_diff_abel - t_crit * treatment_se_abel)
+            ci_hi_val <- 100 * exp(treatment_diff_abel + t_crit * treatment_se_abel)
+          } else {
+            # Fallback to stored values if coefficient SE is unavailable
+            pe        <- param_anova$pe_estimate
+            ci_lo_val <- param_anova$ci_lower
+            ci_hi_val <- param_anova$ci_upper
+          }
           
           # Fixed limits for non-scaling parameters
           fixed_lower <- 80.0
@@ -632,7 +647,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
           stringsAsFactors = FALSE
         ),
         treatment_coef = log(gmr),  # Log of GMR
-        treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha/2, anova_df),  # Back-calculate SE
+        treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha, anova_df),  # Back-calculate SE; one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
         residual_mse = sw_r^2,
         residual_df = anova_df,
         n_observations = n_total * design_info$n_periods,
@@ -897,63 +912,85 @@ be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
 #' @param scaling Whether to use scaled average bioequivalence
 #' @return BE analysis results
 #' @export
-be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25), 
+be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
                         parameters = c("lnAUC0t", "lnAUC0inf", "lnCmax"),
-                        scaling = TRUE) {
-  
-  cat("🔬 Analyzing replicate crossover bioequivalence study...\n")
-  
-  # Validate PK parameters
-  pk_params <- validate_pk_parameters(data, parameters)
-  
-  # Add sequence information
-  data_with_seq <- add_sequence_info_replicate(data)
-  
-  # Detect replicate design structure
-  design_info <- detect_replicate_design(data_with_seq)
-  cat("📋 Detected design:", design_info$design_name, "\n")
-  cat("   Sequences:", paste(design_info$sequences, collapse = ", "), "\n")
-  cat("   Periods:", design_info$n_periods, "\n")
-  if (design_info$is_partial_replicate) {
-    cat("   Type: Partial replicate (reference replicated only)\n")
-  } else {
-    cat("   Type: Full replicate (both formulations replicated)\n")
+                        scaling = TRUE,
+                        anova_results = NULL,
+                        be_limits_per_param = NULL) {
+
+  cat("🔬 Analyzing replicate crossover bioequivalence study (ABE)...\n")
+
+  # ── PRIMARY PATH: use pre-computed ANOVA results (same approach as 2x2x2) ──
+  # This is the preferred path when ANOVA has already been run by the Shiny app.
+  if (!is.null(anova_results) && length(anova_results) > 0) {
+    cat("📊 Using pre-computed ANOVA results for replicate BE analysis...\n")
+
+    be_from_anova <- extract_be_from_anova(anova_results, alpha, be_limits, be_limits_per_param)
+    filtered_ci <- be_from_anova$confidence_intervals
+    filtered_ci <- filtered_ci[!sapply(filtered_ci, is.null)]
+
+    if (length(filtered_ci) > 0) {
+      be_conclusions <- evaluate_bioequivalence(filtered_ci, be_limits)
+
+      result <- create_be_results(
+        design = "replicate",
+        data = data,
+        anova_results = be_from_anova$anova_results,
+        confidence_intervals = filtered_ci,
+        be_conclusions = be_conclusions,
+        parameters = names(filtered_ci),
+        alpha = alpha,
+        be_limits = be_limits
+      )
+
+      cat("✅ Replicate ABE analysis from ANOVA completed!\n")
+      return(result)
+    }
+    cat("⚠️  ANOVA path produced no CIs — falling back to mixed model\n")
   }
-  cat("\n")
-  
-  # Perform analysis for each parameter
+
+  # ── FALLBACK PATH: standalone mixed-effects model ──
+  # Used when anova_results are not available (standalone calls).
+  pk_params <- validate_pk_parameters(data, parameters)
+
+  data_with_seq <- add_sequence_info_replicate(data)
+
+  design_info <- tryCatch(detect_replicate_design(data_with_seq), error = function(e) list(
+    design_name = "Replicate", sequences = character(0), n_periods = NA,
+    is_replicate = TRUE, is_partial_replicate = FALSE
+  ))
+  cat("📋 Detected design:", design_info$design_name, "\n")
+  cat("   Periods:", design_info$n_periods, "\n")
+
   confidence_intervals <- list()
-  variability_results <- list()
-  scaling_decisions <- list()
-  
+  variability_results  <- list()
+  scaling_decisions    <- list()
+
   for (param in pk_params) {
     cat("  Analyzing", param, "...\n")
-    
-    # Perform replicate analysis with potential scaling
-    param_results <- analyze_replicate_parameter(data_with_seq, param, alpha, scaling)
-    
-    if (!is.null(param_results)) {
-      confidence_intervals[[param]] <- param_results$ci
-      variability_results[[param]] <- param_results$variability
-      scaling_decisions[[param]] <- list(
-        use_scaling = param_results$scaling_applied,
-        cv_wr = param_results$variability$cv_wr,
-        threshold = 30
-      )
-      
-      cat("    Within-subject CV:", round(param_results$variability$cv_wr, 1), "%\n")
-      cat("    Scaling applied:", ifelse(param_results$scaling_applied, "YES", "NO"), "\n")
-      cat("    ", param, ": ", sprintf("%.1f%% (%.1f%% - %.1f%%)", 
-                                      param_results$ci$point_estimate, 
-                                      param_results$ci$ci_lower, 
-                                      param_results$ci$ci_upper), "\n")
-    }
+    tryCatch({
+      param_results <- analyze_replicate_parameter(data_with_seq, param, alpha, scaling)
+      if (!is.null(param_results)) {
+        confidence_intervals[[param]] <- param_results$ci
+        variability_results[[param]]  <- param_results$variability
+        scaling_decisions[[param]] <- list(
+          use_scaling = param_results$scaling_applied,
+          cv_wr = param_results$variability$cv_wr,
+          threshold = 30
+        )
+        cat(sprintf("    CV_wR: %.1f%%  CI: %.1f%% [%.1f%%, %.1f%%]\n",
+                    param_results$variability$cv_wr,
+                    param_results$ci$point_estimate,
+                    param_results$ci$ci_lower,
+                    param_results$ci$ci_upper))
+      }
+    }, error = function(e) {
+      cat(sprintf("    ❌ Mixed model failed for %s: %s\n", param, e$message))
+    })
   }
-  
-  # Generate bioequivalence conclusions
+
   be_conclusions <- evaluate_bioequivalence(confidence_intervals, be_limits)
-  
-  # Compile results
+
   result <- create_be_results(
     design = "replicate",
     data = data_with_seq,
@@ -966,7 +1003,7 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
     scaling_decisions = scaling_decisions,
     design_info = design_info
   )
-  
+
   cat("✅ Replicate crossover analysis completed!\n")
   return(result)
 }
@@ -1180,7 +1217,7 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
       next
     }
     
-    t_critical <- qt(1 - alpha/2, df)
+    t_critical <- qt(1 - alpha, df)  # one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
     ci_lower_log <- treatment_diff - t_critical * treatment_se
     ci_upper_log <- treatment_diff + t_critical * treatment_se
     
@@ -1502,6 +1539,147 @@ perform_replicate_mixed_effects <- function(param_data, parameter) {
     random_effects = nlme::random.effects(model),
     variance_components = nlme::VarCorr(model)
   ))
+}
+
+#' Add Sequence Information for Replicate Design
+#'
+#' Adds a Sequence column to replicate data if not already present,
+#' by concatenating Treatment values ordered by Period for each Subject.
+#'
+#' @param data Data frame with Subject, Treatment, Period columns
+#' @return Data frame with Sequence column added
+add_sequence_info_replicate <- function(data) {
+  if ("Sequence" %in% names(data)) {
+    return(data)
+  }
+
+  subjects <- unique(data$Subject)
+  seq_map <- vapply(subjects, function(s) {
+    subj_data <- data[data$Subject == s, ]
+    subj_data <- subj_data[order(as.numeric(as.character(subj_data$Period))), ]
+    paste(as.character(subj_data$Treatment), collapse = "")
+  }, character(1))
+
+  seq_df <- data.frame(Subject = subjects, Sequence = seq_map, stringsAsFactors = FALSE)
+  data <- merge(data, seq_df, by = "Subject", all.x = TRUE)
+  return(data)
+}
+
+#' Calculate Within-Subject Variability from Mixed-Effects Model
+#'
+#' Extracts within-subject (residual) variance and computes CV_wR from the
+#' nlme mixed-effects model fitted for a replicate design.
+#'
+#' @param mixed_result Output from perform_replicate_mixed_effects
+#' @param design_info Output from detect_replicate_design
+#' @return List with cv_wr (%), sigma_wr (SD), sigma2_wr (variance)
+calculate_within_subject_variability <- function(mixed_result, design_info) {
+
+  vc <- mixed_result$variance_components
+
+  # nlme::VarCorr returns a character matrix; "Variance" column contains the values.
+  # The Residual row is identified by rowname "Residual".
+  sigma2_res <- tryCatch({
+    # VarCorr is a character matrix with "Variance" and "StdDev" columns
+    variance_col <- vc[, "Variance"]
+    # Find Residual row
+    res_idx <- which(rownames(vc) == "Residual")
+    if (length(res_idx) == 0) res_idx <- nrow(vc)
+    as.numeric(variance_col[res_idx])
+  }, error = function(e) NA_real_)
+
+  # Fallback to model sigma if VarCorr parsing failed
+  if (is.null(sigma2_res) || is.na(sigma2_res) || sigma2_res <= 0) {
+    sigma2_res <- as.numeric(mixed_result$model$sigma)^2
+  }
+
+  sigma_wr <- sqrt(sigma2_res)
+  cv_wr <- sqrt(exp(sigma2_res) - 1) * 100  # exact CV from log-scale variance
+
+  cat(sprintf("    Within-subject variance (sigma2_wR): %.6f\n", sigma2_res))
+  cat(sprintf("    Within-subject SD (sigma_wR):        %.6f\n", sigma_wr))
+  cat(sprintf("    Within-subject CV (CV_wR):           %.2f%%\n", cv_wr))
+
+  return(list(
+    sigma2_wr = sigma2_res,
+    sigma_wr  = sigma_wr,
+    cv_wr     = cv_wr
+  ))
+}
+
+#' Calculate Unscaled Confidence Interval from Mixed-Effects Model
+#'
+#' Extracts the treatment effect and its SE from the nlme model and
+#' computes the standard 90% CI on the ratio scale.
+#'
+#' @param mixed_result Output from perform_replicate_mixed_effects
+#' @param alpha Significance level (one-sided, default 0.05 for 90% CI)
+#' @return List with point_estimate, ci_lower, ci_upper, confidence_level,
+#'         treatment_diff (log scale), degrees_freedom
+calculate_unscaled_ci <- function(mixed_result, alpha) {
+
+  model <- mixed_result$model
+  model_summary <- summary(model)
+
+  # Extract treatment coefficient and SE from fixed-effects table
+  tTable <- model_summary$tTable
+  trt_rows <- grepl("^Treatment", rownames(tTable), ignore.case = TRUE)
+
+  if (!any(trt_rows)) {
+    stop("No Treatment fixed effect found in mixed model t-table. Rows: ",
+         paste(rownames(tTable), collapse = ", "))
+  }
+
+  # Take first Treatment row (Treatment T vs R as reference)
+  trt_row <- tTable[trt_rows, , drop = FALSE][1, ]
+  treatment_diff <- trt_row["Value"]
+  treatment_se   <- trt_row["Std.Error"]
+  df_val         <- trt_row["DF"]
+
+  # t-value for one-sided alpha (two one-sided tests = 90% CI when alpha = 0.05)
+  t_val <- qt(1 - alpha, df_val)
+
+  ci_lower_log <- treatment_diff - t_val * treatment_se
+  ci_upper_log <- treatment_diff + t_val * treatment_se
+
+  point_estimate <- exp(treatment_diff) * 100
+  ci_lower       <- exp(ci_lower_log) * 100
+  ci_upper       <- exp(ci_upper_log) * 100
+
+  cat(sprintf("    Treatment diff (log): %.6f  SE: %.6f  DF: %.1f\n",
+              treatment_diff, treatment_se, df_val))
+  cat(sprintf("    90%% CI: [%.4f%%, %.4f%%]\n", ci_lower, ci_upper))
+
+  return(list(
+    point_estimate   = point_estimate,
+    ci_lower         = ci_lower,
+    ci_upper         = ci_upper,
+    confidence_level = (1 - alpha * 2) * 100,
+    treatment_diff   = treatment_diff,
+    treatment_se     = treatment_se,
+    degrees_freedom  = df_val,
+    ci_lower_log     = ci_lower_log,
+    ci_upper_log     = ci_upper_log
+  ))
+}
+
+#' Calculate Scaled (Reference-Scaled ABE) CI from Mixed-Effects Model
+#'
+#' Uses within-subject reference variance to compute scaled limits and
+#' applies the standard linearized criterion (Howe UCB) for scaled ABE.
+#' This is the ABE-with-scaling fallback when CV_wR > 30% but full RSABE
+#' is not selected. For full replicate studies with ABE type, falls back
+#' to unscaled CI to avoid over-widening limits without regulatory basis.
+#'
+#' @param mixed_result Output from perform_replicate_mixed_effects
+#' @param variability Output from calculate_within_subject_variability
+#' @param alpha Significance level (default 0.05)
+#' @return CI list (same structure as calculate_unscaled_ci)
+calculate_scaled_ci <- function(mixed_result, variability, alpha) {
+  # For ABE analysis type, always use unscaled limits regardless of CV
+  # (scaling is only appropriate in RSABE/ABEL workflows)
+  cat("    Note: Scaling requested but ABE uses fixed limits — reverting to unscaled CI\n")
+  calculate_unscaled_ci(mixed_result, alpha)
 }
 
 # =============================================================================
