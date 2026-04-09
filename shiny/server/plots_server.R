@@ -149,10 +149,50 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             cat("Original formulation values:", paste(unique(standardized_data$Treatment), collapse = ", "), "\n")
             standardized_data$Treatment <- ifelse(
               standardized_data$Treatment == "T", "Test",
-              ifelse(standardized_data$Treatment == "R", "Reference", 
+              ifelse(standardized_data$Treatment == "R", "Reference",
                      standardized_data$Treatment)
             )
             cat("Mapped formulation values:", paste(unique(standardized_data$Treatment), collapse = ", "), "\n")
+          }
+
+          # For replicate designs (>2 periods): create TreatmentPeriod label (T1/T2/R1/R2)
+          # Uses per-sequence period ranking so e.g. RTRT period-4 T is always T2
+          if ("Period" %in% names(standardized_data) &&
+              length(unique(standardized_data$Period)) > 2) {
+            cat("Replicate design: creating TreatmentPeriod labels...\n")
+            if ("Sequence" %in% names(standardized_data)) {
+              tp_map <- standardized_data %>%
+                dplyr::distinct(Sequence, Treatment, Period) %>%
+                dplyr::arrange(Sequence, Treatment, as.numeric(Period)) %>%
+                dplyr::group_by(Sequence, Treatment) %>%
+                dplyr::mutate(rep_num = dplyr::row_number()) %>%
+                dplyr::ungroup() %>%
+                dplyr::mutate(TreatmentPeriod = paste0(
+                  ifelse(Treatment == "Test", "T", "R"), rep_num
+                )) %>%
+                dplyr::select(Sequence, Treatment, Period, TreatmentPeriod)
+              standardized_data <- dplyr::left_join(
+                standardized_data, tp_map,
+                by = c("Sequence", "Treatment", "Period")
+              )
+            } else {
+              tp_map <- standardized_data %>%
+                dplyr::distinct(Treatment, Period) %>%
+                dplyr::arrange(Treatment, as.numeric(Period)) %>%
+                dplyr::group_by(Treatment) %>%
+                dplyr::mutate(rep_num = dplyr::row_number()) %>%
+                dplyr::ungroup() %>%
+                dplyr::mutate(TreatmentPeriod = paste0(
+                  ifelse(Treatment == "Test", "T", "R"), rep_num
+                )) %>%
+                dplyr::select(Treatment, Period, TreatmentPeriod)
+              standardized_data <- dplyr::left_join(
+                standardized_data, tp_map,
+                by = c("Treatment", "Period")
+              )
+            }
+            cat("TreatmentPeriod values:",
+                paste(sort(unique(standardized_data$TreatmentPeriod)), collapse = ", "), "\n")
           }
           
           cat("Standardized columns:", paste(names(standardized_data), collapse = ", "), "\n")
@@ -193,11 +233,11 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       tryCatch({
         cat("Preparing individual subjects plot data...\n")
         
-        # Just store the standardized data for individual subjects plotting
-        # The actual plot will be generated when user selects subjects
+        # Store data with replicate flag for the individual-subject plot UI
         plot_objects$individual_subjects <- list(
-          data = standardized_data,
-          error = NULL
+          data         = standardized_data,
+          is_replicate = "TreatmentPeriod" %in% names(standardized_data),
+          error        = NULL
         )
         
         cat("✓ Individual subjects plot data prepared\n")
@@ -649,65 +689,164 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     }
     
     # Create individual subjects card with selection controls
+    # Replicate designs get per-period selectors (T1/T2/R1/R2);
+    # 2x2x2 keeps the original Test/Reference selectors.
     create_individual_subjects_card <- function(plot_data) {
-      # Check if we have data available
       if (is.null(plot_data) || !is.null(plot_data$error)) {
         return(div(class = "alert alert-warning",
           "Individual subjects data not available"
         ))
       }
-      
-      # Get subject choices from the data
-      conc_data <- plot_data$data
-      test_subjects <- sort(as.numeric(unique(conc_data$Subject[conc_data$Treatment == "Test"])))
-      ref_subjects <- sort(as.numeric(unique(conc_data$Subject[conc_data$Treatment == "Reference"])))
-      
-      div(class = "plot-card",
-        div(class = "plot-card-header",
-          icon("user"), "Individual Subject Profiles"
-        ),
-        div(class = "plot-card-body",
-          div(class = "mb-3",
-            p("Select specific subjects to view individual concentration-time profiles.",
-              style = "color: var(--neutral-600); font-size: 14px; margin-bottom: 15px;")
+
+      conc_data    <- plot_data$data
+      is_replicate <- isTRUE(plot_data$is_replicate) &&
+                      "TreatmentPeriod" %in% names(conc_data)
+
+      get_subj_for_tp <- function(tp) {
+        sort(as.numeric(unique(
+          conc_data$Subject[!is.na(conc_data$TreatmentPeriod) &
+                            conc_data$TreatmentPeriod == tp]
+        )))
+      }
+
+      if (is_replicate) {
+        t1_subj <- get_subj_for_tp("T1")
+        t2_subj <- get_subj_for_tp("T2")
+        r1_subj <- get_subj_for_tp("R1")
+        r2_subj <- get_subj_for_tp("R2")
+        has_t2  <- length(t2_subj) > 0
+        has_r2  <- length(r2_subj) > 0
+
+        # Build selector columns depending on whether T2/R2 exist
+        t_selectors <- if (has_t2) {
+          tagList(
+            column(6,
+              h6("T1 Subjects",
+                 style = "color: #1F78B4; font-weight: 600; margin-bottom: 5px;"),
+              selectInput(ns("t1_subjects_select"), NULL,
+                          choices = t1_subj, selected = head(t1_subj, 3),
+                          multiple = TRUE, width = "100%"),
+              checkboxInput(ns("select_all_t1"), "Select All T1", value = FALSE)
+            ),
+            column(6,
+              h6("T2 Subjects",
+                 style = "color: #A6CEE3; font-weight: 600; margin-bottom: 5px;"),
+              selectInput(ns("t2_subjects_select"), NULL,
+                          choices = t2_subj, selected = head(t2_subj, 3),
+                          multiple = TRUE, width = "100%"),
+              checkboxInput(ns("select_all_t2"), "Select All T2", value = FALSE)
+            )
+          )
+        } else {
+          column(12,
+            h6("T Subjects",
+               style = "color: #1F78B4; font-weight: 600; margin-bottom: 5px;"),
+            selectInput(ns("t1_subjects_select"), NULL,
+                        choices = t1_subj, selected = head(t1_subj, 3),
+                        multiple = TRUE, width = "100%"),
+            checkboxInput(ns("select_all_t1"), "Select All T", value = FALSE)
+          )
+        }
+
+        r_selectors <- if (has_r2) {
+          tagList(
+            column(6,
+              h6("R1 Subjects",
+                 style = "color: #E31A1C; font-weight: 600; margin-bottom: 5px;"),
+              selectInput(ns("r1_subjects_select"), NULL,
+                          choices = r1_subj, selected = head(r1_subj, 3),
+                          multiple = TRUE, width = "100%"),
+              checkboxInput(ns("select_all_r1"), "Select All R1", value = FALSE)
+            ),
+            column(6,
+              h6("R2 Subjects",
+                 style = "color: #FB9A99; font-weight: 600; margin-bottom: 5px;"),
+              selectInput(ns("r2_subjects_select"), NULL,
+                          choices = r2_subj, selected = head(r2_subj, 3),
+                          multiple = TRUE, width = "100%"),
+              checkboxInput(ns("select_all_r2"), "Select All R2", value = FALSE)
+            )
+          )
+        } else {
+          column(12,
+            h6("R Subjects",
+               style = "color: #E31A1C; font-weight: 600; margin-bottom: 5px;"),
+            selectInput(ns("r1_subjects_select"), NULL,
+                        choices = r1_subj, selected = head(r1_subj, 3),
+                        multiple = TRUE, width = "100%"),
+            checkboxInput(ns("select_all_r1"), "Select All R", value = FALSE)
+          )
+        }
+
+        div(class = "plot-card",
+          div(class = "plot-card-header",
+            icon("user"), "Individual Subject Profiles"
           ),
-          
-          # Subject selection controls
-          div(class = "subject-selection-controls", style = "margin-bottom: 20px;",
-            fluidRow(
-              column(6,
-                h6("Test Treatment Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
-                selectInput(ns("test_subjects_select"), 
-                           label = NULL,
-                           choices = test_subjects,
-                           selected = head(test_subjects, 3),
-                           multiple = TRUE,
-                           width = "100%"),
-                checkboxInput(ns("select_all_test"), "Select All Test", value = FALSE)
-              ),
-              column(6,
-                h6("Reference Treatment Subjects", style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
-                selectInput(ns("ref_subjects_select"), 
-                           label = NULL,
-                           choices = ref_subjects,
-                           selected = head(ref_subjects, 3),
-                           multiple = TRUE,
-                           width = "100%"),
-                checkboxInput(ns("select_all_ref"), "Select All Reference", value = FALSE)
+          div(class = "plot-card-body",
+            div(class = "mb-3",
+              p("Select subjects by replicate period to view individual concentration-time profiles.",
+                style = "color: var(--neutral-600); font-size: 14px; margin-bottom: 15px;")
+            ),
+            div(class = "subject-selection-controls", style = "margin-bottom: 20px;",
+              fluidRow(t_selectors),
+              fluidRow(r_selectors),
+              div(style = "text-align: center; margin-top: 15px;",
+                actionButton(ns("update_individual_plot"), "Update Plot",
+                            class = "btn btn-primary", icon = icon("sync-alt"))
               )
             ),
-            div(style = "text-align: center; margin-top: 15px;",
-              actionButton(ns("update_individual_plot"), "Update Plot", 
-                          class = "btn btn-primary", icon = icon("sync-alt"))
+            div(id = ns("individual_subjects_plot_container"),
+              plotlyOutput(ns("individual_subjects_plot"), height = "500px")
             )
-          ),
-          
-          # Plot output
-          div(id = ns("individual_subjects_plot_container"),
-            plotlyOutput(ns("individual_subjects_plot"), height = "500px")
           )
         )
-      )
+
+      } else {
+        # 2x2x2 crossover: original Test / Reference selectors
+        test_subjects <- sort(as.numeric(unique(
+          conc_data$Subject[conc_data$Treatment == "Test"])))
+        ref_subjects  <- sort(as.numeric(unique(
+          conc_data$Subject[conc_data$Treatment == "Reference"])))
+
+        div(class = "plot-card",
+          div(class = "plot-card-header",
+            icon("user"), "Individual Subject Profiles"
+          ),
+          div(class = "plot-card-body",
+            div(class = "mb-3",
+              p("Select specific subjects to view individual concentration-time profiles.",
+                style = "color: var(--neutral-600); font-size: 14px; margin-bottom: 15px;")
+            ),
+            div(class = "subject-selection-controls", style = "margin-bottom: 20px;",
+              fluidRow(
+                column(6,
+                  h6("Test Treatment Subjects",
+                     style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+                  selectInput(ns("test_subjects_select"), NULL,
+                             choices = test_subjects, selected = head(test_subjects, 3),
+                             multiple = TRUE, width = "100%"),
+                  checkboxInput(ns("select_all_test"), "Select All Test", value = FALSE)
+                ),
+                column(6,
+                  h6("Reference Treatment Subjects",
+                     style = "color: var(--navy-primary); font-weight: 600; margin-bottom: 10px;"),
+                  selectInput(ns("ref_subjects_select"), NULL,
+                             choices = ref_subjects, selected = head(ref_subjects, 3),
+                             multiple = TRUE, width = "100%"),
+                  checkboxInput(ns("select_all_ref"), "Select All Reference", value = FALSE)
+                )
+              ),
+              div(style = "text-align: center; margin-top: 15px;",
+                actionButton(ns("update_individual_plot"), "Update Plot",
+                            class = "btn btn-primary", icon = icon("sync-alt"))
+              )
+            ),
+            div(id = ns("individual_subjects_plot_container"),
+              plotlyOutput(ns("individual_subjects_plot"), height = "500px")
+            )
+          )
+        )
+      }
     }
     
     # Create cumulative bioequivalence plot card with parameter selection and subject ordering controls
@@ -954,42 +1093,54 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     # Handle select all test subjects
     observeEvent(input$select_all_test, {
       req(plot_values$plot_objects$individual_subjects)
-      
       individual_data <- plot_values$plot_objects$individual_subjects
-      
-      if (!is.null(individual_data$error) || is.null(individual_data$data)) {
-        return()
-      }
-      
+      if (!is.null(individual_data$error) || is.null(individual_data$data)) return()
       conc_data <- individual_data$data
       test_subjects <- unique(conc_data$Subject[conc_data$Treatment == "Test"])
-      
       if (input$select_all_test) {
         updateSelectInput(session, "test_subjects_select", selected = test_subjects)
       } else {
         updateSelectInput(session, "test_subjects_select", selected = character(0))
       }
     })
-    
+
     # Handle select all reference subjects
     observeEvent(input$select_all_ref, {
       req(plot_values$plot_objects$individual_subjects)
-      
       individual_data <- plot_values$plot_objects$individual_subjects
-      
-      if (!is.null(individual_data$error) || is.null(individual_data$data)) {
-        return()
-      }
-      
+      if (!is.null(individual_data$error) || is.null(individual_data$data)) return()
       conc_data <- individual_data$data
       ref_subjects <- unique(conc_data$Subject[conc_data$Treatment == "Reference"])
-      
       if (input$select_all_ref) {
         updateSelectInput(session, "ref_subjects_select", selected = ref_subjects)
       } else {
         updateSelectInput(session, "ref_subjects_select", selected = character(0))
       }
     })
+
+    # Handle select-all for replicate period selectors (T1/T2/R1/R2)
+    for (.tp_lbl in c("t1", "t2", "r1", "r2")) {
+      local({
+        tp_lbl <- .tp_lbl
+        tp     <- toupper(tp_lbl)
+        observeEvent(input[[paste0("select_all_", tp_lbl)]], {
+          individual_data <- plot_values$plot_objects$individual_subjects
+          if (is.null(individual_data) || !is.null(individual_data$error) ||
+              is.null(individual_data$data)) return()
+          conc_data <- individual_data$data
+          if (!"TreatmentPeriod" %in% names(conc_data)) return()
+          tp_subj <- unique(conc_data$Subject[
+            !is.na(conc_data$TreatmentPeriod) & conc_data$TreatmentPeriod == tp])
+          if (isTRUE(input[[paste0("select_all_", tp_lbl)]])) {
+            updateSelectInput(session, paste0(tp_lbl, "_subjects_select"),
+                              selected = tp_subj)
+          } else {
+            updateSelectInput(session, paste0(tp_lbl, "_subjects_select"),
+                              selected = character(0))
+          }
+        }, ignoreNULL = TRUE)
+      })
+    }
     
     # Handle cumulative BE analysis run
     observeEvent(input$run_cumulative_analysis, {
@@ -1192,67 +1343,81 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     # Individual subjects plot update handler
     observeEvent(input$update_individual_plot, {
       req(plot_values$plot_objects$individual_subjects)
-      
+
       individual_data <- plot_values$plot_objects$individual_subjects
-      
+
       if (!is.null(individual_data$error) || is.null(individual_data$data)) {
         showNotification("Individual subjects data not available", type = "error")
         return()
       }
-      
-      # Get selected subjects
-      selected_test <- input$test_subjects_select
-      selected_ref <- input$ref_subjects_select
-      
-      if (length(selected_test) == 0 && length(selected_ref) == 0) {
-        showNotification("Please select at least one subject", type = "warning")
-        return()
-      }
-      
-      # Generate individual subjects plot
+
+      conc_data    <- individual_data$data
+      is_replicate <- isTRUE(individual_data$is_replicate) &&
+                      "TreatmentPeriod" %in% names(conc_data)
+
       tryCatch({
-        conc_data <- individual_data$data
-        
-        # Filter data based on which formulation dropdown was used
-        plot_data <- data.frame()
-        
-        # Add test formulation data for selected test subjects
-        if (length(selected_test) > 0) {
-          test_data <- conc_data[conc_data$Subject %in% selected_test & conc_data$Treatment == "Test", ]
-          plot_data <- rbind(plot_data, test_data)
+        if (is_replicate) {
+          # Collect rows selected for each replicate period
+          pieces <- list()
+          if (length(input$t1_subjects_select) > 0)
+            pieces[["T1"]] <- conc_data[
+              !is.na(conc_data$TreatmentPeriod) &
+              conc_data$Subject %in% input$t1_subjects_select &
+              conc_data$TreatmentPeriod == "T1", ]
+          if (length(input$t2_subjects_select) > 0)
+            pieces[["T2"]] <- conc_data[
+              !is.na(conc_data$TreatmentPeriod) &
+              conc_data$Subject %in% input$t2_subjects_select &
+              conc_data$TreatmentPeriod == "T2", ]
+          if (length(input$r1_subjects_select) > 0)
+            pieces[["R1"]] <- conc_data[
+              !is.na(conc_data$TreatmentPeriod) &
+              conc_data$Subject %in% input$r1_subjects_select &
+              conc_data$TreatmentPeriod == "R1", ]
+          if (length(input$r2_subjects_select) > 0)
+            pieces[["R2"]] <- conc_data[
+              !is.na(conc_data$TreatmentPeriod) &
+              conc_data$Subject %in% input$r2_subjects_select &
+              conc_data$TreatmentPeriod == "R2", ]
+
+          plot_data <- dplyr::bind_rows(pieces)
+        } else {
+          # 2x2x2 crossover
+          selected_test <- input$test_subjects_select
+          selected_ref  <- input$ref_subjects_select
+          pieces <- list()
+          if (length(selected_test) > 0)
+            pieces[["Test"]] <- conc_data[
+              conc_data$Subject %in% selected_test &
+              conc_data$Treatment == "Test", ]
+          if (length(selected_ref) > 0)
+            pieces[["Ref"]] <- conc_data[
+              conc_data$Subject %in% selected_ref &
+              conc_data$Treatment == "Reference", ]
+          plot_data <- dplyr::bind_rows(pieces)
         }
-        
-        # Add reference formulation data for selected reference subjects  
-        if (length(selected_ref) > 0) {
-          ref_data <- conc_data[conc_data$Subject %in% selected_ref & conc_data$Treatment == "Reference", ]
-          plot_data <- rbind(plot_data, ref_data)
-        }
-        
-        if (nrow(plot_data) == 0) {
-          showNotification("No data available for selected subjects", type = "warning")
+
+        if (is.null(plot_data) || nrow(plot_data) == 0) {
+          showNotification("Please select at least one subject", type = "warning")
           return()
         }
-        
-        # Get all selected subjects for the plot function
-        all_selected_subjects <- c(selected_test, selected_ref)
-        
-        # Create individual subject plot (linear scale only for this view)
-        plot_obj <- create_individual_concentration_plot(plot_data, all_selected_subjects, log_scale = FALSE)
-        
-        output$individual_subjects_plot <- renderPlotly({
-          plot_obj
-        })
-        
-        cat("Individual subjects plot updated:\n")
-        cat("  Test subjects:", paste(selected_test, collapse = ", "), "\n")
-        cat("  Reference subjects:", paste(selected_ref, collapse = ", "), "\n")
-        
+
+        all_selected_subjects <- unique(plot_data$Subject)
+
+        plot_obj <- create_individual_concentration_plot(
+          plot_data, all_selected_subjects, log_scale = FALSE)
+
+        output$individual_subjects_plot <- renderPlotly({ plot_obj })
+
+        cat("Individual subjects plot updated for",
+            length(all_selected_subjects), "subjects\n")
+
       }, error = function(e) {
         cat("Error creating individual subjects plot:", e$message, "\n")
         showNotification(paste("Error creating plot:", e$message), type = "error")
       })
     })
-    
+
     # Cleanup temp directory on session end
     session$onSessionEnded(function() {
       if (!is.null(temp_dir_path) && dir.exists(temp_dir_path)) {
