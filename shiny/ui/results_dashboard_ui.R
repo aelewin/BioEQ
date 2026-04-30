@@ -315,82 +315,64 @@ results_dashboard_ui <- function(id) {
               )
             )
           ),
-          
-          # BE Analysis Tab - Second tab
-          tabPanel(tags$span(icon("balance-scale"), " BE Analysis"),
+
+          # BE Comparison Tab — Test/Reference ratios (individual + overall),
+          # normal and log scale.
+          tabPanel(tags$span(icon("balance-scale"), " BE Comparison"),
             value = "be_analysis",
             br(),
             fluidRow(
               column(12,
-                h4("Complete Bioequivalence Analysis"),
-                div(class = "summary-card",
-                  h5("📊 Comprehensive BE Results"),
-                  p("This section provides the complete bioequivalence analysis including all PK parameters, statistical tests, and regulatory conclusions."),
-                  uiOutput(ns("complete_be_analysis"))
-                )
-              )
-            ),
-            br()
-          ),
-
-          # PK Comparison Tab - NEW Third tab (was Fourth)
-          tabPanel(tags$span(icon("exchange-alt"), " PK Comparison"),
-            value = "pk_comparison",
-            br(),
-            fluidRow(
-              column(12,
-                h4("Test vs Reference Comparison"),
-                p("Individual subject T/R ratios with summary statistics for each PK parameter analyzed"),
-                br(),
-                
-                # Parameter selection - single line layout
-                fluidRow(
-                  column(12,
-                    wellPanel(
-                      style = "padding: 15px; margin-bottom: 20px;",
-                      fluidRow(
-                        column(3,
-                          tags$label("Select PK Parameter:", 
-                                   style = "font-weight: 600; margin-top: 8px; display: inline-block;")
-                        ),
-                        column(6,
-                          uiOutput(ns("pk_comparison_parameter_select_ui"))
-                        ),
-                        column(3,
-                          actionButton(ns("refresh_pk_comparison"), 
-                                     icon = icon("refresh"), 
-                                     "Refresh Display",
-                                     class = "btn-sm btn-primary",
-                                     style = "margin-top: 0px;")
-                        )
+                wellPanel(
+                  style = "padding: 15px; margin-bottom: 20px;",
+                  fluidRow(
+                    column(4,
+                      tags$label("PK Parameter:",
+                                 style = "font-weight: 600;"),
+                      uiOutput(ns("be_comp_parameter_ui"))
+                    ),
+                    column(4,
+                      tags$label("Scale:",
+                                 style = "font-weight: 600;"),
+                      radioButtons(ns("be_comp_scale"),
+                                   label = NULL,
+                                   choices = list("Normal" = "normal",
+                                                  "Log" = "log"),
+                                   selected = "normal",
+                                   inline = TRUE)
+                    ),
+                    column(4,
+                      div(style = "margin-top: 22px;",
+                        actionButton(ns("refresh_be_comp"),
+                                     icon = icon("refresh"),
+                                     "Refresh",
+                                     class = "btn-sm btn-primary")
                       )
                     )
                   )
-                ),
-                
-                # Two-column layout for results
-                fluidRow(
-                  column(6,
-                    # Left column: Individual subject data table
-                    div(
-                      class = "pk-comparison-left-panel",
-                      uiOutput(ns("pk_comparison_table_display"))
-                    )
-                  ),
-                  column(6,
-                    # Right column: Summary statistics
-                    div(
-                      class = "pk-comparison-right-panel", 
-                      uiOutput(ns("pk_comparison_stats_display"))
-                    )
-                  )
+                )
+              )
+            ),
+            fluidRow(
+              column(12,
+                div(class = "summary-card",
+                  h5("Individual T/R Ratios"),
+                  DT::dataTableOutput(ns("be_comp_individual_table"))
+                )
+              )
+            ),
+            fluidRow(
+              column(12,
+                div(class = "summary-card",
+                  h5("Overall T/R Ratio Summary"),
+                  uiOutput(ns("be_comp_overall_summary"))
                 )
               )
             )
           ),
 
-          # Subject Data Tab - Now Fourth tab (was Fifth)
-          tabPanel(tags$span(icon("users"), " Subject Data"),
+          # NCA Results Tab — individual subject PK results (was Subject Data)
+          tabPanel(tags$span(icon("users"), " NCA Results"),
             value = "subject_data",
             br(),
             fluidRow(
@@ -454,7 +436,24 @@ results_dashboard_ui <- function(id) {
               )
             )
           ),
-          
+
+          # Summary Statistics Tab — one descriptive table per product
+          # (per period for replicate designs).
+          tabPanel(tags$span(icon("calculator"), " Summary Statistics"),
+            value = "pk_comparison",
+            br(),
+            fluidRow(
+              column(12,
+                h4("Descriptive Statistics by Treatment"),
+                p("Arithmetic descriptive statistics for each PK parameter, ",
+                  "shown as a separate table per product (split by period ",
+                  "for replicate designs)."),
+                br(),
+                uiOutput(ns("summary_stats_tables"))
+              )
+            )
+          ),
+
           # ANOVA Results Tab - Fifth tab
           tabPanel(tags$span(icon("table"), " ANOVA Results"),
             value = "anova_results",
