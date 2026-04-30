@@ -137,11 +137,14 @@ ui <- dashboardPage(
       menuItem("Results", tabName = "results", icon = icon("chart-line")),
       menuItem("Plots", tabName = "plots", icon = icon("chart-area")),
       menuItem("Exports & Reports", tabName = "exports", icon = icon("download")),
+      menuItem("Validation", tabName = "validation", icon = icon("check-circle")),
       br(),
-      menuSubItem("Advanced Options", tabName = "advanced", icon = icon("sliders-h")),
-      menuSubItem("Validation", tabName = "validation", icon = icon("check-circle")),
-      menuSubItem("Sample Size", tabName = "sample_size", icon = icon("calculator")),
-      menuSubItem("Help & Support", tabName = "help", icon = icon("question-circle"))
+      menuItem("Anomaly Detection", tabName = "anomaly_detection", icon = icon("triangle-exclamation")),
+      br(),
+      menuItem("Sample Size", tabName = "sample_size", icon = icon("calculator")),
+      menuItem("Randomization", tabName = "randomization", icon = icon("shuffle")),
+      br(),
+      menuItem("Help & Support", tabName = "help", icon = icon("question-circle"))
     ),
     div(
       style = "position: fixed; bottom: 15px; left: 15px; right: 15px; text-align: center; 
@@ -822,22 +825,42 @@ ui <- dashboardPage(
         source("ui/exports_reports_ui.R", local = TRUE)$value
       ),
       
-      # Advanced Options Tab
+      # Anomaly Detection Tab
       tabItem(
-        tabName = "advanced",
+        tabName = "anomaly_detection",
         fluidRow(
           box(
-            title = "Advanced Analysis Options", 
+            title = "Anomaly Detection", 
             status = "primary", 
             solidHeader = TRUE,
             width = 12,
             h4("Coming Soon"),
-            p("Advanced configuration options for experienced users will be available here."),
+            p("Automated anomaly detection tools for pharmacokinetic data will be available here."),
             tags$ul(
-              tags$li("Custom model parameters"),
-              tags$li("Advanced outlier detection"),
-              tags$li("Custom confidence intervals"),
-              tags$li("Specialized study designs")
+              tags$li("Outlier detection in concentration-time profiles"),
+              tags$li("Carryover and period effect diagnostics"),
+              tags$li("Flagging of anomalous NCA parameters"),
+              tags$li("Subject-level profile inspection")
+            )
+          )
+        )
+      ),
+
+      # Randomization Tab (placeholder)
+      tabItem(
+        tabName = "randomization",
+        fluidRow(
+          box(
+            title = "Randomization",
+            status = "primary",
+            solidHeader = TRUE,
+            width = 12,
+            h4("Coming Soon"),
+            p("Randomization tools for bioequivalence study design will be available here."),
+            tags$ul(
+              tags$li("Treatment sequence generation"),
+              tags$li("Stratified and block randomization"),
+              tags$li("Randomization list export")
             )
           )
         )
