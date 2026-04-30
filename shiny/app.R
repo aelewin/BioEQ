@@ -77,6 +77,13 @@ tryCatch({
   message("digest not available - plot caching may be limited")
 })
 
+# Optional: DTW for time-flexible pairwise comparison in Anomaly Detection
+tryCatch({
+  library(dtw)
+}, error = function(e) {
+  message("dtw not available - DTW pairwise comparison will fall back to RMSE")
+})
+
 # Source the existing BioEQ R functions
 source("../R/bioeq_main.R", local = TRUE)
 source("../R/nca_functions.R", local = TRUE)
@@ -90,6 +97,7 @@ source("../R/carryover_detection.R", local = TRUE)
 source("../R/plotting.R", local = TRUE)  # Enhanced plotting functions with Shiny support
 source("../R/cumulative_be_analysis.R", local = TRUE)  # Cumulative bioequivalence analysis
 source("../R/validation_runner.R", local = TRUE)  # Black-box validation engine
+source("../R/anomaly_detection.R", local = TRUE)  # Fraud / anomaly detection analytics
 
 # Source template configuration
 source("templates/report_generation.R", local = TRUE)
@@ -100,10 +108,12 @@ source("ui/exports_reports_ui.R", local = TRUE)
 source("ui/results_dashboard_ui.R", local = TRUE)
 source("ui/plots_ui.R", local = TRUE)
 source("ui/validation_ui.R", local = TRUE)
+source("ui/anomaly_detection_ui.R", local = TRUE)
 source("server/main_server.R", local = TRUE)
 source("server/results_dashboard_server.R", local = TRUE)
 source("server/plots_server.R", local = TRUE)
 source("server/validation_server.R", local = TRUE)
+source("server/anomaly_detection_server.R", local = TRUE)
 
 # Define utility operators and functions
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -828,22 +838,7 @@ ui <- dashboardPage(
       # Anomaly Detection Tab
       tabItem(
         tabName = "anomaly_detection",
-        fluidRow(
-          box(
-            title = "Anomaly Detection", 
-            status = "primary", 
-            solidHeader = TRUE,
-            width = 12,
-            h4("Coming Soon"),
-            p("Automated anomaly detection tools for pharmacokinetic data will be available here."),
-            tags$ul(
-              tags$li("Outlier detection in concentration-time profiles"),
-              tags$li("Carryover and period effect diagnostics"),
-              tags$li("Flagging of anomalous NCA parameters"),
-              tags$li("Subject-level profile inspection")
-            )
-          )
-        )
+        anomaly_detection_ui("anomaly_detection")
       ),
 
       # Randomization Tab (placeholder)
@@ -1048,6 +1043,10 @@ server <- function(input, output, session) {
                analysis_config = reactive(values$analysis_config),
                uploaded_data = reactive(values$uploaded_data),
                validation_result = reactive(values$validation_result))
+
+  # Initialize anomaly detection module (uses uploaded data when available)
+  anomaly_detection_server("anomaly_detection",
+                            uploaded_data = reactive(values$uploaded_data))
   
   # =======================================================================
   # EXPORTS & REPORTS SERVER LOGIC
