@@ -16,7 +16,7 @@
 #' @param data Data frame containing BE study data
 #' @return Validated and formatted data frame
 #' @export
-validate_be_data <- function(data) {
+validate_concentration_data <- function(data) {
   cat("🔍 Validating bioequivalence data...\n")
   
   # Required columns
@@ -222,7 +222,7 @@ load_example_data <- function(dataset_name = "crossover_2x2x2") {
     cat("  Time points:", length(time_points), "\n")
     
     # Convert to standard format and return structured result
-    validated_data <- validate_be_data(data)
+    validated_data <- validate_concentration_data(data)
     
     # Transform to plotting format (Subject, Time, Concentration, Treatment)
     conc_data <- validated_data %>%

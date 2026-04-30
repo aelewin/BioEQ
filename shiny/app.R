@@ -89,6 +89,7 @@ source("../R/missing_data_handling.R", local = TRUE)  # Missing data for NCA
 source("../R/carryover_detection.R", local = TRUE)
 source("../R/plotting.R", local = TRUE)  # Enhanced plotting functions with Shiny support
 source("../R/cumulative_be_analysis.R", local = TRUE)  # Cumulative bioequivalence analysis
+source("../R/validation_runner.R", local = TRUE)  # Black-box validation engine
 
 # Source template configuration
 source("templates/report_generation.R", local = TRUE)
@@ -98,9 +99,11 @@ source("ui/main_ui.R", local = TRUE)
 source("ui/exports_reports_ui.R", local = TRUE)
 source("ui/results_dashboard_ui.R", local = TRUE)
 source("ui/plots_ui.R", local = TRUE)
+source("ui/validation_ui.R", local = TRUE)
 source("server/main_server.R", local = TRUE)
 source("server/results_dashboard_server.R", local = TRUE)
 source("server/plots_server.R", local = TRUE)
+source("server/validation_server.R", local = TRUE)
 
 # Define utility operators and functions
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -840,28 +843,10 @@ ui <- dashboardPage(
         )
       ),
       
-      # Validation Tab
+      # Validation Tab (black-box validation module)
       tabItem(
         tabName = "validation",
-        fluidRow(
-          box(
-            title = "Method Validation", 
-            status = "success", 
-            solidHeader = TRUE,
-            width = 12,
-            h4("Regulatory Validation"),
-            p("This application follows regulatory guidelines and industry best practices."),
-            tags$ul(
-              tags$li("FDA guidance compliance"),
-              tags$li("EMA guideline adherence"), 
-              tags$li("ICH M13A compatibility"),
-              tags$li("Cross-validation with WinNonlin")
-            ),
-            br(),
-            actionButton("run_validation", "Run Validation Tests", 
-                        class = "btn-success", icon = icon("check"))
-          )
-        )
+        validation_ui()
       ),
       
       # Sample Size Tab
@@ -1611,13 +1596,8 @@ server <- function(input, output, session) {
     }
   )
   
-  # Validation test runner
-  observeEvent(input$run_validation, {
-    showNotification("Running validation tests...", type = "message", duration = 2)
-    # TODO: Implement validation tests
-    Sys.sleep(2)
-    showNotification("All validation tests passed!", type = "message")
-  })
+  # Validation module server (black-box validation: always computes fresh)
+  validation_server(input, output, session)
 }
 
 # Run the application
