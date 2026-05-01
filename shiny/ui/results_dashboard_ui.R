@@ -257,6 +257,16 @@ results_dashboard_ui <- function(id) {
       "))
     ),
     
+    # ---- Header --------------------------------------------------------
+    div(
+      class = "results-header",
+      style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+      h3(icon("chart-bar"), " Results",
+         style = "margin: 0; font-weight: 700;"),
+      p("Bioequivalence evaluation, NCA summary statistics, T/R comparison, and ANOVA results.",
+        style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
+    ),
+
     # Alert section for important messages
     conditionalPanel(
       condition = "output.show_alert",
@@ -276,16 +286,15 @@ results_dashboard_ui <- function(id) {
       )
     ),
     
-    # Main results tabbed interface with navy theme
+    # Main results tabbed interface
     fluidRow(
       column(12,
-        div(class = "results-tabs",
-          tabsetPanel(
-            id = ns("results_tabs"),
-            type = "tabs",
+        tabsetPanel(
+          id = ns("results_tabs"),
+          type = "tabs",
           
           # Summary Tab - Simplified for ICH M13
-          tabPanel(tags$span(icon("clipboard-list"), " Summary"),
+          tabPanel(tags$span(icon("clipboard-list"), " BE Evaluation"),
             value = "overview",
             br(),
             fluidRow(
@@ -318,59 +327,6 @@ results_dashboard_ui <- function(id) {
 
           # BE Comparison Tab — Test/Reference ratios (individual + overall),
           # normal and log scale.
-          tabPanel(tags$span(icon("balance-scale"), " BE Comparison"),
-            value = "be_analysis",
-            br(),
-            fluidRow(
-              column(12,
-                wellPanel(
-                  style = "padding: 15px; margin-bottom: 20px;",
-                  fluidRow(
-                    column(4,
-                      tags$label("PK Parameter:",
-                                 style = "font-weight: 600;"),
-                      uiOutput(ns("be_comp_parameter_ui"))
-                    ),
-                    column(4,
-                      tags$label("Scale:",
-                                 style = "font-weight: 600;"),
-                      radioButtons(ns("be_comp_scale"),
-                                   label = NULL,
-                                   choices = list("Normal" = "normal",
-                                                  "Log" = "log"),
-                                   selected = "normal",
-                                   inline = TRUE)
-                    ),
-                    column(4,
-                      div(style = "margin-top: 22px;",
-                        actionButton(ns("refresh_be_comp"),
-                                     icon = icon("refresh"),
-                                     "Refresh",
-                                     class = "btn-sm btn-primary")
-                      )
-                    )
-                  )
-                )
-              )
-            ),
-            fluidRow(
-              column(12,
-                div(class = "summary-card",
-                  h5("Individual T/R Ratios"),
-                  DT::dataTableOutput(ns("be_comp_individual_table"))
-                )
-              )
-            ),
-            fluidRow(
-              column(12,
-                div(class = "summary-card",
-                  h5("Overall T/R Ratio Summary"),
-                  uiOutput(ns("be_comp_overall_summary"))
-                )
-              )
-            )
-          ),
-
           # NCA Results Tab — individual subject PK results (was Subject Data)
           tabPanel(tags$span(icon("users"), " NCA Results"),
             value = "subject_data",
@@ -454,7 +410,61 @@ results_dashboard_ui <- function(id) {
             )
           ),
 
-          # ANOVA Results Tab - Fifth tab
+          # T vs R Tab
+          tabPanel(tags$span(icon("balance-scale"), " T vs R"),
+            value = "be_analysis",
+            br(),
+            fluidRow(
+              column(12,
+                wellPanel(
+                  style = "padding: 15px; margin-bottom: 20px;",
+                  fluidRow(
+                    column(4,
+                      tags$label("PK Parameter:",
+                                 style = "font-weight: 600;"),
+                      uiOutput(ns("be_comp_parameter_ui"))
+                    ),
+                    column(4,
+                      tags$label("Scale:",
+                                 style = "font-weight: 600;"),
+                      radioButtons(ns("be_comp_scale"),
+                                   label = NULL,
+                                   choices = list("Normal" = "normal",
+                                                  "ln" = "log"),
+                                   selected = "normal",
+                                   inline = TRUE)
+                    ),
+                    column(4,
+                      div(style = "margin-top: 22px;",
+                        actionButton(ns("refresh_be_comp"),
+                                     icon = icon("refresh"),
+                                     "Refresh",
+                                     class = "btn-sm btn-primary")
+                      )
+                    )
+                  )
+                )
+              )
+            ),
+            fluidRow(
+              column(12,
+                div(class = "summary-card",
+                  h5("Overall T/R Summary"),
+                  uiOutput(ns("be_comp_overall_summary"))
+                )
+              )
+            ),
+            fluidRow(
+              column(12,
+                div(class = "summary-card",
+                  h5("Individual T/R Ratios"),
+                  DT::dataTableOutput(ns("be_comp_individual_table"))
+                )
+              )
+            )
+          ),
+
+          # ANOVA Results Tab
           tabPanel(tags$span(icon("table"), " ANOVA Results"),
             value = "anova_results",
             br(),
@@ -489,7 +499,6 @@ results_dashboard_ui <- function(id) {
             )
           )
         ) # close tabsetPanel
-      ) # close div
     ) # close column
     ), # close fluidRow
     

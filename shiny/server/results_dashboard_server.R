@@ -1671,7 +1671,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                 }
               )
             } else {
-              p("Standard bioequivalence analysis with fixed limits", style = "margin-bottom: 0; color: #6c757d;")
+              NULL
             }
           )
         )
@@ -1746,14 +1746,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             limit_type <- " (fixed)"
           }
           
-          # Extract N and DF
           n_val <- ci$n_subjects %||% be_res$n_subjects %||% NA
-          df_val <- ci$degrees_freedom %||% NA
           
           data.frame(
             Parameter = display_param,
             N = if (!is.na(n_val)) as.character(round(n_val)) else "\u2014",
-            DF = if (!is.na(df_val)) sprintf("%.1f", df_val) else "\u2014",
             `Point Estimate` = sprintf("%.2f%%", ci$point_estimate),
             `CI Lower` = sprintf("%.2f%%", ci$ci_lower),
             `CI Upper` = sprintf("%.2f%%", ci$ci_upper),
@@ -1770,16 +1767,15 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           analysis_header,
           
           # Results table
-          h5("📊 Bioequivalence Assessment - All Parameters"),
           DT::datatable(
             results_rows,
             options = list(
               dom = 't',
               pageLength = 10,
               columnDefs = list(
-                list(className = 'dt-center', targets = 1:7),
+                list(className = 'dt-center', targets = 1:6),
                 list(
-                  targets = 7,
+                  targets = 6,
                   createdCell = JS("
                     function(td, cellData, rowData, row, col) {
                       if (cellData.includes('PASS')) {
@@ -1795,10 +1791,10 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               )
             ),
             rownames = FALSE,
-            colnames = c("Parameter", "N", "DF", "Point Estimate", paste(ci_label, "Lower"), paste(ci_label, "Upper"), "BE Criteria", "BE Status"),
+            colnames = c("Parameter", "N", "Point Estimate", paste(ci_label, "Lower"), paste(ci_label, "Upper"), "BE Criteria", "BE Status"),
             escape = FALSE
           ) %>% 
-            DT::formatStyle(columns = 1:8, fontSize = '14px'),
+            DT::formatStyle(columns = 1:7, fontSize = '14px'),
           
           # AUC0-t / AUC0-inf coverage ratio (Test, Reference, Overall)
           {
@@ -1874,8 +1870,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             style = "padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid #6c757d;",
             tags$small(
               tags$strong("Note: "), 
-              "Bioequivalence evaluation performed on log-transformed data (regulatory requirement) but results displayed with original parameter names (Cmax, AUC0-t, AUC0-\u221e) for clarity. ",
-              "Complete statistical analysis including all calculated parameters is available in the 'BE Analysis' tab."
+              "Bioequivalence evaluation performed on log-transformed data (regulatory requirement) but results displayed with original parameter names (Cmax, AUC0-t, AUC0-\u221e) for clarity."
             )
           )
         ))
@@ -3046,9 +3041,13 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       if (is.null(nca_res) || is.null(nca_res$subject_data)) return(NULL)
       data <- nca_res$subject_data
 
-      # Only parameters where both T and R values exist; exclude already-log
-      # variants (the Scale toggle handles log internally).
-      candidates <- c("Cmax", "AUC0t", "AUC0inf", "Tmax", "t_half", "pAUC")
+      # Limit to the PK parameters selected for analysis + always include AUC0inf.
+      # Exclude log variants (the Scale toggle handles ln internally).
+      cfg <- analysis_config()
+      selected <- cfg$selected_pk_params %||% c("Cmax", "AUC0t")
+      # Strip any ln* entries from selected; add AUC0inf always
+      selected_base <- selected[!startsWith(selected, "ln")]
+      candidates <- unique(c(selected_base, "AUC0inf"))
       available <- intersect(candidates, names(data))
       if (length(available) == 0) {
         return(div(class = "alert alert-warning", "No PK parameters available."))
@@ -3167,30 +3166,108 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
     })
 
     output$be_comp_overall_summary <- renderUI({
-      d <- be_comp_data()
-      if (is.null(d)) {
-        return(div(class = "alert alert-info",
-                   "Overall summary will appear once a parameter is selected."))
-      }
-      ov <- d$overall
+      req(results_available())
+      param <- req(input$be_comp_parameter)
 
-      fmt <- function(x) if (is.finite(x)) sprintf("%.4f", x) else "—"
-      fmt_pct <- function(x) if (is.finite(x)) sprintf("%.2f%%", x) else "—"
+      nca_res <- nca_results()
+      if (is.null(nca_res)) return(NULL)
+      sd <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      if (is.null(sd)) return(NULL)
+
+      # Use one row per subject-treatment (NCA params are duplicated across time
+      # points in concentration data; take unique Subject+Treatment combos).
+      if ("Time" %in% names(sd)) {
+        sd <- sd[!duplicated(sd[, c("Subject", "Treatment")]), ]
+      }
+
+      # ── 1. Geometric means from raw data ────────────────────────────────
+      test_vals <- sd[[param]][sd$Treatment %in% c("T", "Test") & !is.na(sd[[param]]) & sd[[param]] > 0]
+      ref_vals  <- sd[[param]][sd$Treatment %in% c("R", "Reference") & !is.na(sd[[param]]) & sd[[param]] > 0]
+
+      geom_T <- if (length(test_vals) > 0) exp(mean(log(test_vals))) else NA_real_
+      geom_R <- if (length(ref_vals)  > 0) exp(mean(log(ref_vals)))  else NA_real_
+      gmr_data <- if (!is.na(geom_T) && !is.na(geom_R) && geom_R > 0) geom_T / geom_R else NA_real_
+      n_T <- length(test_vals)
+      n_R <- length(ref_vals)
+
+      # ── 2. Geometric LS means from ANOVA (via be_results) ───────────────
+      # Map base param → ln param name in confidence_intervals
+      ln_param_map <- c(
+        Cmax   = "lnCmax",
+        AUC0t  = "lnAUC0t",
+        AUC0inf = "lnAUC0inf",
+        pAUC   = "lnpAUC"
+      )
+      ln_param <- ln_param_map[param]
+
+      lsmean_T  <- NA_real_
+      lsmean_R  <- NA_real_
+      lsmean_ratio <- NA_real_
+
+      be_res_val <- tryCatch(be_results(), error = function(e) NULL)
+      if (!is.null(ln_param) && !is.na(ln_param) &&
+          !is.null(be_res_val) &&
+          !is.null(be_res_val$confidence_intervals[[ln_param]])) {
+        ci_ln <- be_res_val$confidence_intervals[[ln_param]]
+        pe <- ci_ln$point_estimate  # e.g. 106.23 means 106.23%
+        if (!is.null(pe) && is.finite(pe) && pe > 0 &&
+            !is.na(geom_T) && !is.na(geom_R)) {
+          # Derive individual LS means:
+          # grand_ln = (mean(ln T) + mean(ln R)) / 2
+          # lsmean_ln_T = grand_ln + log(PE/100)/2
+          # lsmean_ln_R = grand_ln - log(PE/100)/2
+          grand_ln  <- (mean(log(test_vals)) + mean(log(ref_vals))) / 2
+          half_coef <- log(pe / 100) / 2
+          lsmean_T  <- exp(grand_ln + half_coef)
+          lsmean_R  <- exp(grand_ln - half_coef)
+          lsmean_ratio <- pe / 100
+        }
+      }
+
+      # ── 3. Render ────────────────────────────────────────────────────────
+      fmt_n <- function(x, digits = 2) {
+        if (is.null(x) || is.na(x) || !is.finite(x)) return("—")
+        formatC(x, format = "f", digits = digits, big.mark = ",")
+      }
+      fmt_ratio <- function(x) {
+        if (is.null(x) || is.na(x) || !is.finite(x)) return("—")
+        sprintf("%.2f%%", x * 100)
+      }
+
+      has_ls <- !is.na(lsmean_T) && !is.na(lsmean_R)
 
       tagList(
-        p(strong("Parameter: "), d$param,
-          " | ", strong("Scale: "),
-          if (d$scale == "log") "Log-transformed" else "Normal",
-          " | ", strong("N: "), ov$n),
-        tags$table(class = "table table-striped",
-          tags$thead(tags$tr(
-            tags$th("Statistic"), tags$th("Value")
-          )),
+        tags$table(
+          class = "table table-bordered table-sm",
+          style = "margin-bottom: 0; font-size: 14px;",
+          tags$thead(
+            style = "background-color: #f0f4f8;",
+            tags$tr(
+              tags$th(style = "width: 34%;", ""),
+              tags$th(style = "width: 22%; text-align: center;", "Test"),
+              tags$th(style = "width: 22%; text-align: center;", "Reference"),
+              tags$th(style = "width: 22%; text-align: center;", "Ratio (T/R)")
+            )
+          ),
           tags$tbody(
-            tags$tr(tags$td(ov$mean_label),       tags$td(fmt(ov$mean_val))),
-            tags$tr(tags$td("Geometric Mean Ratio (T/R)"),
-                    tags$td(fmt(ov$gmr))),
-            tags$tr(tags$td("CV%"),                tags$td(fmt_pct(ov$cv_pct)))
+            tags$tr(
+              tags$td(tags$strong("Geometric Mean"),
+                      tags$div(style = "font-size: 11px; color: #6c757d;",
+                               sprintf("(n = %d / %d)", n_T, n_R))),
+              tags$td(style = "text-align: center;", fmt_n(geom_T)),
+              tags$td(style = "text-align: center;", fmt_n(geom_R)),
+              tags$td(style = "text-align: center; font-weight: 600;", fmt_ratio(gmr_data))
+            ),
+            if (has_ls) {
+              tags$tr(
+                tags$td(tags$strong("Geometric LS Mean"),
+                        tags$div(style = "font-size: 11px; color: #6c757d;",
+                                 "(ANOVA, ln-transformed data)")),
+                tags$td(style = "text-align: center;", fmt_n(lsmean_T)),
+                tags$td(style = "text-align: center;", fmt_n(lsmean_R)),
+                tags$td(style = "text-align: center; font-weight: 600;", fmt_ratio(lsmean_ratio))
+              )
+            }
           )
         )
       )

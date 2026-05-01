@@ -78,16 +78,25 @@ validation_ui <- function() {
       table.bioeq-mapping tr:nth-child(even) td { background: #fafafa; }
     "))),
 
-    # ---- Header / Run All ----------------------------------------------
+    # ---- Header --------------------------------------------------------
+    div(
+      class = "validation-header",
+      style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+      h3(icon("shield-alt"), " Validation",
+         style = "margin: 0; font-weight: 700;"),
+      p("Verify BioEQ results against embedded reference datasets for parallel BE, 2\u00d72 crossover BE, replicate ABEL, and NCA.",
+        style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
+    ),
+
+    # ---- Run All -------------------------------------------------------
     fluidRow(
       box(
-        title = tagList(icon("shield-alt"), " Validation"),
-        status = "success", solidHeader = TRUE, width = 12,
+        width = 12,
         fluidRow(
           column(width = 8,
             p("Verify that BioEQ produces correct results by comparing its output against ",
               "reference data sets targeting analysis capabilities of the application ",
-              "(parallel BE, 2x2 crossover BE, replicate ABEL, oral / IV NCA)."),
+              "(parallel BE, 2\u00d72 crossover BE, replicate ABEL, oral / IV NCA)."),
             p("Re-run after installation, package updates, R upgrades, or BioEQ code changes.")
           ),
           column(width = 4,
@@ -105,7 +114,7 @@ validation_ui <- function() {
     # ---- Groups table --------------------------------------------------
     fluidRow(
       box(
-        title = tagList(icon("layer-group"), " Reference Data Sets"),
+        title = "Reference Data Sets",
         status = "primary", solidHeader = TRUE, width = 12, collapsible = TRUE, collapsed = TRUE,
         DT::DTOutput("validation_groups_table"),
         br(),
@@ -124,7 +133,7 @@ validation_ui <- function() {
     # ---- Methodology + dataset->purpose mapping tables -----------------
     fluidRow(
       box(
-        title = tagList(icon("book"), " Validation Coverage Map"),
+        title = "Validation Coverage Map",
         status = "info", solidHeader = TRUE, width = 12,
         collapsible = TRUE, collapsed = TRUE,
 
@@ -204,7 +213,7 @@ validation_ui <- function() {
     # ---- Results panel -------------------------------------------------
     fluidRow(
       box(
-        title = tagList(icon("clipboard-check"), " Validation Results"),
+        title = "Validation Results",
         status = "warning", solidHeader = TRUE, width = 12,
         uiOutput("validation_run_summary"),
         hr(),

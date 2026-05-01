@@ -508,9 +508,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       }
       
       div(class = "plot-card",
-        div(class = "plot-card-header",
-          icon("bullseye"), "Individual T/R Ratio"
-        ),
         div(class = "plot-card-body",
           div(class = "mb-3",
             p("Individual subject Test/Reference ratios for bioequivalence analysis. Each point represents one subject's T/R ratio. Red dashed lines show bioequivalence limits (80-125%).",
@@ -607,9 +604,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     # Create concentration plot card (special case with tabs)
     create_concentration_plot_card <- function(plot_data) {
       div(class = "plot-card",
-        div(class = "plot-card-header",
-          icon("line-chart"), "All Subject Profiles"
-        ),
         div(class = "plot-card-body",
           div(class = "mb-3",
             p("Mean concentration-time profiles comparing test and reference formulations.",
@@ -660,9 +654,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       output_id <- paste0(gsub("[^a-zA-Z0-9]", "_", tolower(title)), "_plot")
       
       div(class = "plot-card",
-        div(class = "plot-card-header",
-          icon(icon_name), title
-        ),
         div(class = "plot-card-body",
           div(class = "mb-3",
             p(get_plot_description(title),
@@ -779,9 +770,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         }
 
         div(class = "plot-card",
-          div(class = "plot-card-header",
-            icon("user"), "Individual Subject Profiles"
-          ),
           div(class = "plot-card-body",
             div(class = "mb-3",
               p("Select subjects by replicate period to view individual concentration-time profiles.",
@@ -809,9 +797,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           conc_data$Subject[conc_data$Treatment == "Reference"])))
 
         div(class = "plot-card",
-          div(class = "plot-card-header",
-            icon("user"), "Individual Subject Profiles"
-          ),
           div(class = "plot-card-body",
             div(class = "mb-3",
               p("Select specific subjects to view individual concentration-time profiles.",
@@ -885,9 +870,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       }
       
       div(class = "plot-card",
-        div(class = "plot-card-header",
-          icon("line-chart"), "Cummulative T/R Ratio"
-        ),
         div(class = "plot-card-body",
           div(class = "mb-3",
             p("Progressive bioequivalence evaluation as subjects are added sequentially to the analysis. Blue line shows point estimates, black lines show 90% confidence intervals.",
@@ -1484,9 +1466,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       all_subjects <- sort(unique(as.character(subject_data$Subject)))
       
       div(class = "plot-card",
-        div(class = "plot-card-header",
-          icon("chart-area"), "Lambda Z Terminal Phase Regression"
-        ),
         div(class = "plot-card-body",
           # Method label
           div(style = "margin-bottom: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid #2166AC;",
