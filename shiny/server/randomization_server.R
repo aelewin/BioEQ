@@ -10,7 +10,8 @@ randomization_server <- function(id, ss_result = NULL) {
     # Make the engine available (R/randomization.R is sourced from app.R).
     # If running this module standalone, source as a fallback.
     if (!exists("generate_randomization", mode = "function")) {
-      try(source("../R/randomization.R", local = FALSE), silent = TRUE)
+      r_dir <- if (exists(".BIOEQ_R_DIR")) .BIOEQ_R_DIR else "../R"
+      try(source(file.path(r_dir, "randomization.R"), local = FALSE), silent = TRUE)
     }
 
     # =========================================================================

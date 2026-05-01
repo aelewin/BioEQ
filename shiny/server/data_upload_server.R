@@ -8,7 +8,7 @@ if (!requireNamespace("readxl", quietly = TRUE)) {
 
 # Load required libraries and source validation functions
 if (!exists("validate_be_data")) {
-  source("../R/utils.R", local = TRUE)
+  source(file.path(.BIOEQ_R_DIR, "utils.R"), local = TRUE)
 }
 
 # Enhanced data validation function that handles common column name variations

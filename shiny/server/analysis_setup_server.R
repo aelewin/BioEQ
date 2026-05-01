@@ -4,11 +4,11 @@
 # Source help utilities
 source("utils/help_utils.R", local = TRUE)
 
-# Source simple ANOVA functions
-source("../R/simple_anova.R", local = TRUE)
+# Source simple ANOVA functions (.BIOEQ_R_DIR is set in shiny/app.R)
+source(file.path(.BIOEQ_R_DIR, "simple_anova.R"), local = TRUE)
 
 # Source RSABE analysis functions
-source("../R/rsabe_analysis.R", local = TRUE)
+source(file.path(.BIOEQ_R_DIR, "rsabe_analysis.R"), local = TRUE)
 
 # Helper function for null coalescing
 `%||%` <- function(x, y) if (is.null(x)) y else x

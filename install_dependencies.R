@@ -55,6 +55,18 @@ report_packages <- c(
 )
 
 # ---------------------------------------------------------------------------
+# OPTIONAL analysis enhancements — app falls back gracefully if missing.
+#   - dtw       : DTW-based pairwise profile comparison in Anomaly Detection
+#                 (falls back to RMSE if absent)
+#   - pbkrtest  : Kenward-Roger denominator df for mixed-effects ANOVA
+#                 (falls back to Satterthwaite if absent)
+# ---------------------------------------------------------------------------
+analysis_optional_packages <- c(
+  "dtw",
+  "pbkrtest"
+)
+
+# ---------------------------------------------------------------------------
 # DEVELOPMENT / TESTING packages — only needed when running tests
 # ---------------------------------------------------------------------------
 dev_packages <- c(
@@ -90,9 +102,10 @@ install_if_missing <- function(packages, package_type = "required") {
 }
 
 # Install all groups
-install_if_missing(required_packages, "required")
-install_if_missing(report_packages,   "report (optional)")
-install_if_missing(dev_packages,      "development/testing (optional)")
+install_if_missing(required_packages,           "required")
+install_if_missing(report_packages,             "report (optional)")
+install_if_missing(analysis_optional_packages,  "analysis enhancements (optional)")
+install_if_missing(dev_packages,                "development/testing (optional)")
 
 cat(paste0("\n", strrep("=", 52), "\n"))
 cat("BioEQ dependency installation complete!\n")

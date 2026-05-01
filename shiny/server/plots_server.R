@@ -20,9 +20,9 @@ if (!require(digest, quietly = TRUE)) {
   library(digest)
 }
 
-# Source plotting functions
-source("../R/plotting.R", local = TRUE)
-source("../R/cumulative_be_analysis.R", local = TRUE)
+# Source plotting functions (.BIOEQ_R_DIR is set in shiny/app.R)
+source(file.path(.BIOEQ_R_DIR, "plotting.R"), local = TRUE)
+source(file.path(.BIOEQ_R_DIR, "cumulative_be_analysis.R"), local = TRUE)
 
 plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_data, validation_result = NULL) {
   moduleServer(id, function(input, output, session) {

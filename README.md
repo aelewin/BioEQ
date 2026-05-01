@@ -83,6 +83,8 @@ Step-by-step guidance on data format requirements, workflow, and analysis interp
 
 ## Quick Start
 
+> **New to R?** Follow the beginner-friendly [Installation Guide](docs/INSTALLATION_GUIDE.md) instead — it walks through installing R, RStudio, and BioEQ from scratch with no prior experience required.
+
 ### Install Dependencies
 
 ```r
@@ -95,12 +97,15 @@ install.packages(c(
   "readxl", "bslib", "shinyjs", "shinycssloaders",
   "ggplot2", "gridExtra", "plotly", "htmlwidgets",
   "nlme", "lme4", "lmerTest", "replicateBE",
-  "PowerTOST", "reshape2", "scales", "writexl",
+  "PowerTOST", "reshape2", "scales", "writexl", "tidyr",
   "rmarkdown", "knitr", "zip", "digest"
 ))
 
 # Optional (Word report generation)
 install.packages(c("officer", "flextable"))
+
+# Optional (analysis enhancements: DTW similarity, Kenward-Roger DDF)
+install.packages(c("dtw", "pbkrtest"))
 ```
 
 ### Launch the App

@@ -1,6 +1,74 @@
 # BioEQ Shiny Web Application
 # Main application entry point
 
+# ---------------------------------------------------------------------------
+# Robust path resolution
+# ---------------------------------------------------------------------------
+# All source() calls below historically used paths relative to the working
+# directory (e.g. "../R/bioeq_main.R"), which only resolves correctly when
+# the working directory is exactly the shiny/ folder. Different launch paths
+# (RStudio "Run App", "Source", or runApp() invoked from a different cwd)
+# can break those relative paths and force users to copy R/ files into shiny/.
+#
+# The block below detects the real location of THIS file (app.R) using
+# sys.frames(), walks up to locate the BioEQ project root (the directory
+# containing R/bioeq_main.R), and normalizes the working directory to the
+# shiny/ folder so that all downstream relative paths in server/UI modules
+# continue to work unchanged.
+.bioeq_find_paths <- function() {
+  # 1. Try to find this file's path from the call stack
+  this_file <- tryCatch({
+    frames <- sys.frames()
+    ofiles <- vapply(frames, function(f) {
+      x <- f$ofile
+      if (is.null(x)) NA_character_ else as.character(x)
+    }, character(1))
+    ofiles <- ofiles[!is.na(ofiles) & nzchar(ofiles)]
+    if (length(ofiles)) normalizePath(ofiles[length(ofiles)], mustWork = FALSE)
+    else NA_character_
+  }, error = function(e) NA_character_)
+
+  # 2. Build candidate starting directories
+  candidates <- character(0)
+  if (!is.na(this_file) && nzchar(this_file)) {
+    candidates <- c(candidates, dirname(this_file))
+  }
+  candidates <- c(candidates, getwd())
+
+  # 3. From each candidate, walk up looking for R/bioeq_main.R
+  for (start in candidates) {
+    d <- start
+    for (i in 1:8) {
+      if (file.exists(file.path(d, "R", "bioeq_main.R"))) {
+        return(list(
+          root  = normalizePath(d, mustWork = TRUE),
+          shiny = normalizePath(file.path(d, "shiny"), mustWork = FALSE)
+        ))
+      }
+      parent <- dirname(d)
+      if (parent == d) break
+      d <- parent
+    }
+  }
+  stop(
+    "BioEQ: could not locate the project root. Expected to find R/bioeq_main.R\n",
+    "  starting from this file or working directory: ", getwd(), "\n",
+    "  Please launch the app from the BioEQ project root, e.g.\n",
+    "    setwd(\"/path/to/BioEQ\"); shiny::runApp(\"shiny\")"
+  )
+}
+.bioeq_paths <- .bioeq_find_paths()
+.BIOEQ_ROOT  <- .bioeq_paths$root
+.BIOEQ_R_DIR <- file.path(.BIOEQ_ROOT, "R")
+.SHINY_DIR   <- .bioeq_paths$shiny
+
+# Normalize working directory to shiny/ so existing relative paths in
+# downstream server/UI files (e.g. "../R/...", "ui/...", "utils/...") all
+# resolve correctly regardless of how the app was launched.
+if (dir.exists(.SHINY_DIR)) {
+  setwd(.SHINY_DIR)
+}
+
 # Load required libraries
 library(shiny)
 library(shinydashboard)
@@ -84,21 +152,26 @@ tryCatch({
   message("dtw not available - DTW pairwise comparison will fall back to RMSE")
 })
 
-# Source the existing BioEQ R functions
-source("../R/bioeq_main.R", local = TRUE)
-source("../R/nca_functions.R", local = TRUE)
-source("../R/be_analysis.R", local = TRUE)
-source("../R/rsabe_analysis.R", local = TRUE)  # RSABE analysis (FDA linearized + ncTOST)
-source("../R/simple_anova.R", local = TRUE)  # Simple ANOVA using lm()
-source("../R/statistics.R", local = TRUE)
-source("../R/utils.R", local = TRUE)
-source("../R/missing_data_handling.R", local = TRUE)  # Missing data for NCA
-source("../R/carryover_detection.R", local = TRUE)
-source("../R/plotting.R", local = TRUE)  # Enhanced plotting functions with Shiny support
-source("../R/cumulative_be_analysis.R", local = TRUE)  # Cumulative bioequivalence analysis
-source("../R/validation_runner.R", local = TRUE)  # Black-box validation engine
-source("../R/anomaly_detection.R", local = TRUE)  # Fraud / anomaly detection analytics
-source("../R/randomization.R",     local = TRUE)  # Randomization engine
+# Source the existing BioEQ R functions (absolute paths from .BIOEQ_R_DIR)
+# NOTE: We source into globalenv() so functions defined in these files are
+# visible everywhere (server modules, etc.). Sourcing with local=TRUE inside a
+# helper function would trap definitions in the helper's local frame and they
+# would disappear as soon as the helper returns.
+.source_R <- function(fname) sys.source(file.path(.BIOEQ_R_DIR, fname), envir = globalenv())
+.source_R("bioeq_main.R")
+.source_R("nca_functions.R")
+.source_R("be_analysis.R")
+.source_R("rsabe_analysis.R")            # RSABE analysis (FDA linearized + ncTOST)
+.source_R("simple_anova.R")              # Simple ANOVA using lm()
+.source_R("statistics.R")
+.source_R("utils.R")
+.source_R("missing_data_handling.R")     # Missing data for NCA
+.source_R("carryover_detection.R")
+.source_R("plotting.R")                  # Enhanced plotting functions with Shiny support
+.source_R("cumulative_be_analysis.R")    # Cumulative bioequivalence analysis
+.source_R("validation_runner.R")         # Black-box validation engine
+.source_R("anomaly_detection.R")         # Fraud / anomaly detection analytics
+.source_R("randomization.R")             # Randomization engine
 
 # Source template configuration
 source("templates/report_generation.R", local = TRUE)
