@@ -235,33 +235,67 @@ pairwise_dtw <- function(M) {
     } else {
       dist_aligned[k] <- sqrt(mean((cc$a - cc$b)^2))
     }
-    cf <- suppressWarnings(stats::ccf(cc$a, cc$b, plot = FALSE,
-                                       lag.max = max(1, floor(cc$n / 2))))
-    lag_opt[k] <- cf$lag[which.max(abs(cf$acf))]
+    if (stats::sd(cc$a) == 0 || stats::sd(cc$b) == 0) {
+      lag_opt[k] <- NA_real_
+    } else {
+      lag_opt[k] <- tryCatch({
+        cf <- suppressWarnings(stats::ccf(cc$a, cc$b, plot = FALSE,
+                                           lag.max = max(1, floor(cc$n / 2))))
+        as.numeric(cf$lag[which.max(abs(cf$acf))])
+      }, error = function(e) NA_real_)
+    }
   }
   out$dtw_distance <- dist_aligned
   out$dtw_lag      <- lag_opt
   out
 }
 
-#' Peak cross-correlation and corresponding lag
+#' Peak cross-correlation, corresponding lag, and post-shift agreement.
+#'
+#' For each pair we find the lag that maximises |corr|, then we *apply* that
+#' lag and measure how well the two aligned sub-vectors agree (Pearson r^2).
+#' Cross-correlation alone only measures shape similarity at a lag — many
+#' normal PK profiles peak together at lag ±1. The post-shift r^2 is the
+#' direct test for a time-shifted COPY: a true shifted duplicate gives r^2 ~ 1
+#' on the aligned overlap; a coincidental shape match gives r^2 << 1.
 pairwise_crosscorr <- function(M) {
   out <- .pair_skeleton(M)
   pi  <- .pair_indices(nrow(M))
-  peak <- lag <- numeric(length(pi$i))
+  peak <- lag <- shift_r2 <- numeric(length(pi$i))
   for (k in seq_along(pi$i)) {
     cc <- .complete(M[pi$i[k], ], M[pi$j[k], ])
-    if (cc$n < 4 || sd(cc$a) == 0 || sd(cc$b) == 0) {
-      peak[k] <- NA_real_; lag[k] <- NA_real_; next
+    if (cc$n < 4 || stats::sd(cc$a) == 0 || stats::sd(cc$b) == 0) {
+      peak[k] <- NA_real_; lag[k] <- NA_real_; shift_r2[k] <- NA_real_; next
     }
-    cf <- suppressWarnings(stats::ccf(cc$a, cc$b, plot = FALSE,
-                                       lag.max = max(1, floor(cc$n / 2))))
-    idx <- which.max(abs(cf$acf))
-    peak[k] <- as.numeric(cf$acf[idx])
-    lag[k]  <- as.numeric(cf$lag[idx])
+    res <- tryCatch({
+      cf  <- suppressWarnings(stats::ccf(cc$a, cc$b, plot = FALSE,
+                                          lag.max = max(1, floor(cc$n / 2))))
+      idx <- which.max(abs(cf$acf))
+      list(peak = as.numeric(cf$acf[idx]), lag = as.numeric(cf$lag[idx]))
+    }, error = function(e) list(peak = NA_real_, lag = NA_real_))
+    peak[k] <- res$peak
+    lag[k]  <- res$lag
+
+    # Post-shift agreement: align b to a using the optimal lag, then compute
+    # r^2 on the overlapping segment. ccf convention is corr(a[t], b[t+lag]):
+    # at lag L we compare a[1..n-|L|] with b[1+|L|..n] for L<0 and
+    # a[|L|+1..n] with b[1..n-|L|] for L>0 — i.e. drop |L| values from
+    # whichever end aligns the two series.
+    L <- res$lag
+    if (is.finite(L) && abs(L) >= 1 && (cc$n - abs(L)) >= 4) {
+      if (L < 0) { x <- cc$a[seq_len(cc$n - abs(L))]; y <- cc$b[(abs(L) + 1):cc$n] }
+      else       { x <- cc$a[(L + 1):cc$n];           y <- cc$b[seq_len(cc$n - L)] }
+      shift_r2[k] <- tryCatch({
+        if (stats::sd(x) == 0 || stats::sd(y) == 0) NA_real_
+        else suppressWarnings(stats::cor(x, y))^2
+      }, error = function(e) NA_real_)
+    } else {
+      shift_r2[k] <- NA_real_
+    }
   }
   out$xcorr_peak <- peak
   out$xcorr_lag  <- lag
+  out$shift_r2   <- shift_r2
   out
 }
 
@@ -421,81 +455,70 @@ classify_pairs <- function(pair_df,
 
 #' Overlapping-duplicate battery
 #'
-#' Detects literal / near-literal re-use: high CCC, high f2, slope ~ 1, r^2 ~ 1.
+#' Detects literal / near-literal re-use. Sorted by Lin's CCC — the single
+#' most direct measure of profile-level agreement (shape + scale). f2, slope,
+#' and r² are included as supporting columns.
 run_overlap_battery <- function(M) {
   base <- .pair_skeleton(M)
   base <- merge(base, pairwise_ccc(M),     by = c("id1", "id2"))
   base <- merge(base, pairwise_f2(M),      by = c("id1", "id2"))
   base <- merge(base, pairwise_satowib(M), by = c("id1", "id2"))
-
-  s_ccc   <- .scale01(base$ccc)
-  s_f2    <- .scale01(base$f2)
-  s_slope <- .scale01(-abs(base$slope - 1))   # closer to 1 = more suspicious
-  s_r2    <- .scale01(base$r2)
-  base$overlap_score <- rowMeans(cbind(s_ccc, s_f2, s_slope, s_r2),
-                                  na.rm = TRUE)
-  base$overlap_score[is.nan(base$overlap_score)] <- NA_real_
-  base[order(-base$overlap_score), , drop = FALSE]
+  base[order(-base$ccc, na.last = TRUE), , drop = FALSE]
 }
 
 #' Scaled-duplicate battery (dilution / concentration)
 #'
-#' Profiles that match in shape but differ in amplitude: r^2 high, slope far
-#' from 1; shape Pearson high; CCC low (because amplitude differs).
+#' Profiles whose values are a proportional rescaling of each other. Sorted by
+#' r² of the SaToWIB linear regression — the cleanest line fit wins. No gating
+#' on slope, so exact duplicates (slope = 1) appear alongside scaled copies.
+#' Inspect the slope column to distinguish: slope ≈ 1 = exact dup, slope ≠ 1
+#' = scaled copy.
 run_scaled_battery <- function(M) {
   base <- .pair_skeleton(M)
-  base <- merge(base, pairwise_satowib(M),         by = c("id1", "id2"))
-  base <- merge(base, pairwise_pearson_shape(M),   by = c("id1", "id2"))
-  base <- merge(base, pairwise_spearman(M),        by = c("id1", "id2"))
-  base <- merge(base, pairwise_ccc(M),             by = c("id1", "id2"))
-
-  s_r2     <- .scale01(base$r2)
-  s_off    <- .scale01(abs(base$slope - 1))           # farther from 1 = sus
-  s_shape  <- .scale01(base$shape_pearson)
-  s_spear  <- .scale01(base$spearman)
-  s_lowccc <- .scale01(-base$ccc)                     # low CCC = sus
-  base$scale_score <- rowMeans(
-    cbind(s_r2, s_off, s_shape, s_spear, s_lowccc), na.rm = TRUE
-  )
-  base$scale_score[is.nan(base$scale_score)] <- NA_real_
-  base[order(-base$scale_score), , drop = FALSE]
+  base <- merge(base, pairwise_satowib(M), by = c("id1", "id2"))
+  base$scale_score <- base$r2
+  base[order(-base$scale_score, na.last = TRUE), , drop = FALSE]
 }
 
 #' Time-shifted duplicate battery
 #'
-#' DTW small with non-zero optimal lag, and high cross-correlation peak with
-#' non-zero lag.
+#' Detects profiles that are an actual COPY of another, time-shifted. The key
+#' test is post-shift agreement: at the optimal lag, the two aligned vectors
+#' must match almost exactly (r^2 -> 1). High xcorr_peak alone is not enough,
+#' because many normal PK profiles share the same rise/fall shape and produce
+#' high correlations at lag ±1 by coincidence.
+#'
+#' Gates:
+#'   - |xcorr_lag|  >= 1   (best alignment is NOT at zero shift)
+#'   - xcorr_peak   > 0    (positive correlation at that lag)
+#'   - shift_r2     >= 0.90 (post-alignment values truly agree)
+#' Sorted by shift_r2 descending — the strongest aligned-copy match wins.
 run_lag_battery <- function(M) {
   base <- .pair_skeleton(M)
-  base <- merge(base, pairwise_dtw(M),       by = c("id1", "id2"))
   base <- merge(base, pairwise_crosscorr(M), by = c("id1", "id2"))
 
-  s_dtw  <- .scale01(-base$dtw_distance)              # smaller distance = sus
-  s_lag  <- .scale01(abs(base$dtw_lag))               # bigger lag = sus
-  s_xc   <- .scale01(base$xcorr_peak)
-  s_xlag <- .scale01(abs(base$xcorr_lag))
-  base$lag_score <- rowMeans(cbind(s_dtw, s_lag, s_xc, s_xlag), na.rm = TRUE)
-  base$lag_score[is.nan(base$lag_score)] <- NA_real_
-  base[order(-base$lag_score), , drop = FALSE]
+  valid <- !is.na(base$xcorr_lag) & abs(base$xcorr_lag) >= 1 &
+           !is.na(base$xcorr_peak) & base$xcorr_peak > 0 &
+           !is.na(base$shift_r2)  & base$shift_r2 >= 0.90
+  base$xcorr_peak[!valid] <- NA_real_
+  base$xcorr_lag[!valid]  <- NA_real_
+  base$shift_r2[!valid]   <- NA_real_
+  base[order(-base$shift_r2, na.last = TRUE), , drop = FALSE]
 }
 
 #' Dynamic-pattern battery
 #'
-#' Reuse of rise / fall dynamics independent of magnitude: derivative Pearson
-#' high, shape Pearson high (confirmation), CCC low.
+#' Detects reuse of rise/fall dynamics independent of magnitude. Sorted by
+#' derivative_pearson — the Pearson correlation of first differences, which
+#' directly measures whether two profiles share the same direction and magnitude
+#' of change between timepoints. shape_pearson and ccc are included as
+#' supporting columns.
 run_dynamics_battery <- function(M) {
   base <- .pair_skeleton(M)
-  base <- merge(base, pairwise_derivative(M),     by = c("id1", "id2"))
-  base <- merge(base, pairwise_pearson_shape(M),  by = c("id1", "id2"))
-  base <- merge(base, pairwise_ccc(M),            by = c("id1", "id2"))
-
-  s_deriv  <- .scale01(base$derivative_pearson)
-  s_shape  <- .scale01(base$shape_pearson)
-  s_lowccc <- .scale01(-base$ccc)
-  base$dynamics_score <- rowMeans(cbind(s_deriv, s_shape, s_lowccc),
-                                   na.rm = TRUE)
-  base$dynamics_score[is.nan(base$dynamics_score)] <- NA_real_
-  base[order(-base$dynamics_score), , drop = FALSE]
+  base <- merge(base, pairwise_derivative(M),    by = c("id1", "id2"))
+  base <- merge(base, pairwise_pearson_shape(M), by = c("id1", "id2"))
+  base <- merge(base, pairwise_ccc(M),           by = c("id1", "id2"))
+  base[order(-base$derivative_pearson, na.last = TRUE), , drop = FALSE]
 }
 
 # =============================================================================

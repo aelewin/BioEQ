@@ -2,15 +2,13 @@
 # PowerTOST-based sample size calculator for bioequivalence studies
 
 tagList(
-  fluidRow(
-    column(12,
-      div(style = "margin-bottom: 20px;",
-        span(icon("calculator"), " Sample Size Estimation", 
-             style = "font-weight: bold; font-size: 18px; color: #3498db;"),
-        span(" — Powered by PowerTOST", 
-             style = "margin-left: 8px; font-size: 13px; color: #6c757d;")
-      )
-    )
+  div(
+    class = "sample-size-header",
+    style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+    h3(icon("calculator"), " Sample Size Estimation",
+       style = "margin: 0; font-weight: 700;"),
+    p("PowerTOST-based sample size calculator for BE studies.",
+      style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
   ),
   
   fluidRow(

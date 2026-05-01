@@ -25,14 +25,14 @@ anomaly_detection_ui <- function(id) {
         br(),
         fluidRow(
           box(
-            title = "Source Dataset", status = "primary", solidHeader = TRUE,
-            width = 5,
+            title = NULL, status = "primary", solidHeader = FALSE,
+            width = 12,
             radioButtons(
               ns("data_source"),
-              label = "Use which dataset?",
+              label = NULL,
               choices = list(
-                "Currently uploaded BE dataset" = "shared",
-                "Upload a separate dataset for fraud screening" = "upload"
+                "Use currently uploaded dataset" = "shared",
+                "Upload dataset" = "upload"
               ),
               selected = "shared"
             ),
@@ -43,26 +43,17 @@ anomaly_detection_ui <- function(id) {
               helpText("Required columns: Subject, Time, Concentration. ",
                        "Optional: Treatment, Period, Sequence.")
             ),
-            hr(),
-            uiOutput(ns("data_status"))
-          ),
-          box(
-            title = "Profile Filtering", status = "info", solidHeader = TRUE,
-            width = 7,
-            uiOutput(ns("treatment_filter_ui")),
             checkboxInput(ns("exclude_blq"),
-                          "Exclude below-LLOQ values from comparisons",
+                          "Exclude 0 points from analysis",
                           value = TRUE),
-            numericInput(ns("lloq_value"),
-                         "LLOQ value (concentrations \u2264 are excluded)",
-                         value = 0, min = 0, step = 0.1),
             hr(),
+            uiOutput(ns("data_status")),
             uiOutput(ns("profile_summary"))
           )
         ),
         fluidRow(
           box(
-            title = "Profile Preview", status = "warning", solidHeader = TRUE,
+            title = "Data Preview", status = "warning", solidHeader = TRUE,
             width = 12,
             DT::dataTableOutput(ns("profile_preview"))
           )
@@ -102,16 +93,14 @@ anomaly_detection_ui <- function(id) {
             hr(),
             sliderInput(ns("top_n_pairs"),
                         "Show top N pairs:",
-                        min = 10, max = 200, value = 50, step = 10),
+                        min = 10, max = 200, value = 10, step = 10),
             actionButton(ns("run_pairwise"), "Run Comparison",
                          icon = icon("play"), class = "btn-primary btn-block")
           ),
           box(
             title = "Ranked Pair Table", status = "warning", solidHeader = TRUE,
             width = 8,
-            p("Click a row to overlay the two profiles below.",
-              style = "color: #4a5568; font-size: 13px;"),
-            DT::dataTableOutput(ns("pair_table"))
+            div(class = "no-top-pad", DT::dataTableOutput(ns("pair_table")))
           )
         ),
         fluidRow(

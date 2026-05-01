@@ -173,6 +173,11 @@ body {
   padding: 25px;
 }
 
+/* Remove top padding inside boxes that start directly with a table */
+.box-body .no-top-pad {
+  margin-top: -15px;
+}
+
 /* Responsive boxes */
 @media (max-width: 768px) {
   .box {

@@ -7,6 +7,14 @@ anomaly_detection_server <- function(id, uploaded_data) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    # On startup, default to "Upload dataset" if no shared dataset is loaded.
+    observe({
+      d <- tryCatch(uploaded_data(), error = function(e) NULL)
+      if (is.null(d) || (is.data.frame(d) && nrow(d) == 0)) {
+        updateRadioButtons(session, "data_source", selected = "upload")
+      }
+    })
+
     # =========================================================================
     # Reactive data plumbing
     # =========================================================================
@@ -37,27 +45,14 @@ anomaly_detection_server <- function(id, uploaded_data) {
       as.data.frame(d)
     })
 
-    # Treatment filter UI (built dynamically based on the dataset)
-    output$treatment_filter_ui <- renderUI({
-      d <- tryCatch(source_data(), error = function(e) NULL)
-      if (is.null(d) || !"Treatment" %in% names(d)) {
-        return(helpText("No Treatment column detected \u2014 all profiles will be compared."))
-      }
-      trts <- sort(unique(as.character(d$Treatment)))
-      checkboxGroupInput(ns("trt_filter"),
-                         "Include treatment(s)",
-                         choices = trts, selected = trts, inline = TRUE)
-    })
+    # Treatment filter UI removed — all profiles included by default.
+    output$treatment_filter_ui <- renderUI({ NULL })
 
-    # Filtered data after treatment + LLOQ exclusion
+    # Filtered data: optionally drop zero/negative concentration points
     filtered_data <- reactive({
       d <- source_data()
-      if (!is.null(input$trt_filter) && "Treatment" %in% names(d)) {
-        d <- d[as.character(d$Treatment) %in% input$trt_filter, , drop = FALSE]
-      }
       if (isTRUE(input$exclude_blq)) {
-        lloq <- input$lloq_value %||% 0
-        d$Concentration[d$Concentration <= lloq] <- NA_real_
+        d$Concentration[d$Concentration <= 0] <- NA_real_
       }
       d
     })
@@ -100,9 +95,9 @@ anomaly_detection_server <- function(id, uploaded_data) {
       obj <- profile_obj()
       df <- as.data.frame(obj$matrix)
       df <- cbind(ID = rownames(df), df)
+      # Render values exactly as stored in the uploaded data — do not pad decimals.
       DT::datatable(df, options = list(pageLength = 10, scrollX = TRUE),
-                    rownames = FALSE) |>
-        DT::formatRound(columns = which(sapply(df, is.numeric)), digits = 3)
+                    rownames = FALSE)
     })
 
     # =========================================================================
@@ -117,25 +112,25 @@ anomaly_detection_server <- function(id, uploaded_data) {
       overlap = list(
         label   = "Overlapping duplicates",
         runner  = function(M) run_overlap_battery(M),
-        score   = "overlap_score",
+        score   = "ccc",          # Lin's CCC: closest to 1 = most similar
         overlay = "raw"
       ),
       scaled = list(
         label   = "Scaled duplicates",
         runner  = function(M) run_scaled_battery(M),
-        score   = "scale_score",
+        score   = "scale_score",  # r2 * |slope-1|: line fit AND non-identity slope
         overlay = "normalised"
       ),
       lag = list(
         label   = "Time-shifted duplicates",
         runner  = function(M) run_lag_battery(M),
-        score   = "lag_score",
+        score   = "shift_r2",   # post-shift agreement (r² of aligned overlap)
         overlay = "raw"
       ),
       dynamics = list(
         label   = "Dynamic pattern match",
         runner  = function(M) run_dynamics_battery(M),
-        score   = "dynamics_score",
+        score   = "derivative_pearson",  # correlation of first differences
         overlay = "normalised"
       )
     )
@@ -154,26 +149,28 @@ anomaly_detection_server <- function(id, uploaded_data) {
         p(em("High score = candidate duplicate. Always confirm by inspecting the overlay."))
       ),
       scaled = tagList(
-        h4("Scaled duplicates (dilution / concentration)"),
-        p("Detects re-use disguised by multiplying a profile by a constant \u2014 ",
-          "shape is identical but amplitude differs."),
+        h4("Scaled duplicates (proportional differences)"),
+        p("Detects pairs whose values are a proportional rescaling of each other across ",
+          "the whole profile \u2014 same shape, uniformly higher or lower amplitude ",
+          "(e.g. a dilution / concentration error)."),
         tags$ul(
-          tags$li(strong("SaToWIB regression:"), " r\u00B2 \u2248 1 with slope \u2260 1 implies linear scaling."),
-          tags$li(strong("Pearson on Cmax-normalised:"), " correlation after stripping amplitude \u2014 isolates shape match."),
-          tags$li(strong("Spearman rank:"), " preserves only ordering, robust to monotonic rescaling."),
-          tags$li(strong("Lin's CCC:"), " low CCC together with high shape match confirms an amplitude shift.")
+          tags$li(strong("SaToWIB regression r\u00B2 \u2248 1:"), " all timepoints fall on a single line."),
+          tags$li(strong("|slope \u2212 1| large:"), " the line is not the identity \u2014 one profile is uniformly higher or lower.")
         ),
-        p(em("Overlay is rendered Cmax-normalised so the shape match is visible."))
+        p(em("Single-point Cmax spikes are intentionally not flagged here \u2014 they break r\u00B2 ",
+             "and are easier to spot visually in the overlay plots."))
       ),
       lag = tagList(
         h4("Time-shifted duplicates"),
         p("Detects re-use disguised by shifting a profile in time \u2014 ",
           "shape is identical but the curve appears earlier or later."),
         tags$ul(
-          tags$li(strong("Dynamic Time Warping:"), " optimal-alignment distance; small distance with non-zero lag = shifted copy."),
-          tags$li(strong("Cross-correlation peak + lag:"), " correlation across lags; high peak at non-zero lag confirms shift.")
+          tags$li(strong("Cross-correlation lag:"), " the timepoint offset at which the two profiles best align."),
+          tags$li(strong("Cross-correlation peak:"), " correlation at that optimal lag (must be > 0)."),
+          tags$li(strong("shift_r\u00B2 (sort key):"), " r\u00B2 of the two profiles AFTER applying the optimal lag. ",
+                  "Only a true time-shifted copy gives shift_r\u00B2 \u2248 1; coincidental shape matches give shift_r\u00B2 << 1.")
         ),
-        p(em("DTW falls back to RMSE if the dtw package is unavailable."))
+        p(em("Gated to |lag| \u2265 1, peak > 0, and shift_r\u00B2 \u2265 0.90 so only genuine shifted copies appear."))
       ),
       dynamics = tagList(
         h4("Dynamic pattern match"),
@@ -225,14 +222,26 @@ anomaly_detection_server <- function(id, uploaded_data) {
     output$pair_table <- DT::renderDataTable({
       pr <- pair_results()
       validate(need(!is.null(pr), "Choose a comparison and click 'Run Comparison'."))
-      df <- pr$table
+      df        <- pr$table
+      score_col <- pr$spec$score
+      # Drop rows with no score, then sort descending in R so DT
+      # inherits the correct order regardless of NA handling.
+      df <- df[!is.na(df[[score_col]]), , drop = FALSE]
+      df <- df[order(-df[[score_col]]), , drop = FALSE]
       n  <- min(nrow(df), input$top_n_pairs %||% 50)
       df <- head(df, n)
-      score_col <- pr$spec$score
+      # Move the score column right after id1/id2 so it is visually obvious
+      # which column the ranking is based on.
+      front <- intersect(c("id1", "id2", score_col), names(df))
+      df    <- df[, c(front, setdiff(names(df), front)), drop = FALSE]
       num_cols  <- which(sapply(df, is.numeric))
-      score_idx <- which(names(df) == score_col) - 1
-      DT::datatable(df, selection = "single",
-                    options = list(pageLength = 15, scrollX = TRUE,
+      score_idx <- which(names(df) == score_col) - 1  # 0-indexed for DT
+      # Rename id1/id2 for display only (after index math)
+      names(df)[names(df) == "id1"] <- "Profile 1"
+      names(df)[names(df) == "id2"] <- "Profile 2"
+      DT::datatable(df, selection = "single", rownames = FALSE,
+                    options = list(pageLength = 10, scrollX = TRUE,
+                                   dom = "rtip",
                                    order = list(list(score_idx, "desc")))) |>
         DT::formatRound(columns = num_cols, digits = 3)
     })

@@ -98,6 +98,7 @@ source("../R/plotting.R", local = TRUE)  # Enhanced plotting functions with Shin
 source("../R/cumulative_be_analysis.R", local = TRUE)  # Cumulative bioequivalence analysis
 source("../R/validation_runner.R", local = TRUE)  # Black-box validation engine
 source("../R/anomaly_detection.R", local = TRUE)  # Fraud / anomaly detection analytics
+source("../R/randomization.R",     local = TRUE)  # Randomization engine
 
 # Source template configuration
 source("templates/report_generation.R", local = TRUE)
@@ -109,11 +110,13 @@ source("ui/results_dashboard_ui.R", local = TRUE)
 source("ui/plots_ui.R", local = TRUE)
 source("ui/validation_ui.R", local = TRUE)
 source("ui/anomaly_detection_ui.R", local = TRUE)
+source("ui/randomization_ui.R",     local = TRUE)
 source("server/main_server.R", local = TRUE)
 source("server/results_dashboard_server.R", local = TRUE)
 source("server/plots_server.R", local = TRUE)
 source("server/validation_server.R", local = TRUE)
 source("server/anomaly_detection_server.R", local = TRUE)
+source("server/randomization_server.R",     local = TRUE)
 
 # Define utility operators and functions
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -841,24 +844,10 @@ ui <- dashboardPage(
         anomaly_detection_ui("anomaly_detection")
       ),
 
-      # Randomization Tab (placeholder)
+      # Randomization Tab
       tabItem(
         tabName = "randomization",
-        fluidRow(
-          box(
-            title = "Randomization",
-            status = "primary",
-            solidHeader = TRUE,
-            width = 12,
-            h4("Coming Soon"),
-            p("Randomization tools for bioequivalence study design will be available here."),
-            tags$ul(
-              tags$li("Treatment sequence generation"),
-              tags$li("Stratified and block randomization"),
-              tags$li("Randomization list export")
-            )
-          )
-        )
+        randomization_ui("randomization")
       ),
       
       # Validation Tab (black-box validation module)
@@ -1021,12 +1010,12 @@ server <- function(input, output, session) {
     updateTabItems(session, "sidebar", "setup")
   })
   
-  # Source server modules with proper environment access
-  local({
-    source("server/data_upload_server.R", local = environment())
-    source("server/analysis_setup_server.R", local = environment()) 
-    source("server/sample_size_server.R", local = environment())
-  })
+  # Source server modules with proper environment access.
+  # Use the server function's environment so reactives defined in those
+  # files (e.g. ss_result) are visible to subsequent module wiring.
+  source("server/data_upload_server.R",     local = environment())
+  source("server/analysis_setup_server.R",  local = environment())
+  source("server/sample_size_server.R",     local = environment())
   
   # Initialize results dashboard module
   results_dashboard_server("results_dashboard", 
@@ -1047,6 +1036,10 @@ server <- function(input, output, session) {
   # Initialize anomaly detection module (uses uploaded data when available)
   anomaly_detection_server("anomaly_detection",
                             uploaded_data = reactive(values$uploaded_data))
+
+  # Initialize randomization module (autofills from sample_size if available)
+  randomization_server("randomization",
+                       ss_result = if (exists("ss_result")) ss_result else NULL)
   
   # =======================================================================
   # EXPORTS & REPORTS SERVER LOGIC

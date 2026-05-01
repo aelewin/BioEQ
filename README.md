@@ -61,14 +61,20 @@ Export results and generate regulatory-ready reports.
 ### Validation
 Built-in black-box validation engine that benchmarks BioEQ results against embedded reference datasets derived from industry-standard software. Validation runs within the app — no filesystem access or external files needed.
 
-### Anomaly Detection *(in development)*
-Automated tools for flagging anomalous concentration-time profiles, outlier NCA parameters, and subject-level data quality issues.
+### Anomaly Detection
+Automated tools for flagging anomalous concentration-time profiles, outlier NCA parameters, and subject-level data quality issues. Includes pairwise profile comparison, trend analysis, and distributional checks. Data can be uploaded directly within the module without needing to run a full analysis.
 
 ### Sample Size
-Power and sample size estimation for bioequivalence studies via the `PowerTOST` package, supporting ABE and scaled BE designs.
+Power and sample size estimation for bioequivalence studies via the `PowerTOST` package, supporting ABE, RSABE (FDA Linearized, ncTOST), and ABEL designs. Results are automatically passed to the Randomization module via the autofill feature.
 
-### Randomization *(in development)*
-Treatment sequence generation, block/stratified randomization, and randomization list export for study design.
+### Randomization
+Full treatment sequence randomization for BE studies. Reproducible from seed, auditable, and verifiable.
+
+- **Designs supported**: Parallel (T vs R), 2×2 Crossover, 2×2×3 Replicate (TRT|RTR), 2×2×4 Full Replicate (TRTR|RTRT), 2×3×3 Partial Replicate
+- **Generate Schedule**: Configure design, sample size, optional group (block) randomization, RNG seed, optional stratification, and subject ID prefix. Autofill from the Sample Size module in one click.
+- **Verify Schedule**: Re-enter parameters from an audit record and optionally upload a CSV to confirm all assignments are identical to the regenerated schedule.
+- **Report**: Downloadable plain-text audit record and self-contained HTML pharmacist report. Includes algorithm details (Mersenne-Twister), seed, R version, schedule hash (SHA-256), and all parameters required for regulatory submission.
+- **Reproducibility**: Uses base R only (no package version dependencies in the random stream); RNGkind locked to `Mersenne-Twister/Inversion/Rejection` for R ≥ 3.6.
 
 ### Help & Support
 Step-by-step guidance on data format requirements, workflow, and analysis interpretation.
@@ -172,6 +178,7 @@ BioEQ/
 │   ├── cumulative_be_analysis.R # Progressive cumulative BE
 │   ├── missing_data_handling.R  # BLQ/missing data strategies
 │   ├── plotting.R            # Static & interactive plots
+│   ├── randomization.R       # BE randomization engine (base R, reproducible)
 │   ├── statistics.R          # Sample size & power functions
 │   ├── utils.R               # Shared utilities
 │   └── validation_runner.R   # Black-box validation engine
@@ -194,10 +201,9 @@ BioEQ/
 
 ## Roadmap
 
-- **Anomaly Detection** — Automated outlier flagging and data quality diagnostics
-- **Randomization** — Treatment sequence generation and randomization list export
-- **Expanded reporting** — Full Word report support
+- **Expanded reporting** — Full Word report support (requires optional `officer`/`flextable` packages)
 - **Additional study designs** — Higher-order crossover and multi-dose designs
+- **DTW pairwise comparison** — Dynamic Time Warping for anomaly detection (requires optional `dtw` package)
 
 ---
 
