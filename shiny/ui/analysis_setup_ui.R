@@ -5,14 +5,14 @@
 source("utils/help_utils.R", local = TRUE)
 
 tagList(
-  fluidRow(
-    # Navigation breadcrumb
-    column(12,
-      div(style = "margin-bottom: 20px;",
-        actionButton("back_to_upload", "← Back to Upload", class = "btn btn-outline-secondary"),
-        span(" > Analysis Setup", style = "margin-left: 10px; font-weight: bold; color: #3498db;")
-      )
-    )
+  # ---- Header --------------------------------------------------------
+  div(
+    class = "setup-header",
+    style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+    h3(icon("cogs"), " Analysis Setup",
+       style = "margin: 0; font-weight: 700;"),
+    p("Configure study design, PK parameters, statistical method, and analysis options.",
+      style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
   ),
 
   fluidRow(
@@ -22,11 +22,10 @@ tagList(
       
       # Study design detection
       box(
-        title = "Study Design Configuration", 
-        status = "primary", 
-        solidHeader = TRUE,
+        title = NULL,
+        status = "primary",
+        solidHeader = FALSE,
         width = 12,
-        icon = icon("cogs"),
         
         fluidRow(
           # Green detection box - left side when detected
@@ -102,16 +101,11 @@ tagList(
         )
       ), # Close Study Design box
       
+      div(style = "clear: both; width: 100%;"),
+      
       # Analysis parameters - 3-step structure based on data type
-      box(
-        title = "Analysis Parameters", 
-        status = "info", 
-        solidHeader = TRUE,
-        width = 12,
-        icon = icon("sliders-h"),
-        
-        # Step 1: NCA Analysis Setup (only for concentration data)
-        conditionalPanel(
+      # Step 1: NCA Analysis Setup (only for concentration data)
+      conditionalPanel(
           condition = "input.data_type == 'concentration'",
           div(
             style = "border: 2px solid #3498db; border-radius: 10px; padding: 20px; margin-bottom: 20px; background-color: #f8f9ff;",
@@ -867,9 +861,7 @@ tagList(
               )
             )
           )
-        )
-      ), # Close Analysis Parameters box
-      
+        ),
       # Analysis run button
       div(style = "text-align: center; padding: 20px; margin-top: 20px;",
         actionButton(

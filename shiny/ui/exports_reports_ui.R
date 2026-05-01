@@ -55,15 +55,15 @@ fluidPage(
   fluidRow(
     column(12,
       div(
-        style = "text-align: center; margin-bottom: 30px;",
-        h2(
-          icon("download", style = "margin-right: 10px; color: #6f42c1;"),
-          "Exports & Reports",
-          style = "color: #495057; font-weight: 600; margin-bottom: 10px;"
+        class = "exports-header",
+        style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+        h3(
+          icon("download"), " Exports & Reports",
+          style = "margin: 0 0 4px 0; font-size: 20px; font-weight: 600;"
         ),
         p(
           "Download analysis results as CSV files for further analysis or regulatory submissions.",
-          style = "color: #6c757d; font-size: 16px; max-width: 700px; margin: 0 auto;"
+          style = "margin: 0; font-size: 13px; opacity: 0.85;"
         )
       )
     )

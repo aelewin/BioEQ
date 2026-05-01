@@ -1124,24 +1124,15 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           ))
         }
         
-        # Create organized choices
+        # Create organized choices — only log-transformed parameters are
+        # appropriate for BE ANOVA, so non-log primary/secondary params are
+        # intentionally excluded from this dropdown.
         anova_choices <- list()
-        
-        # Primary parameters
-        primary_params <- c("Cmax", "AUC0t", "AUC0inf")
-        available_primary <- intersect(primary_params, available_params)
-        if (length(available_primary) > 0) {
-          anova_choices[["--- Primary Parameters ---"]] <- ""
-          for (param in available_primary) {
-            anova_choices[[param]] <- param
-          }
-        }
-        
+
         # Log-transformed parameters
         log_params <- c("lnCmax", "lnAUC0t", "lnAUC0inf", "lnTmax", "lnpAUC")
         available_log <- intersect(log_params, available_params)
         if (length(available_log) > 0) {
-          anova_choices[["--- Log-Transformed Parameters ---"]] <- ""
           for (param in available_log) {
             display_name <- switch(param,
               "lnCmax" = "ln(Cmax)",
@@ -1154,19 +1145,18 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             anova_choices[[display_name]] <- param
           }
         }
-        
-        # Secondary parameters
-        secondary_params <- c("Tmax", "pAUC")
-        available_secondary <- intersect(secondary_params, available_params)
-        if (length(available_secondary) > 0) {
-          anova_choices[["--- Secondary Parameters ---"]] <- ""
-          for (param in available_secondary) {
-            anova_choices[[param]] <- param
-          }
+
+        if (length(anova_choices) == 0) {
+          return(selectInput(
+            session$ns("anova_parameter_select"),
+            label = NULL,
+            choices = list("No log-transformed parameters available" = ""),
+            selected = ""
+          ))
         }
-        
-        # Select first available parameter as default
-        default_selection <- if (length(available_params) > 0) available_params[1] else ""
+
+        # Select first available log parameter as default
+        default_selection <- available_log[1]
         
         selectInput(
           session$ns("anova_parameter_select"),
@@ -2223,156 +2213,68 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         )
       }
 
-      anova_tables_div <- div(class = "mt-4",
-        
-        # Table 1: SAS-style Source-level ANOVA (Sequence / Subject(Sequence) / Period / Treatment / Residual)
-        if (!is.null(param_result$anova_comprehensive)) {
-          tryCatch({
-            comp_df <- param_result$anova_comprehensive
-            div(class = "card mb-3",
-              div(class = "card-header",
-                h6(class = "card-title mb-0", icon("table"), " ANOVA \u2014 Source-Level Breakdown"),
-                tags$small(class = "text-muted",
-                  "Sequence tested vs. Subject(Sequence); Period and Treatment tested vs. Residual.")
-              ),
-              div(class = "card-body",
-                div(class = "table-responsive",
-                  tags$table(class = "table table-striped table-hover table-sm",
-                    tags$thead(class = "table-primary",
-                      tags$tr(
-                        tags$th("Source"), tags$th("DF"), tags$th("Sum of Squares"),
-                        tags$th("Mean Square"), tags$th("F Value"), tags$th("Pr > F")
-                      )
-                    ),
-                    tags$tbody(
-                      lapply(1:nrow(comp_df), function(i) {
-                        tags$tr(
-                          tags$td(style = "font-weight: bold;", comp_df$Source[i]),
-                          tags$td(if (!is.na(comp_df$Df[i])) as.character(comp_df$Df[i]) else ""),
-                          tags$td(if (!is.na(comp_df$`Sum Sq`[i])) sprintf("%.4f", comp_df$`Sum Sq`[i]) else ""),
-                          tags$td(if (!is.na(comp_df$`Mean Sq`[i])) sprintf("%.6f", comp_df$`Mean Sq`[i]) else ""),
-                          tags$td(if (!is.na(comp_df$`F value`[i])) sprintf("%.2f", comp_df$`F value`[i]) else ""),
-                          tags$td(if (!is.na(comp_df$`Pr(>F)`[i])) format.pval(comp_df$`Pr(>F)`[i], digits = 4) else "")
-                        )
-                      })
+      # ── Single canonical Type III ANOVA table (consolidated) ────────────────
+      # Uses anova_comprehensive which already applies SAS-style error terms:
+      # Sequence is tested vs. Subject(Sequence); Period & Treatment vs. Residual.
+      anova_tables_div <- if (!is.null(param_result$anova_comprehensive)) {
+        tryCatch({
+          comp_df <- param_result$anova_comprehensive
+          div(class = "card mb-3",
+            div(class = "card-header",
+              h6(class = "card-title mb-0", icon("table"),
+                 " Analysis of Variance (Type III)"),
+              tags$small(class = "text-muted",
+                "Sequence is tested against Subject(Sequence); Period and Treatment are tested against the Residual error.")
+            ),
+            div(class = "card-body",
+              div(class = "table-responsive",
+                tags$table(class = "table table-striped table-hover table-sm",
+                  tags$thead(class = "table-primary",
+                    tags$tr(
+                      tags$th("Source"), tags$th("DF", style = "text-align: right;"),
+                      tags$th("Sum of Squares", style = "text-align: right;"),
+                      tags$th("Mean Square", style = "text-align: right;"),
+                      tags$th("F Value", style = "text-align: right;"),
+                      tags$th("Pr > F", style = "text-align: right;")
                     )
+                  ),
+                  tags$tbody(
+                    lapply(1:nrow(comp_df), function(i) {
+                      tags$tr(
+                        tags$td(style = "font-weight: bold;", comp_df$Source[i]),
+                        tags$td(if (!is.na(comp_df$Df[i])) as.character(comp_df$Df[i]) else "",
+                                style = "text-align: right;"),
+                        tags$td(if (!is.na(comp_df$`Sum Sq`[i])) sprintf("%.4f", comp_df$`Sum Sq`[i]) else "",
+                                style = "text-align: right;"),
+                        tags$td(if (!is.na(comp_df$`Mean Sq`[i])) sprintf("%.6f", comp_df$`Mean Sq`[i]) else "",
+                                style = "text-align: right;"),
+                        tags$td(if (!is.na(comp_df$`F value`[i])) sprintf("%.2f", comp_df$`F value`[i]) else "",
+                                style = "text-align: right;"),
+                        tags$td(if (!is.na(comp_df$`Pr(>F)`[i])) format.pval(comp_df$`Pr(>F)`[i], digits = 4) else "",
+                                style = "text-align: right;")
+                      )
+                    })
                   )
                 )
               )
             )
-          }, error = function(e) div(class = "alert alert-warning", p("Could not display Model Summary table: ", e$message)))
-        },
-        
-        # Table 2: Type I SS (Sequential)
-        if (!is.null(param_result$anova)) {
-          tryCatch({
-            type1_df <- as.data.frame(param_result$anova)
-            div(class = "card mb-3",
-              div(class = "card-header",
-                h6(class = "card-title mb-0", icon("list-ol"), " Type I Analysis of Variance (Sequential)")
-              ),
-              div(class = "card-body",
-                p(style = "font-size: 0.85em; color: #6c757d; margin-bottom: 10px;",
-                  "Sequential sums of squares. Each term fitted after previous terms."),
-                div(class = "table-responsive", render_anova_table(type1_df, "table-success"))
-              )
-            )
-          }, error = function(e) div(class = "alert alert-warning", p("Could not display Type I table: ", e$message)))
-        },
-        
-        # Table 3: Type III SS (Marginal)
-        if (!is.null(param_result$type3_ss)) {
-          tryCatch({
-            type3_df <- as.data.frame(param_result$type3_ss)
-            div(class = "card mb-3",
-              div(class = "card-header",
-                h6(class = "card-title mb-0", icon("calculator"), " Type III Analysis of Variance (Marginal)")
-              ),
-              div(class = "card-body",
-                p(style = "font-size: 0.85em; color: #6c757d; margin-bottom: 10px;",
-                  "Marginal sums of squares. Each term tested after fitting all others."),
-                div(class = "table-responsive", render_anova_table(type3_df, "table-warning"))
-              )
-            )
-          }, error = function(e) div(class = "alert alert-warning", p("Could not display Type III table: ", e$message)))
-        } else {
-          div(class = "alert alert-info",
-            h6(icon("info-circle"), " Type III Analysis"),
-            p("Type III analysis not available for this model configuration.")
           )
-        },
-        
-        # Table 4: Subject within Sequence Error Term (crossover-specific)
-        if (!is.null(param_result$subj_seq_analysis) && !is.null(param_result$subj_seq_analysis$error_term)) {
-          tryCatch({
-            subj_seq <- param_result$subj_seq_analysis
-            div(class = "card mb-3",
-              div(class = "card-header",
-                h6(class = "card-title mb-0", icon("users"),
-                  " Tests of Hypothesis for SUBJECT(SEQUENCE) as Error Term")
-              ),
-              div(class = "card-body",
-                div(class = "table-responsive",
-                  tags$table(class = "table table-sm table-bordered",
-                    tags$thead(class = "table-light",
-                      tags$tr(
-                        tags$th("Source", style = "text-align: left; width: 140px;"),
-                        tags$th("DF", style = "text-align: right;"),
-                        tags$th("Sum Sq", style = "text-align: right;"),
-                        tags$th("Mean Sq", style = "text-align: right;"),
-                        tags$th("F Value", style = "text-align: right;"),
-                        tags$th("Pr(>F)", style = "text-align: right;")
-                      )
-                    ),
-                    tags$tbody(
-                      tags$tr(
-                        tags$td(strong("Error: subj(seq)"), style = "font-family: monospace;"),
-                        tags$td(subj_seq$error_term$df, style = "text-align: right; font-family: monospace;"),
-                        tags$td(sprintf("%.4f", subj_seq$error_term$ss), style = "text-align: right; font-family: monospace;"),
-                        tags$td(sprintf("%.6f", subj_seq$error_term$ms), style = "text-align: right; font-family: monospace;"),
-                        tags$td("", style = "text-align: right;"),
-                        tags$td("", style = "text-align: right;")
-                      ),
-                      tags$tr(
-                        tags$td(strong("Error: Within"), style = "font-family: monospace;"),
-                        tags$td(""), tags$td(""), tags$td(""), tags$td(""), tags$td("")
-                      ),
-                      if (!is.null(subj_seq$hypothesis_tests$period)) {
-                        tags$tr(
-                          tags$td("\u00a0\u00a0period", style = "font-family: monospace; padding-left: 20px;"),
-                          tags$td(subj_seq$hypothesis_tests$period$df, style = "text-align: right; font-family: monospace;"),
-                          tags$td(sprintf("%.4f", subj_seq$hypothesis_tests$period$ss), style = "text-align: right; font-family: monospace;"),
-                          tags$td(sprintf("%.6f", subj_seq$hypothesis_tests$period$ms), style = "text-align: right; font-family: monospace;"),
-                          tags$td(sprintf("%.4f", subj_seq$hypothesis_tests$period$f_value), style = "text-align: right; font-family: monospace;"),
-                          tags$td(format.pval(subj_seq$hypothesis_tests$period$p_value, digits = 4), style = "text-align: right; font-family: monospace;")
-                        )
-                      },
-                      if (!is.null(subj_seq$hypothesis_tests$drug)) {
-                        tags$tr(
-                          tags$td("\u00a0\u00a0treatment", style = "font-family: monospace; padding-left: 20px;"),
-                          tags$td(subj_seq$hypothesis_tests$drug$df, style = "text-align: right; font-family: monospace;"),
-                          tags$td(sprintf("%.4f", subj_seq$hypothesis_tests$drug$ss), style = "text-align: right; font-family: monospace;"),
-                          tags$td(sprintf("%.6f", subj_seq$hypothesis_tests$drug$ms), style = "text-align: right; font-family: monospace;"),
-                          tags$td(sprintf("%.4f", subj_seq$hypothesis_tests$drug$f_value), style = "text-align: right; font-family: monospace;"),
-                          tags$td(format.pval(subj_seq$hypothesis_tests$drug$p_value, digits = 4), style = "text-align: right; font-family: monospace;")
-                        )
-                      },
-                      tags$tr(
-                        tags$td("\u00a0\u00a0Residuals", style = "font-family: monospace; padding-left: 20px;"),
-                        tags$td(sprintf("%.0f", param_result$residual_df), style = "text-align: right; font-family: monospace;"),
-                        tags$td(sprintf("%.4f", param_result$residual_mse * param_result$residual_df), style = "text-align: right; font-family: monospace;"),
-                        tags$td(sprintf("%.6f", param_result$residual_mse), style = "text-align: right; font-family: monospace;"),
-                        tags$td("", style = "text-align: right;"),
-                        tags$td("", style = "text-align: right;")
-                      )
-                    )
-                  )
-                )
-              )
+        }, error = function(e) div(class = "alert alert-warning",
+          p("Could not display ANOVA table: ", e$message)))
+      } else if (!is.null(param_result$type3_ss)) {
+        # Fallback if comprehensive table is missing for some reason
+        tryCatch({
+          type3_df <- as.data.frame(param_result$type3_ss)
+          div(class = "card mb-3",
+            div(class = "card-header",
+              h6(class = "card-title mb-0", icon("table"), " Analysis of Variance (Type III)")
+            ),
+            div(class = "card-body",
+              div(class = "table-responsive", render_anova_table(type3_df, "table-primary"))
             )
-          }, error = function(e) NULL)
-        }
-      )
+          )
+        }, error = function(e) NULL)
+      } else NULL
       
       # ── Log-Scale Results (collapsed by default) ──
       log_scale_panel <- NULL

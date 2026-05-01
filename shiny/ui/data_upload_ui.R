@@ -187,91 +187,16 @@ $(document).ready(function() {
 });
     "))
   ),
-  
 
-# Download Templates section moved to top - single column layout
-fluidRow(
-  column(
-    width = 12,
-    # Enhanced template downloads - always visible at top
-    box(
-      title = "Download Templates", 
-      status = "success", 
-      solidHeader = TRUE,
-      width = 12,
-      div(style = "padding: 10px;",
-        p("Download template files to ensure correct data format:", 
-          style = "margin-bottom: 20px; color: #2d3748;"),
-        
-        fluidRow(
-          # Example data download with enhanced button
-          column(3,
-            div(style = "margin-bottom: 15px;",
-              downloadButton(
-                "download_example_data", 
-                "Example Dataset (4 subjects)",
-                class = "btn btn-info btn-block",
-                icon = icon("database"),
-                style = "padding: 10px; font-weight: 500; border-radius: 6px;",
-                title = "Download complete sample dataset with 4 subjects in 2×2×2 crossover design"
-              ),
-              p("Complete 2×2×2 crossover dataset with reference and test treatments", 
-                style = "font-size: 12px; color: #6c757d; margin: 5px 0 0 0; text-align: center;")
-            )
-          ),
-          
-          # CSV template
-          column(3,
-            div(style = "margin-bottom: 15px;",
-              downloadButton(
-                "download_template", 
-                "Empty CSV Template",
-                class = "btn btn-success btn-block",
-                icon = icon("file-csv"),
-                style = "padding: 10px; font-weight: 500; border-radius: 6px;",
-                title = "Download blank CSV template with correct column headers for your data"
-              ),
-              p("Blank template with proper column structure for concentration-time data", 
-                style = "font-size: 12px; color: #6c757d; margin: 5px 0 0 0; text-align: center;")
-            )
-          ),
-          
-          # PK parameters template
-          column(3,
-            div(style = "margin-bottom: 15px;",
-              downloadButton(
-                "download_pk_template", 
-                "PK Parameters Template",
-                class = "btn btn-warning btn-block",
-                icon = icon("calculator"),
-                style = "padding: 10px; font-weight: 500; border-radius: 6px;",
-                title = "Download template for uploading pre-calculated PK parameters (AUC, Cmax, etc.)"
-              ),
-              p("For uploading already calculated AUC, Cmax, Tmax values", 
-                style = "font-size: 12px; color: #6c757d; margin: 5px 0 0 0; text-align: center;")
-            )
-          ),
-          
-          # Excel template
-          column(3,
-            div(style = "margin-bottom: 10px;",
-              downloadButton(
-                "download_excel_template", 
-                "Excel Template",
-                class = "btn btn-primary btn-block",
-                icon = icon("file-excel"),
-                style = "padding: 10px; font-weight: 500; border-radius: 6px;",
-                title = "Download Excel template with multiple worksheets and data validation"
-              ),
-              p("Excel template with built-in data validation and formatting", 
-                style = "font-size: 12px; color: #6c757d; margin: 5px 0 0 0; text-align: center;")
-            )
-          )
-        )
-      )
-    )
-  )
-),
+  # ---- Header --------------------------------------------------------
+  div(
+    class = "upload-header",
+    style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+    h3(icon("upload"), " Data Upload",
+       style = "margin: 0; font-weight: 700;"),
+    p("Upload concentration-time data or pre-calculated PK parameters to begin your bioequivalence analysis.",
+      style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
+  ),
 
 fluidRow(
   # Main upload area - now full width
@@ -279,13 +204,11 @@ fluidRow(
     width = 12,
     # Welcome message with enhanced styling
     box(
-      title = "Step 1: Upload Your Bioequivalence Data", 
-      status = "primary", 
-      solidHeader = TRUE,
+      title = NULL,
+      status = "primary",
+      solidHeader = FALSE,
       width = 12,
       div(style = "text-align: center; padding: 20px;",
-        h3("Upload Your Bioequivalence Data", 
-           style = "color: #3498db; margin-bottom: 20px; font-weight: 600;"),
         p("Choose your data type and upload your bioequivalence study data", 
           style = "font-size: 16px; color: #7f8c8d; margin-bottom: 20px;"),
         
@@ -362,7 +285,7 @@ fluidRow(
     conditionalPanel(
       condition = "output.data_preview_available",
       box(
-        title = "Step 2: Data Preview & Summary", 
+        title = "Data Preview & Summary", 
         status = "success", 
         solidHeader = TRUE,
         width = 12,
@@ -380,7 +303,7 @@ fluidRow(
     conditionalPanel(
       condition = "output.upload_status && input.data_type == 'pk_parameters'",
       box(
-        title = "Step 3: PK Parameter Identification", 
+        title = "PK Parameter Identification", 
         status = "warning", 
         solidHeader = TRUE,
         width = 12,
@@ -394,7 +317,7 @@ fluidRow(
     conditionalPanel(
       condition = "output.upload_status && input.data_type == 'concentration'",
       box(
-        title = "Step 3: Column Mapping & Units", 
+        title = "Column Mapping & Units", 
         status = "primary", 
         solidHeader = TRUE,
         width = 12,
@@ -420,7 +343,7 @@ fluidRow(
     conditionalPanel(
       condition = "output.step4_ready",
       box(
-        title = "Step 4: Data Summary and Verification", 
+        title = "Data Summary and Verification", 
         status = "info", 
         solidHeader = TRUE,
         width = 12,
