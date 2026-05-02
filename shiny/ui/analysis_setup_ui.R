@@ -406,47 +406,47 @@ tagList(
                 )
               ),
               
-              # ABEL: Expanded limits scope selection
+              # ABEL: Expanded limits scope selection — which PK parameters are evaluated
+              # for reference-scaling (CVwR > 30% triggers expanded limits). All other
+              # parameters always use fixed 80–125% limits. This is independent of the
+              # CVwR cap and the ANOVA model (Method A vs B).
               conditionalPanel(
                 condition = "input.be_analysis_type == 'ABEL'",
-                h5("Expanded Limits Scope"),
-                radioButtons("abel_regulator",
+                h5("Parameters Eligible for Expanded Limits"),
+                checkboxGroupInput("abel_eligible_params",
                   label = NULL,
                   choices = list(
-                    "Cmax only \u2014 AUC uses fixed 80\u2013125% limits" = "EMA",
-                    "Cmax + AUC0-t" = "HC"
+                    "Cmax" = "Cmax",
+                    "AUC0-t" = "AUC0t"
                   ),
-                  selected = "EMA",
-                  inline = FALSE
+                  selected = c("Cmax"),
+                  inline = TRUE
+                ),
+                tags$small(style = "color: #6c757d;",
+                  "Selected parameters use ABEL (expanded if CV", tags$sub("wR"), " > 30%); ",
+                  "other PK parameters always use fixed 80–125% limits."
                 )
               ),
               
-              # Conditional panel for ABEL cap selection
+              # Conditional panel for ABEL cap selection — controls the CVwR cap regardless
+              # of which parameters are eligible above. Maps to replicateBE regulator code.
               conditionalPanel(
                 condition = "input.be_analysis_type == 'ABEL'",
-                h5("Cap the Limits",
+                h5("CV", tags$sub("wR"), " Cap on Expanded Limits",
                    help_icon("abel_upper_cap", help_texts$abel_upper_cap$tooltip, 
                             help_texts$abel_upper_cap$title, help_texts$abel_upper_cap$content)
                 ),
                 div(style = "border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background: #f8f9fa;",
-                  conditionalPanel(
-                    condition = "input.abel_regulator == 'EMA' || !input.abel_regulator",
-                    selectInput(
-                      "abel_upper_cap",
-                      label = NULL,
-                      choices = list(
-                        "None (no cap)" = "none",
-                        "50% cap (limits: 69.84% - 143.19%)" = "50",
-                        "Fixed widened limits (75.00% - 133.33%)" = "fixed"
-                      ),
-                      selected = "50"
-                    )
-                  ),
-                  conditionalPanel(
-                    condition = "input.abel_regulator == 'HC'",
-                    div(style = "color: #6c757d; font-size: 0.9em;",
-                      "Cap applied automatically at CVwR = 57.4% (limits: 66.7% \u2013 150.0%)."
-                    )
+                  selectInput(
+                    "abel_upper_cap",
+                    label = NULL,
+                    choices = list(
+                      "EMA: cap at CVwR = 50% (limits 69.84% – 143.19%)" = "50",
+                      "EMA: no cap" = "none",
+                      "Health Canada: cap at CVwR = 57.4% (limits 66.67% – 150.00%)" = "HC",
+                      "Fixed widened limits (75.00% – 133.33%)" = "fixed"
+                    ),
+                    selected = "50"
                   )
                 )
               ),

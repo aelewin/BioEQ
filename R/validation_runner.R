@@ -287,13 +287,20 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
 # ---------------------------------------------------------------------------
 # ANOVA + BE layer execution (fresh per call)
 #
-# Self-contained, minimal BE math used by the validation runner. Bypasses the
-# main-app perform_be_analysis() wrapper to keep the validation harness
-# decoupled from analysis-config / regulatory-evaluation code paths and to
-# return exactly the parameter names referenced by expected_results CSVs:
+# IMPORTANT — TRUE BLACK-BOX VALIDATION
+# -------------------------------------
+# These layer functions invoke the SAME analysis functions the Shiny app uses
+# (perform_be_analysis_by_type, be_parallel, be_crossover_2x2x2,
+# perform_abel_placeholder). They do NOT carry their own statistical math.
+# This guarantees that any change to the app's BE pipeline is exercised by
+# the validation suite — if the app produces wrong numbers, validation fails.
+#
+# Field schema returned in $study (matches expected_results CSVs):
 #   parallel  : PE, CI_lower_welch, CI_upper_welch, CI_lower_classical, CI_upper_classical
 #   2x2x2     : PE, CI_lower, CI_upper
-#   replicate : PE, CI_lower, CI_upper, CVwR (Method A, fixed-effects)
+#   replicate : MethodA_PE, MethodA_CI_lower, MethodA_CI_upper, MethodA_CVwR,
+#               MethodB_PE, MethodB_CI_lower, MethodB_CI_upper, MethodB_CVwR,
+#               PE, CI_lower, CI_upper, CVwR (Method A aliases)
 # ---------------------------------------------------------------------------
 
 #' Pick the PK column to evaluate from a BE dataset
@@ -302,7 +309,6 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
   prefs <- c("PK", "Cmax", "AUC0t", "AUC0inf", "AUC", "Var")
   hit <- intersect(prefs, names(data))
   if (length(hit) == 0) {
-    # Last-ditch: any single numeric column that isn't a design factor
     factor_cols <- c("Subject", "Treatment", "Period", "Sequence",
                      "subject", "treatment", "period", "sequence")
     cand <- setdiff(names(data), factor_cols)
@@ -332,160 +338,184 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
   data
 }
 
-#' Parallel BE: two-sample t on log(PK), Welch and classical CIs
+#' Build app-compatible BE input data: rename PK column to Cmax (which is what
+#' perform_be_analysis_by_type evaluates by default) and ensure Subject/Treatment
+#' /Period/Sequence are present.
+#' @keywords internal
+.app_be_input <- function(data) {
+  data <- .std_be_cols(data)
+  pk_col <- .pick_pk_column(data)
+  out <- data.frame(
+    Subject   = as.character(data$Subject),
+    Treatment = as.character(data$Treatment),
+    stringsAsFactors = FALSE
+  )
+  if ("Period"   %in% names(data)) out$Period   <- data$Period
+  if ("Sequence" %in% names(data)) out$Sequence <- as.character(data$Sequence)
+  out$Cmax  <- as.numeric(data[[pk_col]])
+  out$lnCmax <- log(out$Cmax)
+  attr(out, "pk_column") <- pk_col
+  out
+}
+
+#' Extract the Cmax confidence-interval block from a BE result returned by
+#' the app's perform_be_analysis_by_type (or downstream analyzers).
+#' @keywords internal
+.extract_ci <- function(be_result, param = "Cmax") {
+  ci <- NULL
+  if (!is.null(be_result$confidence_intervals)) {
+    ci <- be_result$confidence_intervals[[param]]
+    if (is.null(ci)) ci <- be_result$confidence_intervals[[paste0("ln", param)]]
+  }
+  if (is.null(ci) && !is.null(be_result$results)) {
+    ci <- be_result$results[[param]]
+    if (is.null(ci)) ci <- be_result$results[[paste0("ln", param)]]
+  }
+  ci
+}
+
+#' Validation BE wrapper — Parallel design.
+#' Calls the app's be_parallel() twice (Welch and classical) so the
+#' validation can compare both CI flavors against published references.
 #' @keywords internal
 .be_parallel <- function(data, alpha = 0.10) {
-  pk_col <- .pick_pk_column(data)
-  data <- data[!is.na(data[[pk_col]]) & data[[pk_col]] > 0, , drop = FALSE]
-  trt <- as.character(data$Treatment)
-  trt <- toupper(trt)
-  # Map common labels to T/R
-  trt[trt %in% c("T", "TEST")]      <- "T"
-  trt[trt %in% c("R", "REF", "REFERENCE")] <- "R"
-  if (!all(trt %in% c("T", "R"))) {
-    stop("Parallel BE expects exactly two treatment levels (T and R). Found: ",
-         paste(unique(trt), collapse = ", "))
-  }
-  y <- log(data[[pk_col]])
-  yT <- y[trt == "T"]; yR <- y[trt == "R"]
-  if (length(yT) < 2 || length(yR) < 2) stop("Need >=2 subjects per arm.")
-  diff <- mean(yT) - mean(yR)
-  vT <- var(yT); vR <- var(yR); nT <- length(yT); nR <- length(yR)
+  app_in <- .app_be_input(data)
+  pk_col <- attr(app_in, "pk_column")
+  # Coerce treatment labels to T/R if necessary (app expects these)
+  trt <- toupper(as.character(app_in$Treatment))
+  trt[trt %in% c("TEST")]            <- "T"
+  trt[trt %in% c("REF", "REFERENCE")] <- "R"
+  app_in$Treatment <- trt
+
+  be_limits <- c(0.80, 1.25)
+  parameters <- c("Cmax")
+
   # Welch
-  se_w  <- sqrt(vT / nT + vR / nR)
-  df_w  <- (vT / nT + vR / nR)^2 / ((vT / nT)^2 / (nT - 1) + (vR / nR)^2 / (nR - 1))
-  tcw   <- qt(1 - alpha / 2, df_w)
-  ci_lw <- 100 * exp(diff - tcw * se_w)
-  ci_uw <- 100 * exp(diff + tcw * se_w)
-  # Classical (equal variance, pooled)
-  sp2  <- ((nT - 1) * vT + (nR - 1) * vR) / (nT + nR - 2)
-  se_c <- sqrt(sp2 * (1 / nT + 1 / nR))
-  tcc  <- qt(1 - alpha / 2, nT + nR - 2)
-  ci_lc <- 100 * exp(diff - tcc * se_c)
-  ci_uc <- 100 * exp(diff + tcc * se_c)
+  resW <- be_parallel(app_in, alpha = alpha, be_limits = be_limits,
+                      parameters = parameters, welch_correction = TRUE)
+  ciW <- .extract_ci(resW, "Cmax")
+  # Classical
+  resC <- be_parallel(app_in, alpha = alpha, be_limits = be_limits,
+                      parameters = parameters, welch_correction = FALSE)
+  ciC <- .extract_ci(resC, "Cmax")
+
+  if (is.null(ciW) || is.null(ciC)) {
+    stop("Parallel BE: confidence_intervals not returned by app's be_parallel().")
+  }
   list(
-    PE                  = 100 * exp(diff),
-    CI_lower_welch      = ci_lw,
-    CI_upper_welch      = ci_uw,
-    CI_lower_classical  = ci_lc,
-    CI_upper_classical  = ci_uc,
-    n_T = nT, n_R = nR, pk_column = pk_col
+    PE                  = ciW$point_estimate %||% ciW$pe,
+    CI_lower_welch      = ciW$ci_lower,
+    CI_upper_welch      = ciW$ci_upper,
+    CI_lower_classical  = ciC$ci_lower,
+    CI_upper_classical  = ciC$ci_upper,
+    pk_column           = pk_col
   )
 }
 
-#' 2x2x2 crossover BE: fixed-effects ANOVA on log(PK)
-#' Treatment coefficient -> PE, 90% CI per Chow & Liu / Schutz 2014
+#' Validation BE wrapper — 2x2x2 crossover.
+#' Calls the app's perform_be_analysis_by_type(analysis_type="ABE",
+#' design="2x2x2"), which routes through be_crossover_2x2x2 (linear ANOVA).
 #' @keywords internal
-.be_2x2x2 <- function(data, alpha = 0.10) {
-  pk_col <- .pick_pk_column(data)
-  data <- data[!is.na(data[[pk_col]]) & data[[pk_col]] > 0, , drop = FALSE]
-  d <- data.frame(
-    Subject   = factor(data$Subject),
-    Sequence  = factor(data$Sequence),
-    Period    = factor(data$Period),
-    Treatment = factor(data$Treatment),
-    y         = log(data[[pk_col]])
+.be_2x2x2 <- function(data, alpha = 0.05) {
+  app_in <- .app_be_input(data)
+  pk_col <- attr(app_in, "pk_column")
+  # The app's BE pipeline (ANOVA -> be_crossover_2x2x2) operates on
+  # log-transformed PK parameters (lnCmax). .app_be_input already adds lnCmax.
+  anova_res <- perform_simple_anova(
+    nca_data    = app_in,
+    parameters  = "lnCmax",
+    anova_model = "fixed",
+    alpha       = alpha
   )
-  fit <- lm(y ~ Sequence + Sequence:Subject + Period + Treatment, data = d)
-  co  <- summary(fit)$coefficients
-  trt_rows <- grep("^Treatment", rownames(co))
-  if (length(trt_rows) != 1) stop("Could not locate Treatment coefficient.")
-  est <- co[trt_rows, "Estimate"]
-  se  <- co[trt_rows, "Std. Error"]
-  df  <- fit$df.residual
-  tc  <- qt(1 - alpha / 2, df)
-  # Coef sign: Treatment factor levels are alphabetical (R then T) by default,
-  # so the coefficient is T - R. PE = 100 * exp(T - R).
+  params <- list(
+    alpha_level    = alpha,
+    be_limits      = list(lower = 80, upper = 125),
+    pk_parameters  = "lnCmax",
+    anova_model    = "fixed",
+    anova_results  = anova_res
+  )
+  res <- perform_be_analysis_by_type(app_in, analysis_type = "ABE",
+                                     design = "2x2x2", params = params)
+  ci <- .extract_ci(res, "Cmax")
+  if (is.null(ci) && !is.null(res$confidence_intervals)) {
+    ci <- res$confidence_intervals[["lnCmax"]]
+  }
+  if (is.null(ci)) {
+    stop("2x2x2 BE: confidence_intervals not returned by app's be_crossover_2x2x2().")
+  }
   list(
-    PE       = 100 * exp(est),
-    CI_lower = 100 * exp(est - tc * se),
-    CI_upper = 100 * exp(est + tc * se),
-    df       = df, n_subj = length(unique(d$Subject)), pk_column = pk_col
+    PE        = ci$point_estimate %||% ci$pe,
+    CI_lower  = ci$ci_lower,
+    CI_upper  = ci$ci_upper,
+    pk_column = pk_col
   )
 }
 
-#' Replicate BE (Method A, fixed-effects ANOVA) on log(PK)
+#' Validation BE wrapper — Replicate design (2x2x3 / 2x2x4).
+#' Calls the app's perform_be_analysis_by_type(analysis_type="ABEL",
+#' design="replicate") TWICE — once with anova_model="fixed" (Method A) and
+#' once with anova_model="kenward-roger" (Method B) — so both replicateBE
+#' methods are exercised through the exact same code path the Shiny app uses.
 #' @keywords internal
-.be_replicate <- function(data, alpha = 0.10) {
-  pk_col <- .pick_pk_column(data)
-  data <- data[!is.na(data[[pk_col]]) & data[[pk_col]] > 0, , drop = FALSE]
-  d <- data.frame(
-    Subject   = factor(data$Subject),
-    Sequence  = factor(data$Sequence),
-    Period    = factor(data$Period),
-    Treatment = factor(data$Treatment),
-    y         = log(data[[pk_col]])
+.be_replicate <- function(data, alpha = 0.05) {
+  app_in <- .app_be_input(data)
+  pk_col <- attr(app_in, "pk_column")
+  base_params <- list(
+    alpha_level         = alpha,
+    be_limits           = list(lower = 80, upper = 125),
+    pk_parameters       = "Cmax",
+    abel_eligible_params = "Cmax",
+    abel_upper_cap      = "50"   # EMA
   )
-  # Method A: subject(sequence) as fixed effect
-  fit <- lm(y ~ Sequence + Sequence:Subject + Period + Treatment, data = d)
-  co  <- summary(fit)$coefficients
-  trt_rows <- grep("^Treatment", rownames(co))
-  if (length(trt_rows) != 1) stop("Could not locate Treatment coefficient.")
-  est <- co[trt_rows, "Estimate"]; se <- co[trt_rows, "Std. Error"]
-  df  <- fit$df.residual
-  tc  <- qt(1 - alpha / 2, df)
-  # CVwR per EMA Q&A: ANOVA on Reference-only data with sequence + subject(sequence) + period
-  ref <- d[d$Treatment == levels(d$Treatment)[1], , drop = FALSE]   # alphabetic: R first
-  cv_wr <- NA_real_
-  if (nrow(ref) > 0 && length(unique(ref$Subject)) > 1) {
-    ref$Subject  <- droplevels(ref$Subject)
-    ref$Sequence <- droplevels(ref$Sequence)
-    ref$Period   <- droplevels(ref$Period)
-    fit_r <- tryCatch(
-      lm(y ~ Sequence + Sequence:Subject + Period, data = ref),
-      error = function(e) NULL
-    )
-    if (!is.null(fit_r)) {
-      msewR <- sum(residuals(fit_r)^2) / fit_r$df.residual
-      cv_wr <- 100 * sqrt(exp(msewR) - 1)
+
+  pull <- function(res, key_pe, key_lo, key_hi, key_cv) {
+    ci <- .extract_ci(res, "Cmax")
+    if (is.null(ci)) {
+      return(list(PE = NA_real_, lo = NA_real_, hi = NA_real_, cv = NA_real_))
     }
-  }
-  # ---------------- Method B: mixed model with Kenward-Roger DF -----------
-  # Per EMA/Schutz: lmerTest::lmer(log(PK) ~ Sequence + Period + Treatment
-  #                               + (1|Subject)) with Kenward-Roger ddf.
-  mb_PE <- mb_CI_l <- mb_CI_u <- mb_CVwR <- NA_real_
-  if (requireNamespace("lmerTest", quietly = TRUE) &&
-      requireNamespace("pbkrtest", quietly = TRUE)) {
-    fitB <- tryCatch(
-      lmerTest::lmer(y ~ Sequence + Period + Treatment + (1 | Subject),
-                     data = d, REML = TRUE),
-      error = function(e) NULL
+    list(
+      PE = ci$point_estimate %||% ci$pe,
+      lo = ci$ci_lower,
+      hi = ci$ci_upper,
+      cv = ci$cv_wr %||% ci$cv_wr_percent %||% NA_real_
     )
-    if (!is.null(fitB)) {
-      coB    <- summary(fitB, ddf = "Kenward-Roger")$coefficients
-      trtB   <- grep("^Treatment", rownames(coB))
-      if (length(trtB) == 1) {
-        estB  <- coB[trtB, "Estimate"]
-        seB   <- coB[trtB, "Std. Error"]
-        dfB   <- coB[trtB, "df"]
-        tcB   <- qt(1 - alpha / 2, dfB)
-        mb_PE   <- 100 * exp(estB)
-        mb_CI_l <- 100 * exp(estB - tcB * seB)
-        mb_CI_u <- 100 * exp(estB + tcB * seB)
-      }
-    }
-    # Method B CVwR: replicateBE uses the SAME fixed-effects ANOVA on R-only
-    # data as Method A (see replicateBE::CV.calc). Reuse cv_wr.
-    mb_CVwR <- cv_wr
   }
 
+  # Method A — fixed-effects ANOVA (replicateBE::method.A)
+  pA <- base_params; pA$anova_model <- "fixed"
+  resA <- tryCatch(
+    perform_be_analysis_by_type(app_in, analysis_type = "ABEL",
+                                design = "replicate", params = pA),
+    error = function(e) { cat("Method A failed:", e$message, "\n"); NULL }
+  )
+  vA <- if (is.null(resA)) list(PE = NA_real_, lo = NA_real_, hi = NA_real_, cv = NA_real_) else pull(resA)
+
+  # Method B — Kenward-Roger DF (replicateBE::method.B option=3)
+  pB <- base_params; pB$anova_model <- "kenward-roger"
+  resB <- tryCatch(
+    perform_be_analysis_by_type(app_in, analysis_type = "ABEL",
+                                design = "replicate", params = pB),
+    error = function(e) { cat("Method B failed:", e$message, "\n"); NULL }
+  )
+  vB <- if (is.null(resB)) list(PE = NA_real_, lo = NA_real_, hi = NA_real_, cv = NA_real_) else pull(resB)
+
   list(
-    PE       = 100 * exp(est),
-    CI_lower = 100 * exp(est - tc * se),
-    CI_upper = 100 * exp(est + tc * se),
-    CVwR     = cv_wr,
-    # Method-A-prefixed aliases so expected_results files using the
-    # replicateBE schema (MethodA_PE, MethodA_CI_lower, ...) match.
-    MethodA_PE       = 100 * exp(est),
-    MethodA_CI_lower = 100 * exp(est - tc * se),
-    MethodA_CI_upper = 100 * exp(est + tc * se),
-    MethodA_CVwR     = cv_wr,
-    # Method B (mixed-effects, Kenward-Roger DF) aliases.
-    MethodB_PE       = mb_PE,
-    MethodB_CI_lower = mb_CI_l,
-    MethodB_CI_upper = mb_CI_u,
-    MethodB_CVwR     = mb_CVwR,
-    df       = df, n_subj = length(unique(d$Subject)), pk_column = pk_col
+    # Generic (Method A) aliases
+    PE       = vA$PE,
+    CI_lower = vA$lo,
+    CI_upper = vA$hi,
+    CVwR     = vA$cv,
+    # Method A
+    MethodA_PE       = vA$PE,
+    MethodA_CI_lower = vA$lo,
+    MethodA_CI_upper = vA$hi,
+    MethodA_CVwR     = vA$cv,
+    # Method B
+    MethodB_PE       = vB$PE,
+    MethodB_CI_lower = vB$lo,
+    MethodB_CI_upper = vB$hi,
+    MethodB_CVwR     = vB$cv,
+    pk_column        = pk_col
   )
 }
 

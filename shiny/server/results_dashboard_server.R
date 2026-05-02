@@ -1646,20 +1646,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                 )
               )
             } else if (analysis_type == "ABEL") {
-              # ABEL is implemented - show info about regulator
-              abel_reg <- be_res$regulator %||% "EMA"
-              reg_label <- if (abel_reg == "HC") "Health Canada" else "EMA"
-              div(class = "alert alert-success", style = "margin-bottom: 0;",
-                icon("check-circle"), " ",
-                strong(sprintf("ABEL Analysis (%s): ", reg_label)),
-                "Average Bioequivalence with Expanding Limits using replicateBE package.",
-                br(), 
-                if (abel_reg == "HC") {
-                  "Scaled limits applied to Cmax and AUC0-t; AUC0-∞ uses fixed 80-125% limits."
-                } else {
-                  "Scaled limits applied to Cmax only; AUC parameters use fixed 80-125% limits."
-                }
-              )
+              # ABEL: header only — per-parameter limits/scaling are shown in the results table
+              NULL
             } else {
               NULL
             }
@@ -1730,8 +1718,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           
           # Determine limit type label
           limit_type <- ""
-          if (!is.null(ci$limits_used$type) && ci$limits_used$type == "scaled") {
-            limit_type <- " (scaled)"
+          if (!is.null(ci$limits_used$type) && ci$limits_used$type == "expanded") {
+            limit_type <- " (expanded ABEL)"
           } else {
             limit_type <- " (fixed)"
           }
@@ -2214,17 +2202,17 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       }
 
       # ── Single canonical Type III ANOVA table (consolidated) ────────────────
-      # Uses anova_comprehensive which already applies SAS-style error terms:
-      # Sequence is tested vs. Subject(Sequence); Period & Treatment vs. Residual.
+      # All effects tested against Residual MS (SAS PROC GLM default for Type III).
+      # A separate second table shows Seq tested against Subject(Sequence) MS.
       anova_tables_div <- if (!is.null(param_result$anova_comprehensive)) {
         tryCatch({
           comp_df <- param_result$anova_comprehensive
           div(class = "card mb-3",
             div(class = "card-header",
               h6(class = "card-title mb-0", icon("table"),
-                 " Analysis of Variance (Type III)"),
+                 " Analysis of Variance (Type III SS)"),
               tags$small(class = "text-muted",
-                "Sequence is tested against Subject(Sequence); Period and Treatment are tested against the Residual error.")
+                "All effects tested against Residual mean square.")
             ),
             div(class = "card-body",
               div(class = "table-responsive",
@@ -2370,6 +2358,47 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         }
       }
 
+      # ── Second table: "Tests of Hypotheses Using Type III MS for Subject(Sequence)" ──
+      seq_subj_test_div <- NULL
+      tryCatch({
+        ssa <- param_result$subj_seq_analysis
+        seq_test <- ssa$hypothesis_tests$seq
+        if (!is.null(seq_test) && !is.null(seq_test$f_value) && !is.na(seq_test$f_value)) {
+          seq_subj_test_div <- div(class = "card mb-3",
+            div(class = "card-header",
+              h6(class = "card-title mb-0", icon("table"),
+                 " Tests of Hypotheses Using the Type III MS for Subject(Sequence) as an Error Term")
+            ),
+            div(class = "card-body",
+              div(class = "table-responsive",
+                tags$table(class = "table table-striped table-hover table-sm",
+                  tags$thead(class = "table-info",
+                    tags$tr(
+                      tags$th("Source"),
+                      tags$th("DF", style = "text-align: right;"),
+                      tags$th("Type III SS", style = "text-align: right;"),
+                      tags$th("Mean Square", style = "text-align: right;"),
+                      tags$th("F Value", style = "text-align: right;"),
+                      tags$th("Pr > F", style = "text-align: right;")
+                    )
+                  ),
+                  tags$tbody(
+                    tags$tr(
+                      tags$td(style = "font-weight: bold;", "Sequence"),
+                      tags$td(as.character(seq_test$df), style = "text-align: right;"),
+                      tags$td(sprintf("%.6f", seq_test$ss), style = "text-align: right;"),
+                      tags$td(sprintf("%.6f", seq_test$ms), style = "text-align: right;"),
+                      tags$td(sprintf("%.2f", seq_test$f_value), style = "text-align: right;"),
+                      tags$td(format.pval(seq_test$p_value, digits = 4), style = "text-align: right;")
+                    )
+                  )
+                )
+              )
+            )
+          )
+        }
+      }, error = function(e) NULL)
+
       # Combine all components
       return(div(
         model_header,
@@ -2377,6 +2406,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         class_info_card,
         model_summary_card,
         anova_tables_div,
+        seq_subj_test_div,
         contrast_card,
         log_scale_panel
       ))
@@ -2540,8 +2570,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           
           # Determine limit type label
           limit_type <- ""
-          if (!is.null(ci$limits_used$type) && ci$limits_used$type == "scaled") {
-            limit_type <- " (scaled)"
+          if (!is.null(ci$limits_used$type) && ci$limits_used$type == "expanded") {
+            limit_type <- " (expanded ABEL)"
           } else {
             limit_type <- " (fixed)"
           }

@@ -68,7 +68,11 @@ perform_be_analysis <- function(data,
 #' @export
 perform_be_analysis_by_type <- function(data, analysis_type = "ABE", design = "auto", params = list()) {
   
-  cat(sprintf("🔬 Performing %s analysis...\n", analysis_type))
+  cat(sprintf("🔬 [BE-ROUTER] Performing %s analysis (design=%s)...\n", analysis_type, design))
+  cat(sprintf("🔬 [BE-ROUTER] Data: %d rows; pk_parameters: %s\n",
+              nrow(data), paste(params$pk_parameters %||% "(none)", collapse = ", ")))
+  cat(sprintf("🔬 [BE-ROUTER] anova_results keys: %s\n",
+              if (is.null(params$anova_results)) "(NULL)" else paste(names(params$anova_results), collapse = ", ")))
   
   # Route to appropriate analysis function
   results <- switch(analysis_type,
@@ -224,35 +228,27 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
   alpha <- params$alpha_level %||% 0.05
   parameters <- params$pk_parameters %||% c("Cmax", "AUC0t", "AUC0inf")
   
-  # Regulatory authority determines which parameters get expanded limits
-  abel_authority <- params$abel_regulator %||% "EMA"
-  cat(sprintf("   Regulatory Authority: %s\n", abel_authority))
+  # User-selected eligibility: which base parameters are evaluated for expanded limits.
+  # All other parameters use fixed 80–125% limits regardless of CVwR.
+  # This is independent of the CVwR cap (set via abel_upper_cap) and the ANOVA model.
+  abel_eligible_params <- params$abel_eligible_params %||% c("Cmax")
+  abel_eligible_upper <- toupper(abel_eligible_params)
+  cat(sprintf("   ABEL-eligible parameters (user-selected): %s\n",
+              paste(abel_eligible_params, collapse = ", ")))
   
-  # Helper: determine if a parameter is eligible for ABEL scaling
-  # EMA: Only Cmax gets expanded limits
-  # HC (Health Canada): Cmax and AUC0t (steady-state) get expanded limits
-  is_abel_eligible <- function(param_name, regulator) {
+  # Helper: determine if a parameter is in the user-selected ABEL-eligible list.
+  is_abel_eligible <- function(param_name, eligible = abel_eligible_upper) {
     # Normalize: strip ln/log prefix to get base parameter
     base <- sub("^(ln|log)", "", param_name, ignore.case = TRUE)
     base_upper <- toupper(base)
-    
-    if (regulator == "EMA") {
-      # EMA: Only Cmax
-      return(grepl("^CMAX$", base_upper))
-    } else if (regulator == "HC") {
-      # Health Canada: Cmax and AUC0t (AUCss for steady-state)
-      return(grepl("^CMAX$", base_upper) || grepl("^AUC0T$", base_upper) || grepl("^AUCSS$", base_upper))
-    } else {
-      # Default (GCC etc.): Same as EMA
-      return(grepl("^CMAX$", base_upper))
-    }
+    return(base_upper %in% eligible)
   }
   
   # Detect replicate design
   design_info <- detect_replicate_design(data)
   
   if (!design_info$is_replicate) {
-    stop("ABEL analysis requires a replicate design (2x2x3 or 2x2x4). Detected: ", design_info$design_type)
+    stop("ABEL analysis requires a replicate design (2x2x3, 2x2x4, or Balaam 2x4x2). Detected: ", design_info$design_type)
   }
   
   # Verify required columns exist (capitalized)
@@ -347,7 +343,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     # =====================================================================
     # Per-parameter routing: Determine if this param gets ABEL or fixed ABE
     # =====================================================================
-    use_abel_for_param <- is_abel_eligible(base_param_name, abel_authority)
+    use_abel_for_param <- is_abel_eligible(base_param_name)
     
     if (!use_abel_for_param) {
       # ---------------------------------------------------------------
@@ -355,7 +351,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       # (e.g., AUC parameters under EMA, AUC0inf under HC)
       # ---------------------------------------------------------------
       cat(sprintf("  📋 %s: Not eligible for ABEL scaling under %s — using fixed ABE limits (80-125%%)\n",
-                  base_param_name, abel_authority))
+                  base_param_name, paste(abel_eligible_params, collapse = "+")))
       
       tryCatch({
         # Use the ANOVA results already computed for this parameter
@@ -413,8 +409,8 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
             scaled_lower_limit = fixed_lower,
             scaled_upper_limit = fixed_upper,
             limits_used = list(lower = fixed_lower, upper = fixed_upper, type = "fixed"),
-            method = paste0("ABE (fixed limits, ", abel_authority, " guidance)"),
-            regulator = abel_authority,
+            method = "ABE (fixed 80-125% limits — parameter not selected for ABEL scaling)",
+            regulator = abel_regulator_code,
             degrees_freedom = df_val,
             cv_wt = NA,
             n_subjects = length(unique(data$Subject)),
@@ -426,12 +422,18 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
           all_results[[base_param_name]] <- list(
             model = NULL,
             anova = param_anova$anova,
+            anova_comprehensive = param_anova$anova_comprehensive,  # For Type III SS display
+            subj_seq_analysis = param_anova$subj_seq_analysis,       # For second ANOVA table
+            type3_ss = param_anova$type3_ss,
             treatment_coef = param_anova$treatment_coef,
             treatment_se = param_anova$treatment_se,
             residual_mse = param_anova$residual_mse,
             residual_df = df_val,
             n_observations = param_anova$n_observations,
             anova_method = param_anova$anova_method %||% "fixed",
+            pe_estimate = pe,
+            ci_lower = ci_lo_val,
+            ci_upper = ci_hi_val,
             cv_wr_percent = NA,
             cv_wt_percent = NA,
             data_was_logged = TRUE,
@@ -456,21 +458,95 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     # =====================================================================
     # ABEL-ELIGIBLE: Route through replicateBE for scaled limits
     # =====================================================================
-    cat(sprintf("  📋 %s: Eligible for ABEL scaling under %s\n", base_param_name, abel_authority))
+    cat(sprintf("  📋 %s: Eligible for ABEL scaling (user-selected)\n", base_param_name))
     
     tryCatch({
       # Prepare data for replicateBE (expects lowercase: subject, period, sequence, treatment, PK)
+      # IMPORTANT: replicateBE requires the sequence string to use the SAME letters as the
+      # treatment column (e.g. treatment in {T,R} ⇒ sequence like "TRTR"/"RTRT").
+      # If the upstream Sequence column uses different codes (e.g. "ABAB"/"BABA"), info.design()
+      # cannot map sequence positions to treatments and method.A/B fails with
+      # "missing value where TRUE/FALSE needed".
+      #
+      # Strategy (handles partial-data subjects without dropping them):
+      #   1. For each unique value in the original Sequence column, look at any
+      #      subject in that group with a COMPLETE period set; reconstruct the
+      #      T/R-letter sequence from their ordered (Period, Treatment) pairs.
+      #   2. Map every subject (including those missing periods) to the canonical
+      #      sequence string of their group. This way a subject with only periods
+      #      1–2 in group "ABAB" still gets sequence="TRTR", which is what
+      #      replicateBE::info.design() needs.
+      .trt_chars <- as.character(data$Treatment)
+      .subj_chr  <- as.character(data$Subject)
+      .seq_orig  <- as.character(data$Sequence)
+      .per_num   <- suppressWarnings(as.numeric(as.character(data$Period)))
+
+      # periods-per-subject and full count
+      .periods_per_subject <- tapply(.per_num, .subj_chr, function(p) length(unique(p)))
+      .full_n_periods <- max(.periods_per_subject, na.rm = TRUE)
+
+      # Build canonical mapping: orig-sequence-code -> "TRTR"-style string.
+      # If the upstream Sequence column already uses Treatment-letter codes AND
+      # has the correct length, USE IT AS-IS. Reconstructing from a single
+      # subject's observed (period,treatment) pairs is unsafe when no subject
+      # in the group has a complete period set (would yield truncated codes
+      # like "RR" from incomplete RRT subjects → replicateBE then fails with
+      # "the condition has length > 1").
+      .trt_letters <- unique(.trt_chars)
+      .canonical_map <- list()
+      for (g in unique(.seq_orig)) {
+        g_chars <- strsplit(as.character(g), "")[[1]]
+        if (length(g_chars) == .full_n_periods &&
+            all(g_chars %in% .trt_letters)) {
+          .canonical_map[[g]] <- as.character(g)
+          next
+        }
+        idx_g <- which(.seq_orig == g)
+        subjs_g <- unique(.subj_chr[idx_g])
+        # prefer a subject with all periods present
+        chosen_subj <- NULL
+        for (s in subjs_g) {
+          if (isTRUE(.periods_per_subject[[s]] == .full_n_periods)) {
+            chosen_subj <- s; break
+          }
+        }
+        if (is.null(chosen_subj)) chosen_subj <- subjs_g[1]
+        idx_s <- which(.subj_chr == chosen_subj)
+        ord <- order(.per_num[idx_s])
+        .canonical_map[[g]] <- paste(.trt_chars[idx_s][ord], collapse = "")
+      }
+
+      .new_sequence <- vapply(.seq_orig, function(g) .canonical_map[[g]], character(1))
+
+      cat(sprintf("  - Sequence map (orig -> reconstructed T/R): %s\n",
+                  paste0(names(.canonical_map), "->", unlist(.canonical_map), collapse = ", ")))
+
       replicate_data <- data.frame(
         subject = as.factor(data$Subject),
         period = as.factor(data$Period),
-        sequence = as.factor(data$Sequence),
+        sequence = as.factor(.new_sequence),
         treatment = as.factor(data$Treatment),
         PK = as.numeric(data[[param_to_use]]),
         stringsAsFactors = FALSE
       )
-      
+
       # Remove any rows with missing PK values
       replicate_data <- replicate_data[!is.na(replicate_data$PK), ]
+
+      # Sanity: report any subjects with partial data — kept (replicateBE handles
+      # unbalanced subject×period via its mixed/fixed-effects models).
+      .periods_kept <- tapply(replicate_data$period, replicate_data$subject,
+                              function(p) length(unique(p)))
+      .partial_subj <- names(.periods_kept)[.periods_kept < max(.periods_kept)]
+      if (length(.partial_subj) > 0) {
+        cat(sprintf("  ℹ %d subject(s) with partial periods retained (replicateBE handles unbalanced data): %s\n",
+                    length(.partial_subj), paste(.partial_subj, collapse = ", ")))
+      }
+
+      cat(sprintf("  - Reconstructed sequence levels: %s (n=%d rows, %d subjects)\n",
+                  paste(levels(replicate_data$sequence), collapse = ", "),
+                  nrow(replicate_data),
+                  length(unique(as.character(replicate_data$subject)))))
       
       if (nrow(replicate_data) == 0) {
         stop("No valid data for parameter ", param_to_use)
@@ -496,30 +572,36 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
                   ifelse(data_is_logged, "FALSE", "TRUE")))
       
       # Get ABEL-specific parameters from params (with defaults)
-      # Map UI values to replicateBE regulator codes
+      # The cap selector directly chooses the replicateBE regulator code:
+      #   "50"    -> EMA   (CVwR cap at 50% -> limits 69.84% – 143.19%)
+      #   "none"  -> EMA   (no explicit cap; replicateBE applies EMA logic)
+      #   "HC"    -> HC    (CVwR cap at 57.4% -> limits 66.67% – 150.0%)
+      #   "fixed" -> GCC   (fixed widened limits 75.00% – 133.33%)
       abel_cap_input <- if (!is.null(params$abel_upper_cap)) params$abel_upper_cap else "50"
-      
-      # Map to replicateBE regulator parameter
-      # Health Canada uses "HC" regulator code in replicateBE (cap at CVwR = 57.4%)
-      # EMA uses "EMA" regulator code (50% cap: 69.84% - 143.19%)
-      # GCC uses "GCC" regulator code (fixed widened limits: 75% - 133.33%)
-      if (abel_authority == "HC") {
-        abel_regulator_code <- "HC"  # Health Canada: cap at CVwR = 57.4% (limits: 66.7% - 150.0%)
-      } else {
-        abel_regulator_code <- switch(abel_cap_input,
-          "none" = "EMA",   # Use EMA but effectively no cap
-          "50" = "EMA",     # EMA with 50% cap (69.84% - 143.19%)
-          "fixed" = "GCC",  # GCC with fixed widened limits (75% - 133.33%)
-          "EMA"             # Default to EMA
-        )
-      }
+      abel_regulator_code <- switch(abel_cap_input,
+        "none"  = "EMA",
+        "50"    = "EMA",
+        "HC"    = "HC",
+        "fixed" = "GCC",
+        "EMA"
+      )
       
       abel_adjust <- if (!is.null(params$abel_adjust_tie)) params$abel_adjust_tie else FALSE
       abel_ola <- if (!is.null(params$abel_outlier_analysis)) params$abel_outlier_analysis else FALSE
       abel_fence <- if (!is.null(params$abel_outlier_fence)) params$abel_outlier_fence else 2
       
-      cat(sprintf("  - ABEL Settings: Authority=%s, Cap=%s -> Regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
-                  abel_authority, abel_cap_input, abel_regulator_code, abel_adjust, abel_ola, abel_fence))
+      cat(sprintf("  - ABEL Settings: Cap=%s -> replicateBE regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
+                  abel_cap_input, abel_regulator_code, abel_adjust, abel_ola, abel_fence))
+      
+      # replicateBE::method.A() does NOT support regulator="HC" — only method.B() does.
+      # If user selected HC + Fixed Effects, auto-fall back to method.B(option=2) (nlme/SAS CONTAIN),
+      # which is the closest equivalent to a linear/ANOVA model for HC.
+      if (use_method_a && abel_regulator_code == "HC") {
+        cat("  ⚠ HC regulator requires replicateBE::method.B() — auto-switching to Method B (option=2, nlme/SAS CONTAIN DF).\n")
+        use_method_a <- FALSE
+        df_method <- 2
+        method_label <- "Method B (HC-required, nlme/SAS CONTAIN DF, option=2)"
+      }
       
       # Call appropriate replicateBE method based on ANOVA model selection
       if (use_method_a) {
@@ -581,10 +663,24 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       
       # ABEL-specific values
       cv_wr <- abel_result[1, "CVwR(%)"]  # CV% for reference (already in %)
-      
-      # Scaled limits (already in %)
-      scaled_lower <- abel_result[1, "L(%)"]
-      scaled_upper <- abel_result[1, "U(%)"]
+
+      # Scaled limits — replicateBE returns these as L(%) / U(%) ONLY when ABEL
+      # actually widened the limits (i.e. CVwR > 30%). When CVwR <= 30% no
+      # scaling is applied and replicateBE instead reports the fixed limits in
+      # BE.lo(%) / BE.hi(%). Handle BOTH layouts so the BE call doesn't blow
+      # up with "missing value where TRUE/FALSE needed" downstream.
+      .pick_col <- function(row, names_) {
+        for (n in names_) if (n %in% names(row)) {
+          v <- row[[n]]
+          if (!is.null(v) && !all(is.na(v))) return(v)
+        }
+        NA_real_
+      }
+      scaled_lower <- .pick_col(abel_result[1, ], c("L(%)", "BE.lo(%)"))
+      scaled_upper <- .pick_col(abel_result[1, ], c("U(%)", "BE.hi(%)"))
+      # Fallback to standard fixed limits if neither set was populated.
+      if (is.na(scaled_lower)) scaled_lower <- 80
+      if (is.na(scaled_upper)) scaled_upper <- 125
       
       # BE conclusion
       be_pass <- abel_result[1, "BE"] == "pass"
@@ -623,9 +719,16 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         cv_wr = cv_wr,  # Within-subject CV for reference
         scaled_lower_limit = scaled_lower,  # Scaled lower limit (%)
         scaled_upper_limit = scaled_upper,  # Scaled upper limit (%)
-        limits_used = list(lower = scaled_lower, upper = scaled_upper, type = "scaled"),
+        # Mark limits as "expanded" only when scaling actually widened them past 80-125%.
+        # When CVwR <= 30%, ABEL leaves limits at the standard fixed range; reporting
+        # "scaled" in that case is misleading since no expansion was applied.
+        limits_used = list(
+          lower = scaled_lower,
+          upper = scaled_upper,
+          type = if (scaled_lower < 80 || scaled_upper > 125) "expanded" else "fixed"
+        ),
         method = method_label,
-        regulator = abel_authority,
+        regulator = abel_regulator_code,
         # ANOVA-related fields from replicateBE
         degrees_freedom = anova_df,
         cv_wt = cv_wt,  # CV for test
@@ -667,10 +770,17 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       
     }, error = function(e) {
       cat("❌ Error analyzing", param, ":", e$message, "\n")
+      cat("   Traceback:\n")
+      tryCatch(print(rlang::trace_back()), error = function(x) print(traceback()))
     })
   }
   
   if (length(ci_list) == 0) {
+    cat(sprintf("[ABEL-FATAL] ci_list is empty after processing %d parameters: %s\n",
+                length(parameters), paste(parameters, collapse = ", ")))
+    cat(sprintf("[ABEL-FATAL] processed_params: %s\n", paste(processed_params, collapse = ", ")))
+    cat(sprintf("[ABEL-FATAL] anova_results available keys: %s\n",
+                if (is.null(params$anova_results)) "(NULL params$anova_results)" else paste(names(params$anova_results), collapse = ", ")))
     stop("No parameters could be analyzed successfully")
   }
   
@@ -698,14 +808,14 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     n_subjects = length(unique(data$Subject)),
     n_periods = design_info$n_periods,
     analysis_type = "ABEL",  # CRITICAL: Required for UI to recognize ABEL analysis
-    analysis_method = sprintf("ABEL %s (%s)", method_label, abel_authority),
-    be_method = sprintf("Average Bioequivalence with Expanding Limits (ABEL) - %s [%s]", method_label, abel_authority),
+    analysis_method = sprintf("ABEL (%s)", method_label),
+    be_method = sprintf("Average Bioequivalence with Expanding Limits (ABEL) — %s", method_label),
     anova_model = anova_model,
     replicatebe_method = if(use_method_a) "A" else "B",
     df_approximation = if(use_method_a) NA else df_method,
     alpha_level = alpha,
-    regulator = abel_authority,
-    limits_justification = sprintf("ABEL per %s guidance: scaled limits for eligible parameters, fixed 80-125%% for others", abel_authority)
+    regulator = abel_regulator_code,
+    limits_justification = sprintf("ABEL with replicateBE regulator=%s, eligible parameters=%s, fixed 80-125%% for others", abel_regulator_code, paste(abel_eligible_params, collapse = "+"))
   )
   
   cat("✅ ABEL analysis completed!\n")
@@ -2444,9 +2554,54 @@ detect_replicate_design <- function(data) {
     design_info$subjects_with_missing_periods <- character(0)
     design_info$n_subjects_incomplete <- 0
     
-    # Detect design type from sequences
+    # Helper: classify a sequence pattern by its structure (treatment-letter agnostic).
+    # Returns one of: "full_rep_4", "partial_rep_3", "full_rep_3", "simple_2", "other"
+    # The actual treatment letters (T/R, A/B, etc.) don't matter — only the pattern of
+    # each subject receiving Test and Reference, with at least one being replicated.
+    classify_seq_pattern <- function(seqs) {
+      seqs <- as.character(seqs)
+      # All sequences must have the same length
+      if (length(unique(nchar(seqs))) != 1) return("other")
+      np <- nchar(seqs[1])
+      # Get the set of distinct letters used across all sequences
+      all_letters <- unique(unlist(strsplit(seqs, "")))
+      # Replicate designs use exactly 2 treatments
+      if (length(all_letters) != 2) return("other")
+      # For each sequence, check letter counts
+      counts_list <- lapply(strsplit(seqs, ""), function(chars) sort(as.integer(table(chars))))
+      if (np == 4) {
+        # Full replicate 2x2x4: each subject gets 2 of each treatment (e.g. TRTR, RTRT, ABAB, BABA)
+        ok <- all(sapply(counts_list, function(cnt) length(cnt) == 2 && all(cnt == c(2, 2))))
+        if (ok && length(seqs) >= 2) return("full_rep_4")
+        return("other")
+      } else if (np == 3) {
+        # Partial replicate (TRR/RTR/RRT or TRT/RTT etc.): one treatment appears 2x, the other 1x
+        cnts <- sapply(counts_list, function(cnt) paste(cnt, collapse = ","))
+        # Each sequence has counts (1,2) — one treatment replicated, the other given once
+        if (all(cnts == "1,2")) {
+          # Distinguish full 3-period replicate (each subject gets BOTH replicated across cohort
+          # via two sequences like TRT and RTR) from partial replicate (TRR/RTR/RRT)
+          # Simple heuristic: if exactly 2 sequences and they are "mirror" patterns
+          # (e.g. TRT/RTR = positions swap), it's full 3-period replicate; otherwise partial.
+          if (length(seqs) == 2) {
+            s1 <- strsplit(seqs[1], "")[[1]]
+            s2 <- strsplit(seqs[2], "")[[1]]
+            if (all(s1 != s2)) return("full_rep_3")  # each position differs
+          }
+          return("partial_rep_3")
+        }
+        return("other")
+      } else if (np == 2) {
+        return("simple_2")
+      }
+      return("other")
+    }
+
+    seq_class <- classify_seq_pattern(sequences)
+
+    # Detect design type from sequences (treatment-letter agnostic)
     if (n_periods == 4) {
-      if (any(grepl("TRTR|RTRT", sequences))) {
+      if (seq_class == "full_rep_4") {
         design_info$design_name <- "2x2x4 (Full Replicate)"
         design_info$design_type <- "2x2x4 Full Replicate"
         design_info$is_replicate <- TRUE
@@ -2458,12 +2613,12 @@ detect_replicate_design <- function(data) {
         design_info$is_partial_replicate <- FALSE
       }
     } else if (n_periods == 3) {
-      if (any(grepl("TRR|RTT|RRT|TTR", sequences))) {
+      if (seq_class == "partial_rep_3") {
         design_info$design_name <- "2x2x3 (Partial Replicate)"
         design_info$design_type <- "2x2x3 Partial Replicate"
         design_info$is_replicate <- TRUE
         design_info$is_partial_replicate <- TRUE
-      } else if (any(grepl("TRT|RTR", sequences))) {
+      } else if (seq_class == "full_rep_3") {
         design_info$design_name <- "2x3x3 (Full Replicate)"
         design_info$design_type <- "2x3x3 Full Replicate"
         design_info$is_replicate <- TRUE
@@ -2475,10 +2630,24 @@ detect_replicate_design <- function(data) {
         design_info$is_partial_replicate <- FALSE
       }
     } else if (n_periods == 2) {
-      design_info$design_name <- "2x2x2 Crossover"
-      design_info$design_type <- "2x2x2 Crossover"
-      design_info$is_replicate <- FALSE
-      design_info$is_partial_replicate <- FALSE
+      # Balaam's design (2-period, 4-sequence: TR/RT/TT/RR) is a replicate
+      # design that replicateBE handles. Each subject gets two periods, but
+      # the TT and RR sequences allow within-subject variability estimation.
+      # Detect by: 2 periods + at least 3 distinct sequences containing at
+      # least one homo-treatment sequence (TT or RR).
+      seq_chars_list <- strsplit(as.character(sequences), "")
+      has_homo <- any(sapply(seq_chars_list, function(ch) length(unique(ch)) == 1))
+      if (length(sequences) >= 3 && has_homo) {
+        design_info$design_name <- "Balaam (2x4x2 Replicate)"
+        design_info$design_type <- "2x4x2 Balaam"
+        design_info$is_replicate <- TRUE
+        design_info$is_partial_replicate <- FALSE
+      } else {
+        design_info$design_name <- "2x2x2 Crossover"
+        design_info$design_type <- "2x2x2 Crossover"
+        design_info$is_replicate <- FALSE
+        design_info$is_partial_replicate <- FALSE
+      }
     } else {
       design_info$design_name <- paste0(n_periods, "-Period Crossover")
       design_info$design_type <- paste0(n_periods, "-Period Crossover")

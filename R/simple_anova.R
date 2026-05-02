@@ -320,71 +320,100 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             if (length(seq_row) == 1 && length(subj_seq_row) == 1 &&
                 length(prd_row) == 1 && length(drug_row) == 1 && length(resid_row) == 1) {
 
-              # Sequence tested vs Subject(Sequence) MS — between-subject error (SAS PROC GLM convention)
-              ms_seq      <- anova_table[seq_row,      "Mean Sq"]
-              ms_subj_seq <- anova_table[subj_seq_row, "Mean Sq"]
+              # ── Type III (partial/marginal) SS — matches SAS PROC GLM Type III output ──
+              # For subj:seq, prd, drug: extract from drop1() (marginal contribution of each
+              # term after adjusting for all others).
+              # For seq: seq cannot be dropped by drop1() because subj:seq depends on it;
+              # instead derive F from the full-model t-statistic (F = t^2 for 1-DF effect).
+              ss3_seq  <- NA_real_
+              ss3_subj <- NA_real_
+              ss3_prd  <- NA_real_
+              ss3_drug <- NA_real_
+
+              tryCatch({
+                drop1_df   <- as.data.frame(type3_ss)
+                drop1_rows <- rownames(drop1_df)
+
+                sub_r  <- drop1_rows[grepl("subj.*seq|seq.*subj", drop1_rows) & drop1_rows != "<none>"]
+                prd_r  <- drop1_rows[drop1_rows == "prd"]
+                drug_r <- drop1_rows[grepl("^drug", drop1_rows)]
+
+                if (length(sub_r)  == 1) ss3_subj <- drop1_df[sub_r,  "Sum of Sq"]
+                if (length(prd_r)  == 1) ss3_prd  <- drop1_df[prd_r,  "Sum of Sq"]
+                if (length(drug_r) == 1) ss3_drug <- drop1_df[drug_r, "Sum of Sq"]
+              }, error = function(e) NULL)
+
+              # Type III SS for seq via full-model t-statistic (F = t^2 for 1 DF)
+              tryCatch({
+                cs <- summary(model)$coefficients
+                seq_coef_rows <- grep("^seq[^:]", rownames(cs), value = TRUE)
+                if (length(seq_coef_rows) == 1) {
+                  t_seq_val <- cs[seq_coef_rows, "t value"]
+                  ms_resid_tmp <- anova_table[resid_row, "Mean Sq"]
+                  ss3_seq <- t_seq_val^2 * ms_resid_tmp  # 1 DF
+                }
+              }, error = function(e) NULL)
+
+              # Fallback to Type I SS for any term where Type III could not be computed
+              if (is.na(ss3_seq))  ss3_seq  <- anova_table[seq_row,      "Sum Sq"]
+              if (is.na(ss3_subj)) ss3_subj <- anova_table[subj_seq_row, "Sum Sq"]
+              if (is.na(ss3_prd))  ss3_prd  <- anova_table[prd_row,      "Sum Sq"]
+              if (is.na(ss3_drug)) ss3_drug <- anova_table[drug_row,     "Sum Sq"]
+
+              # Degrees of freedom (same as Type I; only SS changes)
               df_seq      <- anova_table[seq_row,      "Df"]
               df_subj_seq <- anova_table[subj_seq_row, "Df"]
-              f_seq       <- ms_seq / ms_subj_seq
-              p_seq       <- pf(f_seq, df_seq, df_subj_seq, lower.tail = FALSE)
+              df_prd      <- anova_table[prd_row,      "Df"]
+              df_drug     <- anova_table[drug_row,     "Df"]
+              df_resid    <- anova_table[resid_row,    "Df"]
+              ss_resid    <- anova_table[resid_row,    "Sum Sq"]
+              ms_resid    <- anova_table[resid_row,    "Mean Sq"]
 
-              # Period and Treatment tested vs Residual (within-subject error) — correct
-              f_prd  <- anova_table[prd_row,  "F value"]
-              p_prd  <- anova_table[prd_row,  "Pr(>F)"]
-              f_drug <- anova_table[drug_row, "F value"]
-              p_drug <- anova_table[drug_row, "Pr(>F)"]
+              ms_seq      <- ss3_seq  / df_seq
+              ms_subj_seq <- ss3_subj / df_subj_seq
+              ms_prd      <- ss3_prd  / df_prd
+              ms_drug     <- ss3_drug / df_drug
+
+              # Main ANOVA table: ALL effects tested against Residual MS (SAS PROC GLM default)
+              f_seq_main  <- ms_seq      / ms_resid
+              f_subj_main <- ms_subj_seq / ms_resid
+              f_prd_main  <- ms_prd      / ms_resid
+              f_drug_main <- ms_drug     / ms_resid
+              p_seq_main  <- pf(f_seq_main,  df_seq,      df_resid, lower.tail = FALSE)
+              p_subj_main <- pf(f_subj_main, df_subj_seq, df_resid, lower.tail = FALSE)
+              p_prd_main  <- pf(f_prd_main,  df_prd,      df_resid, lower.tail = FALSE)
+              p_drug_main <- pf(f_drug_main, df_drug,     df_resid, lower.tail = FALSE)
 
               comprehensive_anova <- data.frame(
                 Source = c("Sequence", "Subject(Sequence)", "Period", "Treatment", "Residual"),
-                Df = c(
-                  anova_table[seq_row,      "Df"],
-                  anova_table[subj_seq_row, "Df"],
-                  anova_table[prd_row,      "Df"],
-                  anova_table[drug_row,     "Df"],
-                  anova_table[resid_row,    "Df"]
-                ),
-                `Sum Sq` = c(
-                  anova_table[seq_row,      "Sum Sq"],
-                  anova_table[subj_seq_row, "Sum Sq"],
-                  anova_table[prd_row,      "Sum Sq"],
-                  anova_table[drug_row,     "Sum Sq"],
-                  anova_table[resid_row,    "Sum Sq"]
-                ),
-                `Mean Sq` = c(
-                  anova_table[seq_row,      "Mean Sq"],
-                  anova_table[subj_seq_row, "Mean Sq"],
-                  anova_table[prd_row,      "Mean Sq"],
-                  anova_table[drug_row,     "Mean Sq"],
-                  anova_table[resid_row,    "Mean Sq"]
-                ),
-                `F value` = c(f_seq, NA, f_prd, f_drug, NA),
-                `Pr(>F)`  = c(p_seq, NA, p_prd, p_drug, NA),
+                Df = c(df_seq, df_subj_seq, df_prd, df_drug, df_resid),
+                `Sum Sq` = c(ss3_seq, ss3_subj, ss3_prd, ss3_drug, ss_resid),
+                `Mean Sq` = c(ms_seq, ms_subj_seq, ms_prd, ms_drug, ms_resid),
+                `F value` = c(f_seq_main, f_subj_main, f_prd_main, f_drug_main, NA),
+                `Pr(>F)`  = c(p_seq_main, p_subj_main, p_prd_main, p_drug_main, NA),
                 check.names = FALSE,
                 stringsAsFactors = FALSE
               )
               rownames(comprehensive_anova) <- comprehensive_anova$Source
 
-              # Populate subj_seq_analysis so the dashboard error-term table renders
+              # Second table: "Tests of Hypotheses Using the Type III MS for Subject(Seq) as Error Term"
+              # Seq tested against Subject(Sequence) MS (between-subject error)
+              f_seq_vs_subj <- ms_seq / ms_subj_seq
+              p_seq_vs_subj <- pf(f_seq_vs_subj, df_seq, df_subj_seq, lower.tail = FALSE)
+
               subj_seq_analysis <- list(
                 error_term = list(
                   df = df_subj_seq,
-                  ss = anova_table[subj_seq_row, "Sum Sq"],
+                  ss = ss3_subj,
                   ms = ms_subj_seq
                 ),
                 hypothesis_tests = list(
-                  period = list(
-                    df      = anova_table[prd_row,  "Df"],
-                    ss      = anova_table[prd_row,  "Sum Sq"],
-                    ms      = anova_table[prd_row,  "Mean Sq"],
-                    f_value = f_prd,
-                    p_value = p_prd
-                  ),
-                  drug = list(
-                    df      = anova_table[drug_row, "Df"],
-                    ss      = anova_table[drug_row, "Sum Sq"],
-                    ms      = anova_table[drug_row, "Mean Sq"],
-                    f_value = f_drug,
-                    p_value = p_drug
+                  seq = list(
+                    df      = df_seq,
+                    ss      = ss3_seq,
+                    ms      = ms_seq,
+                    f_value = f_seq_vs_subj,
+                    p_value = p_seq_vs_subj
                   )
                 )
               )
