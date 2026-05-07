@@ -257,6 +257,16 @@ results_dashboard_ui <- function(id) {
       "))
     ),
     
+    # ---- Header --------------------------------------------------------
+    div(
+      class = "results-header",
+      style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+      h3(icon("chart-bar"), " Results",
+         style = "margin: 0; font-weight: 700;"),
+      p("Bioequivalence evaluation, NCA summary statistics, T/R comparison, and ANOVA results.",
+        style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
+    ),
+
     # Alert section for important messages
     conditionalPanel(
       condition = "output.show_alert",
@@ -276,16 +286,15 @@ results_dashboard_ui <- function(id) {
       )
     ),
     
-    # Main results tabbed interface with navy theme
+    # Main results tabbed interface
     fluidRow(
       column(12,
-        div(class = "results-tabs",
-          tabsetPanel(
-            id = ns("results_tabs"),
-            type = "tabs",
+        tabsetPanel(
+          id = ns("results_tabs"),
+          type = "tabs",
           
           # Summary Tab - Simplified for ICH M13
-          tabPanel(tags$span(icon("clipboard-list"), " Summary"),
+          tabPanel(tags$span(icon("clipboard-list"), " BE Evaluation"),
             value = "overview",
             br(),
             fluidRow(
@@ -315,82 +324,11 @@ results_dashboard_ui <- function(id) {
               )
             )
           ),
-          
-          # BE Analysis Tab - Second tab
-          tabPanel(tags$span(icon("balance-scale"), " BE Analysis"),
-            value = "be_analysis",
-            br(),
-            fluidRow(
-              column(12,
-                h4("Complete Bioequivalence Analysis"),
-                div(class = "summary-card",
-                  h5("📊 Comprehensive BE Results"),
-                  p("This section provides the complete bioequivalence analysis including all PK parameters, statistical tests, and regulatory conclusions."),
-                  uiOutput(ns("complete_be_analysis"))
-                )
-              )
-            ),
-            br()
-          ),
 
-          # PK Comparison Tab - NEW Third tab (was Fourth)
-          tabPanel(tags$span(icon("exchange-alt"), " PK Comparison"),
-            value = "pk_comparison",
-            br(),
-            fluidRow(
-              column(12,
-                h4("Test vs Reference Comparison"),
-                p("Individual subject T/R ratios with summary statistics for each PK parameter analyzed"),
-                br(),
-                
-                # Parameter selection - single line layout
-                fluidRow(
-                  column(12,
-                    wellPanel(
-                      style = "padding: 15px; margin-bottom: 20px;",
-                      fluidRow(
-                        column(3,
-                          tags$label("Select PK Parameter:", 
-                                   style = "font-weight: 600; margin-top: 8px; display: inline-block;")
-                        ),
-                        column(6,
-                          uiOutput(ns("pk_comparison_parameter_select_ui"))
-                        ),
-                        column(3,
-                          actionButton(ns("refresh_pk_comparison"), 
-                                     icon = icon("refresh"), 
-                                     "Refresh Display",
-                                     class = "btn-sm btn-primary",
-                                     style = "margin-top: 0px;")
-                        )
-                      )
-                    )
-                  )
-                ),
-                
-                # Two-column layout for results
-                fluidRow(
-                  column(6,
-                    # Left column: Individual subject data table
-                    div(
-                      class = "pk-comparison-left-panel",
-                      uiOutput(ns("pk_comparison_table_display"))
-                    )
-                  ),
-                  column(6,
-                    # Right column: Summary statistics
-                    div(
-                      class = "pk-comparison-right-panel", 
-                      uiOutput(ns("pk_comparison_stats_display"))
-                    )
-                  )
-                )
-              )
-            )
-          ),
-
-          # Subject Data Tab - Now Fourth tab (was Fifth)
-          tabPanel(tags$span(icon("users"), " Subject Data"),
+          # BE Comparison Tab — Test/Reference ratios (individual + overall),
+          # normal and log scale.
+          # NCA Results Tab — individual subject PK results (was Subject Data)
+          tabPanel(tags$span(icon("users"), " NCA Results"),
             value = "subject_data",
             br(),
             fluidRow(
@@ -454,8 +392,79 @@ results_dashboard_ui <- function(id) {
               )
             )
           ),
-          
-          # ANOVA Results Tab - Fifth tab
+
+          # Summary Statistics Tab — one descriptive table per product
+          # (per period for replicate designs).
+          tabPanel(tags$span(icon("calculator"), " Summary Statistics"),
+            value = "pk_comparison",
+            br(),
+            fluidRow(
+              column(12,
+                h4("Descriptive Statistics by Treatment"),
+                p("Arithmetic descriptive statistics for each PK parameter, ",
+                  "shown as a separate table per product (split by period ",
+                  "for replicate designs)."),
+                br(),
+                uiOutput(ns("summary_stats_tables"))
+              )
+            )
+          ),
+
+          # T vs R Tab
+          tabPanel(tags$span(icon("balance-scale"), " T vs R"),
+            value = "be_analysis",
+            br(),
+            fluidRow(
+              column(12,
+                wellPanel(
+                  style = "padding: 15px; margin-bottom: 20px;",
+                  fluidRow(
+                    column(4,
+                      tags$label("PK Parameter:",
+                                 style = "font-weight: 600;"),
+                      uiOutput(ns("be_comp_parameter_ui"))
+                    ),
+                    column(4,
+                      tags$label("Scale:",
+                                 style = "font-weight: 600;"),
+                      radioButtons(ns("be_comp_scale"),
+                                   label = NULL,
+                                   choices = list("Normal" = "normal",
+                                                  "ln" = "log"),
+                                   selected = "normal",
+                                   inline = TRUE)
+                    ),
+                    column(4,
+                      div(style = "margin-top: 22px;",
+                        actionButton(ns("refresh_be_comp"),
+                                     icon = icon("refresh"),
+                                     "Refresh",
+                                     class = "btn-sm btn-primary")
+                      )
+                    )
+                  )
+                )
+              )
+            ),
+            fluidRow(
+              column(12,
+                div(class = "summary-card",
+                  h5("Overall T/R Summary"),
+                  uiOutput(ns("be_comp_overall_summary"))
+                )
+              )
+            ),
+            fluidRow(
+              column(12,
+                div(class = "summary-card",
+                  h5("Individual T/R Ratios"),
+                  DT::dataTableOutput(ns("be_comp_individual_table"))
+                )
+              )
+            )
+          ),
+
+          # ANOVA Results Tab
           tabPanel(tags$span(icon("table"), " ANOVA Results"),
             value = "anova_results",
             br(),
@@ -490,7 +499,6 @@ results_dashboard_ui <- function(id) {
             )
           )
         ) # close tabsetPanel
-      ) # close div
     ) # close column
     ), # close fluidRow
     

@@ -3,177 +3,242 @@
 [![R Version](https://img.shields.io/badge/R-%3E%3D%204.0.0-blue.svg)](https://cran.r-project.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Beta-yellow.svg)]()
-[![Validation](https://img.shields.io/badge/Validation-Coming%20Soon-orange.svg)]()
 
-## 🎯 Overview
+## Overview
 
-BioEQ is a comprehensive R package and Shiny application for bioequivalence analysis, providing regulatory-compliant statistical analysis for pharmaceutical studies. BioEQ offers both programmatic R functions and an intuitive web interface.
+BioEQ is a Shiny-based bioequivalence analysis platform providing regulatory-compliant NCA, statistical analysis, and reporting for pharmaceutical studies. It is designed for both scientists who want a point-and-click interface and R users who want direct access to the underlying functions.
 
-**Data Upload**
-Upload complete data sets for complete NCA analysis (concentration-time) or data sets with pre-calculated PK parameters for each subject.
+---
+> **New to R?** Follow the beginner-friendly [Installation Guide](docs/INSTALLATION_GUIDE.md) — it walks through installing R, RStudio, and BioEQ from scratch with no prior experience required.
+
+---
+
+## Application Modules
+
+### Data Upload
+Upload concentration-time data or pre-calculated PK parameter datasets. The upload module validates column structure, detects study design, and previews the data before analysis.
 
 ![DataUploadDemo](docs/images/Data_Upload.gif)
 
-**Analysis Setup**
-Specify parameters for NCA, ANOVA, and BE analysis.
+### Analysis Setup
+Configure the full analysis pipeline: study design, NCA calculation method, ANOVA model, and BE assessment type.
+
+- **Study designs**: 2×2×2 crossover, 2×2×3 replicate, 2×2×4 replicate, parallel group (auto-detected or manually set)
+- **AUC methods**: Linear trapezoidal, log trapezoidal, mixed linear/log trapezoidal
+- **ANOVA models**: Fixed effects (`lm`), mixed effects (`nlme`)
+- **BE analysis types**: Average BE (ABE), Reference-Scaled ABE (RSABE), Average BE with Expanding Limits (ABEL)
+- **Carryover assessment**: ICH M13A-compliant detection (crossover designs)
+- **Missing data**: BLQ → 0 imputation, middle-point interpolation, terminal LOCF
 
 ![DataUploadDemo](docs/images/Analysis_Setup.gif)
 
-**Results**
-Summary tab displays results of BE assessment of primary parameters and carryover assessmnet (if performed). Individual T and R data are dislpayed in the PK comparison tab along with T/R ratios and means. Results of the NCA analysis for each subject are displayed in the Subject Data tab. ANOVA results are also displayed in the final tab. 
+### Results
+The results dashboard is organized across five tabs:
+
+- **Summary** — BE assessment conclusion for primary PK parameters, missing data summary, and carryover assessment (if applicable)
+- **BE Analysis** — Full bioequivalence analysis with 90% CIs and geometric mean ratios
+- **PK Comparison** — Individual and mean T/R ratios with Test vs. Reference data
+- **Subject Data** — Per-subject NCA parameter table with selectable columns
+- **ANOVA Results** — Full ANOVA table with variance components
 
 ![DataUploadDemo](docs/images/Results.gif)
 
-**Plots**
-Study data, including time-concentration and T/R ratios, are displayed in various plots with interactive functionality.
+### Plots
+Interactive and static visualizations of study data.
+
+- Concentration-time profiles (linear and semi-log)
+- Test/Reference overlay plots
+- Individual and cumulative T/R ratio plots
+- Period and sequence effect diagnostics
 
 ![DataUploadDemo](docs/images/Plots.gif)
 
-## ✨ Planned Features
+### Exports & Reports
+Export results and generate regulatory-ready reports.
+- **Data exports**: CSV, Excel
+- **Reports**: PDF, HTML (Word requires optional `officer`/`flextable` packages)
+- **Plots**: High-resolution static graphics
+- **R script**: Reproducible analysis code
 
-- **Sample Size Calculation**: Include additional module to calculate sample size
-- **Comprehensive Analysis**: Expand NCA, ANOVA, and bioequivalence assessment functionality
-- **Study Designs**: Add replicate design functionality
-- **Report Generation**: Automated regulatory-compliant reports in multiple formats
-- **Validation**: Cross-validation with industry-standard software (WinNonlin, SAS)
-- **Fraud Detection**: Regulators only module with data-fraud detection functionality
+![Exports and Reports Module Screenshot](docs/images/image-4.png)
 
-## 🚀 Quick Start
 
-### Installation
+### Validation
+Built-in black-box validation engine that benchmarks BioEQ results against embedded reference datasets derived from industry-standard software. Validation runs within the app — no filesystem access or external files needed.
+
+![Validation Module Screenshot](docs/images/image-3.png)
+
+### Anomaly Detection
+Automated tools for flagging anomalous concentration-time profiles, outlier NCA parameters, and subject-level data quality issues. Includes pairwise profile comparison, trend analysis, and distributional checks. Data can be uploaded directly within the module without needing to run a full analysis.
+
+![Anomaly Dectection Module Screenshot](docs/images/image-5.png)
+
+### Sample Size
+Power and sample size estimation for bioequivalence studies via the `PowerTOST` package, supporting ABE, RSABE (FDA Linearized, ncTOST), and ABEL designs. Results are automatically passed to the Randomization module via the autofill feature.
+
+![Sample Size Module Screenshot](docs/images/image-6.png)
+
+### Randomization
+Full treatment sequence randomization for BE studies. Reproducible from seed, auditable, and verifiable.
+- **Designs supported**: Parallel (T vs R), 2×2 Crossover, 2×2×3 Replicate (TRT|RTR), 2×2×4 Full Replicate (TRTR|RTRT), 2×3×3 Partial Replicate
+- **Generate Schedule**: Configure design, sample size, optional group (block) randomization, RNG seed, optional stratification, and subject ID prefix. Autofill from the Sample Size module in one click.
+- **Verify Schedule**: Re-enter parameters from an audit record and optionally upload a CSV to confirm all assignments are identical to the regenerated schedule.
+- **Report**: Downloadable plain-text audit record and self-contained HTML pharmacist report. Includes algorithm details (Mersenne-Twister), seed, R version, schedule hash (SHA-256), and all parameters required for regulatory submission.
+- **Reproducibility**: Uses base R only (no package version dependencies in the random stream); RNGkind locked to `Mersenne-Twister/Inversion/Rejection` for R ≥ 3.6.
+
+![Randomization Module Screenshot](docs/images/image-8.png)
+
+### Help & Support
+Step-by-step guidance on data format requirements, workflow, and analysis interpretation.
+
+---
+
+## Quick Start
+
+
+### Install Dependencies
 
 ```r
-# Option 1: Install dependencies automatically
+# Option 1: Automatic install
 Rscript install_dependencies.R
 
-# Option 2: Install manually
-install.packages(c("shiny", "shinydashboard", "DT", "readr", "dplyr", 
-                   "readxl", "bslib", "ggplot2", "gridExtra"))
+# Option 2: Manual install (core)
+install.packages(c(
+  "shiny", "shinydashboard", "DT", "readr", "dplyr",
+  "readxl", "bslib", "shinyjs", "shinycssloaders",
+  "ggplot2", "gridExtra", "plotly", "htmlwidgets",
+  "nlme", "lme4", "lmerTest", "replicateBE",
+  "PowerTOST", "reshape2", "scales", "writexl", "tidyr",
+  "rmarkdown", "knitr", "zip", "digest"
+))
 
-# Option 3: Future - Install from GitHub (when package is complete)
-# devtools::install_github("yourusername/BioEQ")
+# Optional (Word report generation)
+install.packages(c("officer", "flextable"))
+
+# Optional (analysis enhancements: DTW similarity, Kenward-Roger DDF)
+install.packages(c("dtw", "pbkrtest"))
 ```
 
-### Basic Usage
+### Launch the App
 
-#### R Package
 ```r
-# Load example data
-data <- read.csv("your_data.csv")
-
-# Run NCA analysis
-nca_results <- calculate_pk_parameters(data)
-
-# Perform bioequivalence analysis
-be_results <- run_bioequivalence_analysis(nca_results)
-
-# Generate report
-generate_report(be_results, format = "pdf")
-```
-
-#### Shiny Application
-```r
-# Method 1: One-command launch (easiest)
+# Recommended: from the BioEQ project root
 Rscript launch_app.R
 
-# Method 2: From command line with auto-install
-cd shiny
-R -e "options(repos = c(CRAN = 'https://cran.rstudio.com/')); shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)"
+# Or from an R console
+shiny::runApp("shiny", host = "127.0.0.1", port = 4000, launch.browser = TRUE)
 
-# Method 3: From R console (ensure correct working directory)
-setwd("shiny")
-options(repos = c(CRAN = 'https://cran.rstudio.com/'))
-shiny::runApp(host='0.0.0.0', port=4000, launch.browser=TRUE)
-
-# Method 4: Using absolute path
-shiny::runApp("/path/to/BioEQ/shiny", host='0.0.0.0', port=4000, launch.browser=TRUE)
-
-# Future: Launch via package (when package is complete)
-# BioEQ::launch_app()
+# Or from the command line
+cd /path/to/BioEQ
+Rscript -e 'shiny::runApp("shiny", host="127.0.0.1", port=4000, launch.browser=TRUE)'
 ```
 
-**Access the app at:** http://localhost:4000
+**Access the app at:** http://127.0.0.1:4000
 
-## 📊 Analysis Capabilities (In Development)
+### Instalation Guide
+> **New to R?** Follow the beginner-friendly [Installation Guide](docs/INSTALLATION_GUIDE.md) instead — it walks through installing R, RStudio, and BioEQ from scratch with no prior experience required.
 
-### Non-Compartmental Analysis (NCA)
-- AUC (linear, log-linear, mixed methods)
-- Cmax, Tmax determination
-- Terminal half-life calculation
-- Clearance and volume parameters
+---
 
-### Statistical Analysis
-- ANOVA with fixed and random effects
-- 90% confidence intervals
-- Geometric mean ratios
-- Intra-subject variability
-
-### Bioequivalence Assessment
-- 80-125% acceptance criteria
-- Scaled average bioequivalence
-- Reference-scaled approaches
-- Outlier detection
-
-## 📋 Data Requirements
+## Data Format
 
 ### Concentration-Time Data
-- Columns: Subject, Treatment, Period, Sequence, Time, Concentration
-- Formats: CSV, Excel, tab-delimited
+| Column | Description |
+|---|---|
+| `Subject` | Unique subject identifier |
+| `Treatment` | Treatment code (`R` = Reference, `T` = Test) |
+| `Period` | Study period number |
+| `Sequence` | Treatment sequence (e.g., `RT`, `TR`) |
+| `Time` | Sampling time (hours) |
+| `Concentration` | Drug concentration (ng/mL or equivalent) |
+
+Supported file formats: CSV, Excel (`.xlsx`), tab-delimited
 
 ### PK Parameters Data
-- Pre-calculated AUC, Cmax, Tmax values
-- Direct bioequivalence assessment
+Pre-calculated AUC, Cmax, and Tmax values per subject can be uploaded directly for BE assessment without running NCA.
 
-## 🛠️ Development
+---
 
-### Prerequisites
-- R (≥ 4.0.0)
-- RStudio (recommended)
-- Required packages: See [DESCRIPTION](DESCRIPTION)
+## Analysis Methods
 
-### Testing
-```r
-# Run unit tests
-devtools::test()
+### Non-Compartmental Analysis (NCA)
+- AUC<sub>0-t</sub> and AUC<sub>0-∞</sub> via linear, log, or mixed trapezoidal rules
+- C<sub>max</sub> and T<sub>max</sub>
+- Terminal elimination half-life (λ<sub>z</sub>)
+- Apparent clearance (CL/F) and volume of distribution (Vz/F)
 
-# Check package
-devtools::check()
-```
+### Bioequivalence Assessment
+| Method | Design | Regulatory Basis |
+|---|---|---|
+| Average BE (ABE) | 2×2×2, parallel | FDA, EMA, ICH M13A |
+| RSABE — FDA Linearized (Howe UCB) | 2×2×3, 2×2×4 replicate | FDA Guidance (2021), HVD/HVDP |
+| RSABE — ncTOST | 2×2×3, 2×2×4 replicate | Tóthfalusi & Endrényi (2016) |
+| ABEL | 2×2×3, 2×2×4 replicate | EMA Guideline |
 
-## 📚 Documentation (In Development)
+### Statistical Analysis
+- ANOVA: fixed effects (`lm`) and mixed effects (`nlme`)
+- 90% confidence intervals on geometric mean ratios
+- Intra-subject coefficient of variation (CV<sub>wR</sub>)
+- Carryover detection per ICH M13A Section 2.2.3.3
 
-- [User Guide](docs/user_guide.md)
-- [API Reference](https://github.com/BioEQ/)
-- [Shiny App Guide](shiny/README.md)
-- [Validation Report](VALIDATION_REPORT.md)
+---
 
-## 📄 License
-
-This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.
-
-## 👥 Authors
-
-- BioEQ Development Team
-
-## 🙏 Acknowledgments
-
-- R Consortium for statistical computing
-- Regulatory agencies for guidance documents
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/BioEQ/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/BioEQ/discussions)
-- **Email**: support@bioeq.org
-
-## 📈 Citation
-
-If you use BioEQ in your research, please cite:
+## Project Structure
 
 ```
-BioEQ Development Team (2025). BioEQ: Bioequivalence Analysis Platform. 
+BioEQ/
+├── R/                        # Core analysis functions
+│   ├── bioeq_main.R          # Main pipeline orchestration
+│   ├── nca_functions.R       # NCA calculations
+│   ├── be_analysis.R         # ABE / study-design routing
+│   ├── rsabe_analysis.R      # RSABE & ABEL methods
+│   ├── simple_anova.R        # ANOVA models
+│   ├── carryover_detection.R # ICH M13A carryover detection
+│   ├── cumulative_be_analysis.R # Progressive cumulative BE
+│   ├── missing_data_handling.R  # BLQ/missing data strategies
+│   ├── plotting.R            # Static & interactive plots
+│   ├── randomization.R       # BE randomization engine (base R, reproducible)
+│   ├── statistics.R          # Sample size & power functions
+│   ├── utils.R               # Shared utilities
+│   └── validation_runner.R   # Black-box validation engine
+├── shiny/
+│   ├── app.R                 # Application entry point
+│   ├── ui/                   # Module UIs
+│   ├── server/               # Module servers
+│   ├── utils/                # Dashboard & report helpers
+│   ├── templates/            # Report templates (Rmd)
+│   └── www/                  # Static assets (CSS)
+├── validation/               # Validation reference data & scripts
+├── docs/                     # User guide and images
+├── tests/                    # Unit tests
+├── DESCRIPTION
+├── install_dependencies.R
+└── launch_app.R
 ```
 
 ---
-Author: Amanda Lewin
-*Version BETA 
+
+## Roadmap
+
+- **Expanded reporting** — Full Word report support (requires optional `officer`/`flextable` packages)
+- **Additional study designs** — Higher-order crossover and multi-dose designs
+- **DTW pairwise comparison** — Dynamic Time Warping for anomaly detection (requires optional `dtw` package)
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
+
+## Authors
+
+BioEQ Development Team
+
+## Documentation
+
+- [User Guide](docs/user_guide.md)
+- [Shiny App Guide](shiny/README.md)
+
+---
+
+*Version BETA*

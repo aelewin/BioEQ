@@ -43,5 +43,7 @@ Suggests:
     rmarkdown,
     testthat,
     officer,
-    flextable
+    flextable,
+    dtw,
+    pbkrtest
 VignetteBuilder: knitr

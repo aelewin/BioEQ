@@ -55,15 +55,15 @@ fluidPage(
   fluidRow(
     column(12,
       div(
-        style = "text-align: center; margin-bottom: 30px;",
-        h2(
-          icon("download", style = "margin-right: 10px; color: #6f42c1;"),
-          "Exports & Reports",
-          style = "color: #495057; font-weight: 600; margin-bottom: 10px;"
+        class = "exports-header",
+        style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+        h3(
+          icon("download"), " Exports & Reports",
+          style = "margin: 0 0 4px 0; font-size: 20px; font-weight: 600;"
         ),
         p(
           "Download analysis results as CSV files for further analysis or regulatory submissions.",
-          style = "color: #6c757d; font-size: 16px; max-width: 700px; margin: 0 auto;"
+          style = "margin: 0; font-size: 13px; opacity: 0.85;"
         )
       )
     )
@@ -166,19 +166,37 @@ fluidPage(
       )
     ),
     
-    # ── Reports (placeholder) ──
+    # ── Reports ──
     fluidRow(
       column(12,
         div(class = "report-card",
           h4(icon("file-alt"), " Reports"),
-          p(class = "subtitle", "Generate comprehensive analysis reports."),
-          div(
-            class = "alert alert-info",
-            style = "margin-bottom: 0;",
-            icon("tools"), " ",
-            strong("Report generation is under active development. "),
-            "Comprehensive PDF, HTML, and Word reports with ANOVA tables, plots, ",
-            "and regulatory-ready formatting will be available in a future update."
+          p(class = "subtitle",
+            "Comprehensive SAS-style analysis report (HTML). ",
+            "Combines untransformed descriptive statistics, log-scale ANOVA ",
+            "tables (Type I & III), per-product intra-subject variability, ",
+            "and the final BE conclusion in a single self-contained document."),
+          fluidRow(
+            column(6,
+              downloadButton("download_sas_style_report",
+                label = "BE Analysis Report (HTML)",
+                icon = icon("file-code"),
+                class = "btn-primary export-btn",
+                style = "width: 100%; margin-bottom: 10px;"
+              ),
+              tags$small(class = "text-muted d-block",
+                "Descriptive stats (untransformed) + ANOVA on log scale + ",
+                "intra-subject CV% + final BE table.")
+            ),
+            column(6,
+              div(
+                class = "alert alert-info",
+                style = "margin-bottom: 0; padding: 10px; font-size: 12px;",
+                icon("tools"), " ",
+                strong("PDF & Word formats coming soon."),
+                " Additional regulatory-ready report templates are in active development."
+              )
+            )
           )
         )
       )

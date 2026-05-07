@@ -198,6 +198,16 @@ plots_ui <- function(id) {
       "))
     ),
     
+    # ---- Header --------------------------------------------------------
+    div(
+      class = "plots-header",
+      style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+      h3(icon("chart-line"), " Plots",
+         style = "margin: 0; font-weight: 700;"),
+      p("Concentration-time profiles, individual subject plots, cumulative T/R ratios, and lambda-Z regression.",
+        style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
+    ),
+
     # Main content area
     conditionalPanel(
       condition = paste0("!output['", ns("plots_available"), "']"),
@@ -225,10 +235,9 @@ plots_ui <- function(id) {
       # Main plots tabbed interface
       fluidRow(
         column(12,
-          div(class = "results-tabs",
-            tabsetPanel(
-              id = ns("plots_tabs"),
-              type = "tabs",
+          tabsetPanel(
+            id = ns("plots_tabs"),
+            type = "tabs",
             
               # All Subject Profiles Tab
               tabPanel(tags$span(icon("line-chart"), " All Subject Profiles"),
@@ -295,8 +304,7 @@ plots_ui <- function(id) {
                 )
               )
               
-            ) # close tabsetPanel
-          )
+          ) # close tabsetPanel
         )
       )
     )

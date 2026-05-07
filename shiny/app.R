@@ -1,6 +1,74 @@
 # BioEQ Shiny Web Application
 # Main application entry point
 
+# ---------------------------------------------------------------------------
+# Robust path resolution
+# ---------------------------------------------------------------------------
+# All source() calls below historically used paths relative to the working
+# directory (e.g. "../R/bioeq_main.R"), which only resolves correctly when
+# the working directory is exactly the shiny/ folder. Different launch paths
+# (RStudio "Run App", "Source", or runApp() invoked from a different cwd)
+# can break those relative paths and force users to copy R/ files into shiny/.
+#
+# The block below detects the real location of THIS file (app.R) using
+# sys.frames(), walks up to locate the BioEQ project root (the directory
+# containing R/bioeq_main.R), and normalizes the working directory to the
+# shiny/ folder so that all downstream relative paths in server/UI modules
+# continue to work unchanged.
+.bioeq_find_paths <- function() {
+  # 1. Try to find this file's path from the call stack
+  this_file <- tryCatch({
+    frames <- sys.frames()
+    ofiles <- vapply(frames, function(f) {
+      x <- f$ofile
+      if (is.null(x)) NA_character_ else as.character(x)
+    }, character(1))
+    ofiles <- ofiles[!is.na(ofiles) & nzchar(ofiles)]
+    if (length(ofiles)) normalizePath(ofiles[length(ofiles)], mustWork = FALSE)
+    else NA_character_
+  }, error = function(e) NA_character_)
+
+  # 2. Build candidate starting directories
+  candidates <- character(0)
+  if (!is.na(this_file) && nzchar(this_file)) {
+    candidates <- c(candidates, dirname(this_file))
+  }
+  candidates <- c(candidates, getwd())
+
+  # 3. From each candidate, walk up looking for R/bioeq_main.R
+  for (start in candidates) {
+    d <- start
+    for (i in 1:8) {
+      if (file.exists(file.path(d, "R", "bioeq_main.R"))) {
+        return(list(
+          root  = normalizePath(d, mustWork = TRUE),
+          shiny = normalizePath(file.path(d, "shiny"), mustWork = FALSE)
+        ))
+      }
+      parent <- dirname(d)
+      if (parent == d) break
+      d <- parent
+    }
+  }
+  stop(
+    "BioEQ: could not locate the project root. Expected to find R/bioeq_main.R\n",
+    "  starting from this file or working directory: ", getwd(), "\n",
+    "  Please launch the app from the BioEQ project root, e.g.\n",
+    "    setwd(\"/path/to/BioEQ\"); shiny::runApp(\"shiny\")"
+  )
+}
+.bioeq_paths <- .bioeq_find_paths()
+.BIOEQ_ROOT  <- .bioeq_paths$root
+.BIOEQ_R_DIR <- file.path(.BIOEQ_ROOT, "R")
+.SHINY_DIR   <- .bioeq_paths$shiny
+
+# Normalize working directory to shiny/ so existing relative paths in
+# downstream server/UI files (e.g. "../R/...", "ui/...", "utils/...") all
+# resolve correctly regardless of how the app was launched.
+if (dir.exists(.SHINY_DIR)) {
+  setwd(.SHINY_DIR)
+}
+
 # Load required libraries
 library(shiny)
 library(shinydashboard)
@@ -77,30 +145,52 @@ tryCatch({
   message("digest not available - plot caching may be limited")
 })
 
-# Source the existing BioEQ R functions
-source("../R/bioeq_main.R", local = TRUE)
-source("../R/nca_functions.R", local = TRUE)
-source("../R/be_analysis.R", local = TRUE)
-source("../R/rsabe_analysis.R", local = TRUE)  # RSABE analysis (FDA linearized + ncTOST)
-source("../R/simple_anova.R", local = TRUE)  # Simple ANOVA using lm()
-source("../R/statistics.R", local = TRUE)
-source("../R/utils.R", local = TRUE)
-source("../R/missing_data_handling.R", local = TRUE)  # Missing data for NCA
-source("../R/carryover_detection.R", local = TRUE)
-source("../R/plotting.R", local = TRUE)  # Enhanced plotting functions with Shiny support
-source("../R/cumulative_be_analysis.R", local = TRUE)  # Cumulative bioequivalence analysis
+# Optional: DTW for time-flexible pairwise comparison in Anomaly Detection
+tryCatch({
+  library(dtw)
+}, error = function(e) {
+  message("dtw not available - DTW pairwise comparison will fall back to RMSE")
+})
+
+# Source the existing BioEQ R functions (absolute paths from .BIOEQ_R_DIR)
+# NOTE: We source into globalenv() so functions defined in these files are
+# visible everywhere (server modules, etc.). Sourcing with local=TRUE inside a
+# helper function would trap definitions in the helper's local frame and they
+# would disappear as soon as the helper returns.
+.source_R <- function(fname) sys.source(file.path(.BIOEQ_R_DIR, fname), envir = globalenv())
+.source_R("bioeq_main.R")
+.source_R("nca_functions.R")
+.source_R("be_analysis.R")
+.source_R("rsabe_analysis.R")            # RSABE analysis (FDA linearized + ncTOST)
+.source_R("simple_anova.R")              # Simple ANOVA using lm()
+.source_R("statistics.R")
+.source_R("utils.R")
+.source_R("missing_data_handling.R")     # Missing data for NCA
+.source_R("carryover_detection.R")
+.source_R("plotting.R")                  # Enhanced plotting functions with Shiny support
+.source_R("cumulative_be_analysis.R")    # Cumulative bioequivalence analysis
+.source_R("validation_runner.R")         # Black-box validation engine
+.source_R("anomaly_detection.R")         # Fraud / anomaly detection analytics
+.source_R("randomization.R")             # Randomization engine
 
 # Source template configuration
 source("templates/report_generation.R", local = TRUE)
+source("utils/sas_style_report.R", local = TRUE)
 
 # Source UI and server components
 source("ui/main_ui.R", local = TRUE)
 source("ui/exports_reports_ui.R", local = TRUE)
 source("ui/results_dashboard_ui.R", local = TRUE)
 source("ui/plots_ui.R", local = TRUE)
+source("ui/validation_ui.R", local = TRUE)
+source("ui/anomaly_detection_ui.R", local = TRUE)
+source("ui/randomization_ui.R",     local = TRUE)
 source("server/main_server.R", local = TRUE)
 source("server/results_dashboard_server.R", local = TRUE)
 source("server/plots_server.R", local = TRUE)
+source("server/validation_server.R", local = TRUE)
+source("server/anomaly_detection_server.R", local = TRUE)
+source("server/randomization_server.R",     local = TRUE)
 
 # Define utility operators and functions
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -134,11 +224,14 @@ ui <- dashboardPage(
       menuItem("Results", tabName = "results", icon = icon("chart-line")),
       menuItem("Plots", tabName = "plots", icon = icon("chart-area")),
       menuItem("Exports & Reports", tabName = "exports", icon = icon("download")),
+      menuItem("Validation", tabName = "validation", icon = icon("check-circle")),
       br(),
-      menuSubItem("Advanced Options", tabName = "advanced", icon = icon("sliders-h")),
-      menuSubItem("Validation", tabName = "validation", icon = icon("check-circle")),
-      menuSubItem("Sample Size", tabName = "sample_size", icon = icon("calculator")),
-      menuSubItem("Help & Support", tabName = "help", icon = icon("question-circle"))
+      menuItem("Anomaly Detection", tabName = "anomaly_detection", icon = icon("triangle-exclamation")),
+      br(),
+      menuItem("Sample Size", tabName = "sample_size", icon = icon("calculator")),
+      menuItem("Randomization", tabName = "randomization", icon = icon("shuffle")),
+      br(),
+      menuItem("Help & Support", tabName = "help", icon = icon("question-circle"))
     ),
     div(
       style = "position: fixed; bottom: 15px; left: 15px; right: 15px; text-align: center; 
@@ -223,7 +316,10 @@ ui <- dashboardPage(
     
     # Custom CSS for responsive design
     tags$head(
-      tags$title("BioEQ Analysis Platform"),
+      tags$title("BioEQ - BETA"),
+      # Force the browser tab title even after shinydashboard overwrites it
+      # with a serialized version of the dashboardHeader `title` HTML.
+      tags$script(HTML("document.title = 'BioEQ - BETA';")),  
       tags$link(rel = "icon", href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧪</text></svg>"),
       tags$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
       tags$link(rel = "stylesheet", type = "text/css", href = "custom.css"),
@@ -819,49 +915,22 @@ ui <- dashboardPage(
         source("ui/exports_reports_ui.R", local = TRUE)$value
       ),
       
-      # Advanced Options Tab
+      # Anomaly Detection Tab
       tabItem(
-        tabName = "advanced",
-        fluidRow(
-          box(
-            title = "Advanced Analysis Options", 
-            status = "primary", 
-            solidHeader = TRUE,
-            width = 12,
-            h4("Coming Soon"),
-            p("Advanced configuration options for experienced users will be available here."),
-            tags$ul(
-              tags$li("Custom model parameters"),
-              tags$li("Advanced outlier detection"),
-              tags$li("Custom confidence intervals"),
-              tags$li("Specialized study designs")
-            )
-          )
-        )
+        tabName = "anomaly_detection",
+        anomaly_detection_ui("anomaly_detection")
+      ),
+
+      # Randomization Tab
+      tabItem(
+        tabName = "randomization",
+        randomization_ui("randomization")
       ),
       
-      # Validation Tab
+      # Validation Tab (black-box validation module)
       tabItem(
         tabName = "validation",
-        fluidRow(
-          box(
-            title = "Method Validation", 
-            status = "success", 
-            solidHeader = TRUE,
-            width = 12,
-            h4("Regulatory Validation"),
-            p("This application follows regulatory guidelines and industry best practices."),
-            tags$ul(
-              tags$li("FDA guidance compliance"),
-              tags$li("EMA guideline adherence"), 
-              tags$li("ICH M13A compatibility"),
-              tags$li("Cross-validation with WinNonlin")
-            ),
-            br(),
-            actionButton("run_validation", "Run Validation Tests", 
-                        class = "btn-success", icon = icon("check"))
-          )
-        )
+        validation_ui()
       ),
       
       # Sample Size Tab
@@ -1018,12 +1087,12 @@ server <- function(input, output, session) {
     updateTabItems(session, "sidebar", "setup")
   })
   
-  # Source server modules with proper environment access
-  local({
-    source("server/data_upload_server.R", local = environment())
-    source("server/analysis_setup_server.R", local = environment()) 
-    source("server/sample_size_server.R", local = environment())
-  })
+  # Source server modules with proper environment access.
+  # Use the server function's environment so reactives defined in those
+  # files (e.g. ss_result) are visible to subsequent module wiring.
+  source("server/data_upload_server.R",     local = environment())
+  source("server/analysis_setup_server.R",  local = environment())
+  source("server/sample_size_server.R",     local = environment())
   
   # Initialize results dashboard module
   results_dashboard_server("results_dashboard", 
@@ -1040,6 +1109,14 @@ server <- function(input, output, session) {
                analysis_config = reactive(values$analysis_config),
                uploaded_data = reactive(values$uploaded_data),
                validation_result = reactive(values$validation_result))
+
+  # Initialize anomaly detection module (uses uploaded data when available)
+  anomaly_detection_server("anomaly_detection",
+                            uploaded_data = reactive(values$uploaded_data))
+
+  # Initialize randomization module (autofills from sample_size if available)
+  randomization_server("randomization",
+                       ss_result = if (exists("ss_result")) ss_result else NULL)
   
   # =======================================================================
   # EXPORTS & REPORTS SERVER LOGIC
@@ -1610,14 +1687,34 @@ server <- function(input, output, session) {
       showNotification("Raw data exported.", type = "message")
     }
   )
-  
-  # Validation test runner
-  observeEvent(input$run_validation, {
-    showNotification("Running validation tests...", type = "message", duration = 2)
-    # TODO: Implement validation tests
-    Sys.sleep(2)
-    showNotification("All validation tests passed!", type = "message")
-  })
+
+  # ── 6. SAS-style Bioequivalence Analysis Report (HTML) ──
+  output$download_sas_style_report <- downloadHandler(
+    filename = function() paste0("BioEQ_BE_Report_", Sys.Date(), ".html"),
+    content = function(file) {
+      req(values$be_results)
+      tryCatch({
+        generate_sas_style_html_report(
+          be_results      = values$be_results,
+          nca_results     = values$nca_results,
+          analysis_config = values$analysis_config,
+          output_file     = file
+        )
+        showNotification("BE analysis report generated.", type = "message")
+      }, error = function(e) {
+        showNotification(paste("Report generation failed:", e$message),
+                         type = "error", duration = 8)
+        # Still write a minimal file so the download doesn't hang.
+        writeLines(paste0(
+          "<!DOCTYPE html><html><body><h2>Report generation failed</h2><pre>",
+          gsub("<", "&lt;", e$message, fixed = TRUE), "</pre></body></html>"),
+          file)
+      })
+    }
+  )
+
+  # Validation module server (black-box validation: always computes fresh)
+  validation_server(input, output, session)
 }
 
 # Run the application

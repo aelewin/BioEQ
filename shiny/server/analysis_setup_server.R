@@ -4,11 +4,11 @@
 # Source help utilities
 source("utils/help_utils.R", local = TRUE)
 
-# Source simple ANOVA functions
-source("../R/simple_anova.R", local = TRUE)
+# Source simple ANOVA functions (.BIOEQ_R_DIR is set in shiny/app.R)
+source(file.path(.BIOEQ_R_DIR, "simple_anova.R"), local = TRUE)
 
 # Source RSABE analysis functions
-source("../R/rsabe_analysis.R", local = TRUE)
+source(file.path(.BIOEQ_R_DIR, "rsabe_analysis.R"), local = TRUE)
 
 # Helper function for null coalescing
 `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -572,8 +572,8 @@ observeEvent(input$run_analysis, {
     ),
     # RSABE method selection
     rsabe_method = input$rsabe_method %||% "fda_linearized",
-    # ABEL regulatory authority
-    abel_regulator = input$abel_regulator %||% "EMA",
+    # ABEL: which PK parameters are evaluated for expanded limits (rest stay at 80–125%)
+    abel_eligible_params = input$abel_eligible_params %||% c("Cmax"),
     pk_parameters = all_pk_params,
     # ANOVA Configuration
     anova_model = input$anova_model %||% "fixed",
@@ -970,25 +970,17 @@ observeEvent(input$run_analysis, {
       is_abel_analysis <- analysis_config$be_analysis_type == "ABEL"
       is_rsabe_analysis <- analysis_config$be_analysis_type == "RSABE"
       
-      if (is_replicate_design && (is_abel_analysis || is_rsabe_analysis)) {
-        cat(sprintf("[INFO] ⏭️  Skipping separate ANOVA for replicate design with %s\n", analysis_config$be_analysis_type))
-        cat(sprintf("[INFO]    Design: %s, BE Type: %s\n", detected_study_design, analysis_config$be_analysis_type))
-        cat(sprintf("[INFO]    %s will perform integrated ANOVA + BE analysis\n", analysis_config$be_analysis_type))
-        
-        # Create placeholder ANOVA results structure
-        anova_results <- list(
-          anova_results = list(),  # Empty - will be populated by replicateBE
-          design = detected_study_design,
-          parameters = available_selected_params,
-          note = sprintf("ANOVA performed by %s during %s analysis", 
-                        if (is_rsabe_analysis) "RSABE engine" else "replicateBE",
-                        analysis_config$be_analysis_type)
-        )
-        
-      } else if (length(numeric_params) > 0) {
-        
-        cat(sprintf("[INFO] 📊 Running ANOVA for %d parameters: %s\n", 
-                    length(numeric_params), paste(numeric_params, collapse = ", ")))
+      if (length(numeric_params) > 0) {
+
+        if (is_replicate_design && (is_abel_analysis || is_rsabe_analysis)) {
+          cat(sprintf("[INFO] 📊 Running ANOVA for replicate %s design (%d parameters): %s\n",
+                      analysis_config$be_analysis_type,
+                      length(numeric_params), paste(numeric_params, collapse = ", ")))
+          cat(sprintf("[INFO]    Non-eligible params (e.g. AUC0t under EMA) need ANOVA for fixed ABE CIs.\n"))
+        } else {
+          cat(sprintf("[INFO] 📊 Running ANOVA for %d parameters: %s\n", 
+                      length(numeric_params), paste(numeric_params, collapse = ", ")))
+        }
         cat(sprintf("[INFO]    Model: %s, Design: %s\n", analysis_config$anova_model, detected_study_design))
         
         tryCatch({
@@ -1012,7 +1004,7 @@ observeEvent(input$run_analysis, {
           # Wrap results in expected structure for the UI
           anova_results <- list(
             anova_results = simple_anova_results,
-            design = "simple_anova",
+            design = if (is_replicate_design && (is_abel_analysis || is_rsabe_analysis)) detected_study_design else "simple_anova",
             parameters = available_selected_params
           )
           
@@ -1045,8 +1037,10 @@ observeEvent(input$run_analysis, {
       }
     }
     
-    # Store ANOVA results (but NOT if we're doing ABEL/RSABE - they populate their own)
-    if (!(is_replicate_design && (is_abel_analysis || is_rsabe_analysis))) {
+    # Store ANOVA results from perform_simple_anova (available for all design types now).
+    # For ABEL/RSABE, this will be overwritten later by the BE analysis results which
+    # incorporate both the fixed-ABE ANOVA (from here) and the replicateBE output.
+    if (!is.null(anova_results)) {
       values$anova_results <- anova_results
     }
     
@@ -1148,15 +1142,22 @@ observeEvent(input$run_analysis, {
       
       # Prepare data for BE analysis 
       # For PK parameter data, uploaded_data already contains everything we need
-      # For concentration-time data, we need to merge NCA results
+      # For concentration-time data, use NCA results directly (one row per subject-period
+      # with PK columns) — DO NOT join PK values onto raw concentration-time rows, as that
+      # causes a massive Cartesian explosion (replicate designs have multiple NCA rows per
+      # Subject+Treatment, multiplying every conc-time row by 2 for every parameter merged).
       if (values$data_type == "pk_parameters") {
         # PK parameter data: use uploaded data directly (already has Subject, Treatment, Period, Sequence, PK params)
         be_data <- values$uploaded_data
         cat("📋 Using PK parameter data directly for BE analysis\n")
+      } else if (is.data.frame(nca_results) && nrow(nca_results) > 0) {
+        # Concentration-time data: use NCA results table directly as the BE input
+        be_data <- nca_results
+        cat(sprintf("📋 Using NCA results directly for BE analysis (%d rows)\n", nrow(be_data)))
       } else {
-        # Concentration-time data: use uploaded data as base and will merge NCA results below
+        # Fallback: no NCA results — use uploaded data
         be_data <- values$uploaded_data
-        cat("📋 Using concentration-time data - will merge NCA results\n")
+        cat("📋 No NCA results — falling back to uploaded data for BE analysis\n")
       }
       
       # Ensure proper column names for BE analysis functions
@@ -1178,61 +1179,11 @@ observeEvent(input$run_analysis, {
       cat(sprintf("📋 Columns: %s\n", paste(names(be_data), collapse = ", ")))
       cat(sprintf("📋 Unique subjects: %d\n", length(unique(be_data$Subject))))
       
-      # Add NCA results to the BE data for analysis (ONLY for concentration-time data)
-      if (values$data_type == "concentration" && is.data.frame(nca_results) && nrow(nca_results) > 0) {
-        cat(sprintf("📋 NCA Results structure: %d rows, %d cols\n", nrow(nca_results), ncol(nca_results)))
-        cat(sprintf("📋 NCA Columns: %s\n", paste(names(nca_results), collapse = ", ")))
-        
-        # Prepare NCA data for merging - ensure proper column names
-        nca_merge <- nca_results
-        
-        # Standardize column names - rename instead of duplicating
-        if ("subject" %in% names(nca_merge)) {
-          names(nca_merge)[names(nca_merge) == "subject"] <- "Subject"
-        }
-        if ("treatment" %in% names(nca_merge)) {
-          names(nca_merge)[names(nca_merge) == "treatment"] <- "Treatment"
-        }
-        
-        # Create a subject-treatment summary from BE data for merging
-        be_summary <- be_data %>%
-          select(Subject, Treatment) %>%
-          distinct()
-        
-        cat(sprintf("📋 BE summary for merging: %d unique subject-treatment combinations\n", nrow(be_summary)))
-        
-        # Merge NCA results with BE data by Subject and Treatment
-        for (param in analysis_config$pk_parameters) {
-          if (param %in% names(nca_results)) {
-            # Create parameter lookup table
-            param_lookup <- nca_merge %>%
-              select(Subject, Treatment, !!sym(param)) %>%
-              filter(!is.na(!!sym(param)))
-            
-            if (nrow(param_lookup) > 0) {
-              # Merge parameter values into BE data
-              be_data <- be_data %>%
-                left_join(param_lookup, by = c("Subject", "Treatment"), suffix = c("", paste0("_", param)))
-              
-              cat(sprintf("✅ Merged %s parameter: %d values added\n", param, nrow(param_lookup)))
-            } else {
-              cat(sprintf("⚠️ No valid data for parameter %s\n", param))
-            }
-          } else {
-            cat(sprintf("⚠️ Parameter %s not found in NCA results\n", param))
-          }
-        }
-        
-        # Clean up duplicate columns if any
-        duplicate_cols <- names(be_data)[duplicated(names(be_data))]
-        if (length(duplicate_cols) > 0) {
-          cat(sprintf("🧹 Cleaning up duplicate columns: %s\n", paste(duplicate_cols, collapse = ", ")))
-          be_data <- be_data[!duplicated(names(be_data))]
-        }
-        
-      } else {
-        cat("⚠️ No NCA results available for BE analysis\n")
-      }
+      # NOTE: Previously we merged NCA results onto raw concentration-time rows here, which
+      # caused a Cartesian explosion for replicate designs (joining on (Subject, Treatment)
+      # multiplied every conc-time row by the count of NCA rows per pair). be_data is now
+      # set above to either uploaded_data (PK data) or nca_results (concentration data),
+      # so no further merging is required.
       
       # Validate parameter data before BE analysis
       cat("🔍 Validating parameter data for BE analysis...\n")
@@ -1350,7 +1301,7 @@ observeEvent(input$run_analysis, {
           welch_correction = analysis_config$welch_correction,
           anova_results = anova_results$anova_results,  # Pass the ANOVA results
           # ABEL-specific parameters
-          abel_regulator = analysis_config$abel_regulator %||% "EMA",
+          abel_eligible_params = analysis_config$abel_eligible_params %||% c("Cmax"),
           abel_upper_cap = if (!is.null(input$abel_upper_cap)) input$abel_upper_cap else "50",
           abel_adjust_tie = if (!is.null(input$abel_adjust_tie)) input$abel_adjust_tie else FALSE,
           abel_outlier_analysis = if (!is.null(input$abel_outlier_analysis)) input$abel_outlier_analysis else FALSE,
@@ -1363,23 +1314,25 @@ observeEvent(input$run_analysis, {
       # Store the real BE analysis results and merge ANOVA results
       values$be_results <- be_analysis_result
       
-      # For ABEL/RSABE with replicate designs, ANOVA results come from the BE analysis
-      # For other designs, use the separate ANOVA results
-      if (analysis_config$be_analysis_type %in% c("ABEL", "RSABE") && !is.null(be_analysis_result$anova_results) && length(be_analysis_result$anova_results) > 0) {
-        # ABEL/RSABE provides ANOVA results - already in proper nested structure
+      # ANOVA tab always shows the user's selected ANOVA model results from perform_simple_anova()
+      # (keyed by log-transformed parameter names: lnCmax, lnAUC0t, etc., with full Type III SS).
+      # replicateBE runs its own internal ANOVA for ABEL scaling, but that's an implementation
+      # detail of the package — we don't display it. Both fit the same linear model with the
+      # user's data, so the BE point estimates and CIs are consistent with what's shown here.
+      if (!is.null(anova_results) && !is.null(anova_results$anova_results) &&
+          length(anova_results$anova_results) > 0) {
+        values$anova_results <- anova_results
+        values$be_results$anova_results <- anova_results
+        cat(sprintf("[INFO] ✅ ANOVA tab will display simple_anova results (%d parameters)\n",
+                    length(anova_results$anova_results)))
+      } else if (!is.null(be_analysis_result$anova_results) &&
+                 length(be_analysis_result$anova_results) > 0) {
+        # Fallback: use whatever the BE engine returned (e.g. replicateBE-derived)
         values$anova_results <- be_analysis_result$anova_results
-        cat(sprintf("[INFO] ✅ Using ANOVA results from %s (%d parameters)\n", 
-                    analysis_config$be_analysis_type,
-                    length(be_analysis_result$anova_results$anova_results)))
+        cat(sprintf("[INFO] ⚠️  Falling back to BE-engine ANOVA results (%s)\n",
+                    analysis_config$be_analysis_type))
       } else {
-        # For ABE or when ABEL has no ANOVA results, use the separate ANOVA results
-        if (!is.null(anova_results) && !is.null(anova_results$anova_results)) {
-          values$anova_results <- anova_results
-          values$be_results$anova_results <- anova_results
-          cat("[INFO] ✅ Using separate ANOVA results\n")
-        } else {
-          cat("[WARNING] ⚠️  No ANOVA results available from either source\n")
-        }
+        cat("[WARNING] ⚠️  No ANOVA results available from either source\n")
       }
       
       cat("✅ Bioequivalence Analysis Completed Successfully!\n")
