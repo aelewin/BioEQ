@@ -175,6 +175,7 @@ tryCatch({
 
 # Source template configuration
 source("templates/report_generation.R", local = TRUE)
+source("utils/sas_style_report.R", local = TRUE)
 
 # Source UI and server components
 source("ui/main_ui.R", local = TRUE)
@@ -1686,7 +1687,32 @@ server <- function(input, output, session) {
       showNotification("Raw data exported.", type = "message")
     }
   )
-  
+
+  # ── 6. SAS-style Bioequivalence Analysis Report (HTML) ──
+  output$download_sas_style_report <- downloadHandler(
+    filename = function() paste0("BioEQ_BE_Report_", Sys.Date(), ".html"),
+    content = function(file) {
+      req(values$be_results)
+      tryCatch({
+        generate_sas_style_html_report(
+          be_results      = values$be_results,
+          nca_results     = values$nca_results,
+          analysis_config = values$analysis_config,
+          output_file     = file
+        )
+        showNotification("BE analysis report generated.", type = "message")
+      }, error = function(e) {
+        showNotification(paste("Report generation failed:", e$message),
+                         type = "error", duration = 8)
+        # Still write a minimal file so the download doesn't hang.
+        writeLines(paste0(
+          "<!DOCTYPE html><html><body><h2>Report generation failed</h2><pre>",
+          gsub("<", "&lt;", e$message, fixed = TRUE), "</pre></body></html>"),
+          file)
+      })
+    }
+  )
+
   # Validation module server (black-box validation: always computes fresh)
   validation_server(input, output, session)
 }

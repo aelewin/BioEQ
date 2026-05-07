@@ -166,19 +166,37 @@ fluidPage(
       )
     ),
     
-    # ── Reports (placeholder) ──
+    # ── Reports ──
     fluidRow(
       column(12,
         div(class = "report-card",
           h4(icon("file-alt"), " Reports"),
-          p(class = "subtitle", "Generate comprehensive analysis reports."),
-          div(
-            class = "alert alert-info",
-            style = "margin-bottom: 0;",
-            icon("tools"), " ",
-            strong("Report generation is under active development. "),
-            "Comprehensive PDF, HTML, and Word reports with ANOVA tables, plots, ",
-            "and regulatory-ready formatting will be available in a future update."
+          p(class = "subtitle",
+            "Comprehensive SAS-style analysis report (HTML). ",
+            "Combines untransformed descriptive statistics, log-scale ANOVA ",
+            "tables (Type I & III), per-product intra-subject variability, ",
+            "and the final BE conclusion in a single self-contained document."),
+          fluidRow(
+            column(6,
+              downloadButton("download_sas_style_report",
+                label = "BE Analysis Report (HTML)",
+                icon = icon("file-code"),
+                class = "btn-primary export-btn",
+                style = "width: 100%; margin-bottom: 10px;"
+              ),
+              tags$small(class = "text-muted d-block",
+                "Descriptive stats (untransformed) + ANOVA on log scale + ",
+                "intra-subject CV% + final BE table.")
+            ),
+            column(6,
+              div(
+                class = "alert alert-info",
+                style = "margin-bottom: 0; padding: 10px; font-size: 12px;",
+                icon("tools"), " ",
+                strong("PDF & Word formats coming soon."),
+                " Additional regulatory-ready report templates are in active development."
+              )
+            )
           )
         )
       )
