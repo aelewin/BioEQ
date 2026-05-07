@@ -37,13 +37,9 @@ validation/
 ├── README.md                  This file
 ├── manifest.csv               Master registry of all validation datasets
 ├── datasets/                  Input data files (concentration-time or pre-calculated PK)
-│   ├── theoph.csv             [AVAILABLE] R Theoph dataset, 12 subjects, oral
-│   ├── indometh.csv           [AVAILABLE] R Indometh dataset, 6 subjects, IV bolus
-│   └── PLACEHOLDERS.md        List of datasets pending external acquisition
+│   └── (NCA datasets pending) Additional datasets to be acquired upon validation completion
 ├── expected_results/          Reference values + per-parameter tolerances
-│   ├── theoph.csv             [PENDING]   Awaiting WinNonlin/SAS reference run
-│   ├── indometh.csv           [PENDING]   Awaiting WinNonlin/SAS reference run
-│   └── PLACEHOLDERS.md
+│   └── (pending)              Reference results to be generated using SAS and Phoenix WinNonlin
 ├── scripts/                   Helper scripts for asset preparation
 │   └── extract_replicateBE_datasets.R    Optional: pulls rds01-rds30 from replicateBE pkg
 └── reports_output/            Generated validation reports (gitignored at user discretion)
@@ -104,9 +100,10 @@ See `manifest.csv` for the full list. Initial registration includes:
 ### NCA Layer (concentration-time → PK parameters)
 | ID                | Source            | Status      |
 |-------------------|-------------------|-------------|
-| `theoph`          | R `Theoph`        | partial     |
-| `indometh`        | R `Indometh`      | partial     |
-| `bear_validation` | BEAR project      | placeholder |
+| `nca_pending`     | Pending (SAS / Phoenix WinNonlin) | placeholder |
+
+> Additional NCA validation datasets will be generated and analyzed using SAS and Phoenix WinNonlin.
+> Full datasets and reference results will be published and incorporated into the validation suite upon completion.
 
 ### ANOVA + BE Layer (pre-calculated PK parameters)
 | ID                          | Source                            | Status      |

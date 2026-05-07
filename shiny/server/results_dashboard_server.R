@@ -2100,7 +2100,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                       tags$td(if (!is.na(intra_cv)) sprintf("%.2f%%", intra_cv) else "\u2014")
                     ),
                     tags$tr(
-                      tags$td(strong("MSE (residual):")),
+                      tags$td(strong("MSE:")),  
                       tags$td(if (!is.na(mse_intra)) sprintf("%.6f", mse_intra) else "\u2014")
                     ),
                     tags$tr(
@@ -2120,7 +2120,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                       tags$td(if (!is.na(inter_cv)) sprintf("%.2f%%", inter_cv) else "\u2014")
                     ),
                     tags$tr(
-                      tags$td(strong("MSE (Subj(Seq)):")),
+                      tags$td(strong("MSE:")),
                       tags$td(if (!is.na(mse_intr)) sprintf("%.6f", mse_intr) else "\u2014")
                     ),
                     tags$tr(
