@@ -9,6 +9,9 @@
 BioEQ is a Shiny-based bioequivalence analysis platform providing regulatory-compliant NCA, statistical analysis, and reporting for pharmaceutical studies. It is designed for both scientists who want a point-and-click interface and R users who want direct access to the underlying functions.
 
 ---
+> **New to R?** Follow the beginner-friendly [Installation Guide](docs/INSTALLATION_GUIDE.md) — it walks through installing R, RStudio, and BioEQ from scratch with no prior experience required.
+
+---
 
 ## Application Modules
 
@@ -53,6 +56,8 @@ Interactive and static visualizations of study data.
 ### Exports & Reports
 Export results and generate regulatory-ready reports.
 
+![Exports and Reports Module Screenshot](docs/images/image-4.png)
+
 - **Data exports**: CSV, Excel
 - **Reports**: PDF, HTML (Word requires optional `officer`/`flextable` packages)
 - **Plots**: High-resolution static graphics
@@ -61,14 +66,22 @@ Export results and generate regulatory-ready reports.
 ### Validation
 Built-in black-box validation engine that benchmarks BioEQ results against embedded reference datasets derived from industry-standard software. Validation runs within the app — no filesystem access or external files needed.
 
+![Validation Module Screenshot](docs/images/image-3.png)
+
 ### Anomaly Detection
 Automated tools for flagging anomalous concentration-time profiles, outlier NCA parameters, and subject-level data quality issues. Includes pairwise profile comparison, trend analysis, and distributional checks. Data can be uploaded directly within the module without needing to run a full analysis.
+
+![Anomaly Dectection Module Screenshot](docs/images/image-5.png)
 
 ### Sample Size
 Power and sample size estimation for bioequivalence studies via the `PowerTOST` package, supporting ABE, RSABE (FDA Linearized, ncTOST), and ABEL designs. Results are automatically passed to the Randomization module via the autofill feature.
 
+![Sample Size Module Screenshot](docs/images/image-6.png)
+
 ### Randomization
 Full treatment sequence randomization for BE studies. Reproducible from seed, auditable, and verifiable.
+
+![Randomization Module Screenshot](docs/images/image-8.png)
 
 - **Designs supported**: Parallel (T vs R), 2×2 Crossover, 2×2×3 Replicate (TRT|RTR), 2×2×4 Full Replicate (TRTR|RTRT), 2×3×3 Partial Replicate
 - **Generate Schedule**: Configure design, sample size, optional group (block) randomization, RNG seed, optional stratification, and subject ID prefix. Autofill from the Sample Size module in one click.
@@ -83,7 +96,6 @@ Step-by-step guidance on data format requirements, workflow, and analysis interp
 
 ## Quick Start
 
-> **New to R?** Follow the beginner-friendly [Installation Guide](docs/INSTALLATION_GUIDE.md) instead — it walks through installing R, RStudio, and BioEQ from scratch with no prior experience required.
 
 ### Install Dependencies
 
@@ -123,6 +135,9 @@ Rscript -e 'shiny::runApp("shiny", host="127.0.0.1", port=4000, launch.browser=T
 ```
 
 **Access the app at:** http://127.0.0.1:4000
+
+### Instalation Guide
+> **New to R?** Follow the beginner-friendly [Installation Guide](docs/INSTALLATION_GUIDE.md) instead — it walks through installing R, RStudio, and BioEQ from scratch with no prior experience required.
 
 ---
 

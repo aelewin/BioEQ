@@ -315,7 +315,10 @@ ui <- dashboardPage(
     
     # Custom CSS for responsive design
     tags$head(
-      tags$title("BioEQ Analysis Platform"),
+      tags$title("BioEQ - BETA"),
+      # Force the browser tab title even after shinydashboard overwrites it
+      # with a serialized version of the dashboardHeader `title` HTML.
+      tags$script(HTML("document.title = 'BioEQ - BETA';")),  
       tags$link(rel = "icon", href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧪</text></svg>"),
       tags$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
       tags$link(rel = "stylesheet", type = "text/css", href = "custom.css"),
