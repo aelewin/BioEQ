@@ -55,13 +55,13 @@ Interactive and static visualizations of study data.
 
 ### Exports & Reports
 Export results and generate regulatory-ready reports.
-
-![Exports and Reports Module Screenshot](docs/images/image-4.png)
-
 - **Data exports**: CSV, Excel
 - **Reports**: PDF, HTML (Word requires optional `officer`/`flextable` packages)
 - **Plots**: High-resolution static graphics
 - **R script**: Reproducible analysis code
+
+![Exports and Reports Module Screenshot](docs/images/image-4.png)
+
 
 ### Validation
 Built-in black-box validation engine that benchmarks BioEQ results against embedded reference datasets derived from industry-standard software. Validation runs within the app — no filesystem access or external files needed.
@@ -80,14 +80,13 @@ Power and sample size estimation for bioequivalence studies via the `PowerTOST` 
 
 ### Randomization
 Full treatment sequence randomization for BE studies. Reproducible from seed, auditable, and verifiable.
-
-![Randomization Module Screenshot](docs/images/image-8.png)
-
 - **Designs supported**: Parallel (T vs R), 2×2 Crossover, 2×2×3 Replicate (TRT|RTR), 2×2×4 Full Replicate (TRTR|RTRT), 2×3×3 Partial Replicate
 - **Generate Schedule**: Configure design, sample size, optional group (block) randomization, RNG seed, optional stratification, and subject ID prefix. Autofill from the Sample Size module in one click.
 - **Verify Schedule**: Re-enter parameters from an audit record and optionally upload a CSV to confirm all assignments are identical to the regenerated schedule.
 - **Report**: Downloadable plain-text audit record and self-contained HTML pharmacist report. Includes algorithm details (Mersenne-Twister), seed, R version, schedule hash (SHA-256), and all parameters required for regulatory submission.
 - **Reproducibility**: Uses base R only (no package version dependencies in the random stream); RNGkind locked to `Mersenne-Twister/Inversion/Rejection` for R ≥ 3.6.
+
+![Randomization Module Screenshot](docs/images/image-8.png)
 
 ### Help & Support
 Step-by-step guidance on data format requirements, workflow, and analysis interpretation.
