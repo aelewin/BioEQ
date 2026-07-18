@@ -287,9 +287,13 @@ compute_isc_variance <- function(data, param_col) {
          "Need at least 2 subjects with replicated Reference periods. Found: ", n_R)
   }
   
-  # s²_wR = (1/(2*n_R)) * Σ d²_Ri
-  s2_wR <- sum(ref_contrasts^2) / (2 * n_R)
-  df_wR <- n_R  # degrees of freedom
+  # s²_wR = (mean-centred) sample variance of the reference contrasts / 2.
+  # Var(R1-R2) = 2·σ²_wR, so σ²_wR = var(d_R)/2. The mean-centred, df-corrected
+  # form (÷(n_R-1)) is the unbiased estimator and matches replicateBE / SAS
+  # PROC MIXED; the previous Σd²/(2·n_R) underestimated it by a factor
+  # (n_R-1)/n_R and also carried the wrong df into the Howe χ² term.
+  s2_wR <- stats::var(ref_contrasts) / 2
+  df_wR <- n_R - 1  # degrees of freedom
   
   # CV_wR from variance: CV = sqrt(exp(s²_w) - 1) * 100
   cv_wR <- sqrt(exp(s2_wR) - 1) * 100
@@ -323,8 +327,8 @@ compute_isc_variance <- function(data, param_col) {
   is_partial <- (n_T < 2)
   
   if (n_T >= 2) {
-    s2_wT <- sum(test_contrasts^2) / (2 * n_T)
-    df_wT <- n_T
+    s2_wT <- stats::var(test_contrasts) / 2
+    df_wT <- n_T - 1
     cv_wT <- sqrt(exp(s2_wT) - 1) * 100
     cat(sprintf("    Test: n_T=%d, s²_wT=%.6f, CV_wT=%.2f%%\n", n_T, s2_wT, cv_wT))
   } else {
@@ -860,8 +864,14 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
   # At the switching boundary (σ_wR = σ_w0), the scaled limits equal standard ABE:
   #   exp(±θ_s · σ_w0) = exp(±ln(1.25)) = [80%, 125%]
   # For HV drugs (σ_wR > σ_w0), limits expand proportionally.
-  theta_s <- log(1.25) / 0.25  # ≈ 0.8924
-  s2_w0 <- 0.25^2              # switching s²_w0 = 0.0625 (CV ≈ 25.4%)
+  theta_s <- log(1.25) / 0.25  # ≈ 0.8924 (criterion scaling constant; σ_w0 = 0.25)
+  s2_w0 <- 0.25^2              # regulatory σ²_w0 = 0.0625 used in the scaled criterion
+  # FDA switching (decision) cutoff: apply reference scaling only when the
+  # within-subject SD of the reference s_wR ≥ 0.294 (i.e. CV_wR ≈ 30%). NOTE this
+  # is DISTINCT from σ_w0 = 0.25 (CV 25.4%), which is only the criterion constant.
+  # Ref: FDA progesterone guidance; Davit et al. AAPS J 2012.
+  s_wR_switch <- 0.294
+  s2_wR_switch <- s_wR_switch^2  # ≈ 0.0864
   pe_constraint_lower <- 80.0   # Point estimate constraint
   pe_constraint_upper <- 125.0
   
@@ -875,7 +885,9 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
   cat(sprintf("   ANOVA Model: %s\n", anova_model))
   cat(sprintf("   RSABE Method: %s\n", rsabe_method))
   cat(sprintf("   α = %.3f (%.0f%% CI)\n", alpha, (1 - 2 * alpha) * 100))
-  cat(sprintf("   Switching variability: s²_w0 = %.4f (CV_w0 ≈ %.1f%%)\n", s2_w0, sqrt(exp(s2_w0) - 1) * 100))
+  cat(sprintf("   Criterion constant: σ_w0 = 0.25 (θ_s = %.4f)\n", theta_s))
+  cat(sprintf("   Switching cutoff: s_wR ≥ %.3f (CV_wR ≈ %.1f%%)\n",
+              s_wR_switch, sqrt(exp(s_wR_switch^2) - 1) * 100))
   
   # Detect replicate design
   design_info <- detect_replicate_design(data)
@@ -987,11 +999,12 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
       # Step 2: Compute ISC variances
       isc_result <- compute_isc_variance(analysis_data, log_col_name)
       
-      # Step 3: Check switching condition (CV_wR > ~25.4%, i.e., s²_wR > s²_w0)
-      is_hv <- (isc_result$s2_wR > s2_w0)
-      
-      cat(sprintf("  Switching: s²_wR (%.6f) %s s²_w0 (%.6f) → %s\n",
-                  isc_result$s2_wR, ifelse(is_hv, ">", "≤"), s2_w0,
+      # Step 3: Check switching condition — FDA applies reference scaling only
+      # when s_wR ≥ 0.294 (CV_wR ≈ 30%), NOT at σ_w0 = 0.25 (CV 25.4%).
+      is_hv <- (isc_result$s2_wR >= s2_wR_switch)
+
+      cat(sprintf("  Switching: s_wR (%.4f) %s cutoff (%.3f) → %s\n",
+                  sqrt(isc_result$s2_wR), ifelse(is_hv, "≥", "<"), s_wR_switch,
                   ifelse(is_hv, "HIGH VARIABILITY → Use RSABE", "LOW VARIABILITY → Use ABE")))
       
       if (is_hv) {

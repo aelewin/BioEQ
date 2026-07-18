@@ -573,6 +573,10 @@ tagList(
               # ===============================================================
               # RANDOM EFFECTS — only for ABE with mixed models
               # (ABEL uses replicateBE's built-in (1|subject); RSABE uses nlme's built-in (1|subject))
+              # Subject-as-random-intercept is the only structure used in standard
+              # regulatory BE mixed models (FDA/EMA 2x2 crossover); random-slope
+              # and period-nested variants are not part of the standard BE
+              # specification, so they are not offered here.
               # ===============================================================
               conditionalPanel(
                 condition = "input.anova_model != 'fixed' && input.be_analysis_type == 'ABE'",
@@ -582,15 +586,12 @@ tagList(
                     "random_effects",
                     label = NULL,
                     choices = list(
-                      "Random Intercept: (1|subject)" = "(1|subject)",
-                      "Random Intercept: (1|subject/period)" = "(1|subject/period)",
-                      "Random Slope: (treatment|subject)" = "(treatment|subject)",
-                      "Random Intercept + Slope: (1 + treatment|subject)" = "(1 + treatment|subject)"
+                      "Random Intercept: (1|subject)" = "(1|subject)"
                     ),
                     selected = "(1|subject)"
                   ),
                   div(style = "font-size: 11px; color: #666; margin-top: 5px;",
-                    "For most bioequivalence studies, '(1|subject)' is appropriate."
+                    "Subject as a random intercept — (1|subject) — is the standard random-effects structure for a bioequivalence mixed model."
                   ),
                   
                   # Group as random effect option (only for ABE mixed models)

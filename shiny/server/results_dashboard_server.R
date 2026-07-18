@@ -225,7 +225,7 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
   # Extract replicateBE output
   rbe_output <- param_result$replicatebe_output
   
-  # Determine variability classification (same CV_wR threshold as RSABE: ~25.4%)
+  # Determine variability classification. EMA ABEL switches at CV_wR > 30%.
   cv_wr <- rbe_output$`CVwR(%)`
   is_hv <- !is.na(cv_wr) && cv_wr > 30  # EMA ABEL uses 30% switching CV
   
@@ -538,7 +538,7 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
             tags$table(class = "table table-sm table-borderless",
               tags$tbody(
                 tags$tr(tags$td(strong("Decision:")), tags$td("Using standard ABE (80\u2013125%)")),
-                tags$tr(tags$td(strong("Reason:")), tags$td(sprintf("CV_wR (%.1f%%) \u2264 switching CV (~25.4%%)", param_result$cv_wr_percent))),
+                tags$tr(tags$td(strong("Reason:")), tags$td(sprintf("CV_wR (%.1f%%) < switching cutoff 30%% (s_wR < 0.294)", param_result$cv_wr_percent))),
                 tags$tr(tags$td(""), tags$td("RSABE scaling not required"))
               )
             )
@@ -696,7 +696,7 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
     h6(icon("info-circle"), " About RSABE Analysis"),
     p(sprintf("Analysis performed using %s with Intra-Subject Contrasts (ISC) for variance estimation. ", method_display),
       "ISC avoids convergence issues with mixed models by computing within-subject differences directly. ",
-      sprintf("Regulatory constants: \u03B8\u209B = ln(1.25)/\u03C3\u2080 = 0.2231/0.25 \u2248 0.8924, switching s\u00B2_w0 = 0.0625 (CV \u2248 25.4%%). "),
+      sprintf("Regulatory constants: \u03B8\u209B = ln(1.25)/\u03C3\u2080 = 0.2231/0.25 \u2248 0.8924 (criterion scaling constant, \u03C3\u2080 = 0.25). Reference scaling is applied when s_wR \u2265 0.294 (CV_wR \u2248 30%%). "),
       "FDA requires point estimate within 80\u2013125% regardless of scaling decision."
     )
   )
@@ -706,11 +706,29 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
 
 # Format parallel group statistical results for display
 format_parallel_results <- function(param_name, be_res) {
-  
+
+  # Resolve the results key: the ANOVA-tab dropdown supplies log names (e.g.
+  # "lnCmax"), but the parallel path keys statistical_results/confidence_intervals
+  # by the base parameter name (e.g. "Cmax"). Try as-is, then the base name,
+  # then a case-insensitive base-name match.
+  resolve_key <- function(nm, lst) {
+    if (is.null(lst)) return(nm)
+    if (!is.null(lst[[nm]])) return(nm)
+    base <- sub("^(ln|log)", "", nm, ignore.case = TRUE)
+    if (!is.null(lst[[base]])) return(base)
+    hit <- names(lst)[tolower(names(lst)) == tolower(base)]
+    if (length(hit) > 0) return(hit[1])
+    nm
+  }
+  ci_key <- resolve_key(param_name, be_res$confidence_intervals)
+  stats_key <- resolve_key(param_name, be_res$statistical_results)
+
   # Extract statistical results for this parameter
-  stats <- be_res$statistical_results[[param_name]]
-  ci <- be_res$confidence_intervals[[param_name]]
-  
+  stats <- be_res$statistical_results[[stats_key]]
+  ci <- be_res$confidence_intervals[[ci_key]]
+  # Display the resolved (base) parameter name
+  param_name <- log_param_to_display_name(param_name)
+
   if (is.null(stats) && is.null(ci)) {
     return(div(class = "alert alert-warning",
       h5(icon("exclamation-triangle"), " No Statistical Results"),
@@ -1676,7 +1694,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                 br(),
                 tags$small(
                   "Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924 | ",
-                  "Switching CV: ~25.4% | ",
+                  "Switching: s", tags$sub("wR"), " \u2265 0.294 (CV", tags$sub("wR"), " \u2248 30%) | ",
                   "Point estimate constraint: 80\u2013125% | ",
                   "Variance estimation: Intra-Subject Contrasts (ISC)"
                 )
@@ -1756,6 +1774,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           limit_type <- ""
           if (!is.null(ci$limits_used$type) && ci$limits_used$type == "expanded") {
             limit_type <- " (expanded ABEL)"
+          } else if (!is.null(ci$limits_used$type) && ci$limits_used$type == "scaled") {
+            limit_type <- " (scaled RSABE)"
           } else {
             limit_type <- " (fixed)"
           }
@@ -1777,8 +1797,12 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         results_rows <- do.call(rbind, results_list)
 
         # ── Intra-subject Reference summary (CV%_wR and variance s²_wR) ──
-        # Pulls from ABEL ci_list, RSABE ISC, or log-scale residual MSE depending on path.
-        intra_ref_block <- tryCatch({
+        # Only meaningful for replicate designs (RSABE/ABEL), where the reference
+        # is replicated so a reference-specific within-subject variance is
+        # estimable and drives the scaling decision. A 2×2×2 (or parallel) design
+        # has a single reference observation per subject, so CVwR/swR is NOT
+        # estimable there (the residual is a pooled T+R variance) — omit it.
+        intra_ref_block <- if (!(analysis_type %in% c("RSABE", "ABEL"))) NULL else tryCatch({
           anova_data2 <- be_res$anova_results$anova_results
           rows <- list()
           for (p in names(primary_ci)) {
@@ -2013,7 +2037,16 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       root_mse <- param_result$root_mse
       param_mean <- param_result$param_mean
       cv_percent <- param_result$cv_percent
-      
+
+      # Mixed-effects models (lme/lmerTest) do not yield a SAS PROC GLM-style
+      # sum-of-squares decomposition or a comparable model frame. For those we
+      # suppress the GLM-only "Class Level Information" and "Model/Error/
+      # Corrected Total" cards (which otherwise render empty/degenerate) and rely
+      # on the variance-component summary, the fixed-effects test table, and the
+      # treatment contrast — the appropriate output for a mixed model.
+      is_mixed_model <- !is.null(param_result$anova_method) &&
+        param_result$anova_method %in% c("nlme", "satterthwaite", "kenward-roger")
+
       # ── Summary card: critical variability and BE data up front ──
       # ── Header: model + parameter ─────────────────────────────────────────────
       model_header <- div(class = "mb-3",
@@ -2024,7 +2057,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       )
 
       # ── Class Level Information (mirrors SAS PROC GLM) ────────────────────────
-      class_info_card <- {
+      class_info_card <- if (is_mixed_model) NULL else {
         mdl <- param_result$model
         cli <- NULL
         if (!is.null(mdl) && !is.null(mdl$model)) {
@@ -2074,7 +2107,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       }
 
       # ── Top-of-output Model / Error / Corrected Total summary (SAS style) ─────
-      model_summary_card <- {
+      model_summary_card <- if (is_mixed_model) NULL else {
         at <- tryCatch(as.data.frame(param_result$anova), error = function(e) NULL)
         if (is.null(at) || !"Df" %in% names(at) || !"Sum Sq" %in% names(at)) NULL else {
           n_rows  <- nrow(at)
@@ -2464,7 +2497,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                   col_name <- names(df)[j]
                   formatted <- if (is.numeric(val) && !is.na(val)) {
                     if (col_name %in% c("Pr(>F)", "Pr..F.", "p-value")) format.pval(val, digits = 4)
-                    else if (col_name %in% c("Df", "NumDF", "DenDF")) as.character(round(val))
+                    else if (col_name %in% c("Df", "NumDF", "DenDF", "numDF", "denDF")) as.character(round(val))
                     else if (col_name %in% c("Sum Sq", "Sum.Sq", "Mean Sq", "Mean.Sq", "Sum of Sq", "RSS")) sprintf("%.4f", val)
                     else if (col_name %in% c("F value", "F.value", "F-value")) sprintf("%.2f", val)
                     else sprintf("%.4f", val)
@@ -2477,10 +2510,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         )
       }
 
-      # ── Single canonical Type III ANOVA table (consolidated) ────────────────
-      # All effects tested against Residual MS (SAS PROC GLM default for Type III).
-      # A separate second table shows Seq tested against Subject(Sequence) MS.
-      anova_tables_div <- if (!is.null(param_result$anova_comprehensive)) {
+      # ── GLM-style Model/Error/Corrected Total summary (fixed-effects lm only) ──
+      # Not a standard summary for REML mixed models (there is no single-df
+      # "Model" term to test against a "Corrected Total"); mixed models instead
+      # get the Type 3 Tests of Fixed Effects table below (type3_tests_div).
+      anova_tables_div <- if (is_mixed_model) NULL else if (!is.null(param_result$anova_comprehensive)) {
         tryCatch({
           comp_df <- param_result$anova_comprehensive
           div(class = "card mb-3",
@@ -2525,20 +2559,33 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           )
         }, error = function(e) div(class = "alert alert-warning",
           p("Could not display ANOVA table: ", e$message)))
-      } else if (!is.null(param_result$type3_ss)) {
-        # Fallback if comprehensive table is missing for some reason
+      } else NULL
+
+      # ── Type 3 Tests of Fixed Effects (mixed models only) ──────────────────
+      # The per-term significance table (numDF/denDF/F-value/p-value for each
+      # fixed effect: Sequence, Period, Treatment). This is the standard
+      # SAS PROC MIXED "Type 3 Tests of Fixed Effects" output and is the
+      # necessary complement to the treatment-contrast/variance-component cards
+      # for a mixed-effects model, which gets no table from anova_tables_div
+      # above. NOT shown for fixed-effects lm: there, `anova_comprehensive`
+      # (anova_tables_div) already IS the full per-term Type III table
+      # (Sequence/Subject(Sequence)/Period/Treatment/Residual) — adding this
+      # too would duplicate it.
+      type3_tests_div <- if (!is_mixed_model || is.null(param_result$type3_ss)) NULL else {
         tryCatch({
           type3_df <- as.data.frame(param_result$type3_ss)
           div(class = "card mb-3",
             div(class = "card-header",
-              h6(class = "card-title mb-0", icon("table"), " Analysis of Variance (Type III)")
+              h6(class = "card-title mb-0", icon("table"), " Type 3 Tests of Fixed Effects"),
+              tags$small(class = "text-muted",
+                "Marginal (Type III) F-tests for each fixed effect from the mixed-effects model.")
             ),
             div(class = "card-body",
               div(class = "table-responsive", render_anova_table(type3_df, "table-primary"))
             )
           )
         }, error = function(e) NULL)
-      } else NULL
+      }
       
       # ── Log-Scale Results (collapsed by default) ──
       log_scale_panel <- NULL
@@ -2682,6 +2729,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         class_info_card,
         model_summary_card,
         anova_tables_div,
+        type3_tests_div,
         seq_subj_test_div,
         contrast_card,
         log_scale_panel
@@ -2701,7 +2749,26 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       
       tryCatch({
         be_res <- be_results()
-        
+
+        # ── RSABE / ABEL: show the purpose-built scaled formatter ──
+        # The dropdown supplies a log name (e.g. "lnCmax"); the BE engine's
+        # scaled output (`scaled_anova`) is keyed by base name ("Cmax"). Resolve
+        # the key and route to the RSABE (ISC) or replicateBE (ABEL) formatter so
+        # the scaled variance components / limits / decision are shown instead of
+        # a fixed-limit ABE ANOVA table.
+        atype <- be_res$analysis_type %||% "ABE"
+        if (atype %in% c("RSABE", "ABEL") && !is.null(be_res$scaled_anova$anova_results)) {
+          eng <- be_res$scaled_anova$anova_results
+          sel <- selected_anova_param()
+          base <- sub("^(ln|log)", "", sel, ignore.case = TRUE)
+          key <- if (!is.null(eng[[sel]])) sel else if (!is.null(eng[[base]])) base else names(eng)[1]
+          pr <- eng[[key]]
+          if (!is.null(pr)) {
+            if (!is.null(pr$replicatebe_output)) return(format_replicatebe_anova_results(pr, base, be_res))
+            if (!is.null(pr$s2_wR))             return(format_rsabe_anova_results(pr, base, be_res))
+          }
+        }
+
         # ── Parallel group design: no ANOVA, use t-test format ──
         if (identical(be_res$design, "parallel") || !is.null(be_res$statistical_results)) {
           param <- selected_anova_param()
@@ -2848,6 +2915,8 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           limit_type <- ""
           if (!is.null(ci$limits_used$type) && ci$limits_used$type == "expanded") {
             limit_type <- " (expanded ABEL)"
+          } else if (!is.null(ci$limits_used$type) && ci$limits_used$type == "scaled") {
+            limit_type <- " (scaled RSABE)"
           } else {
             limit_type <- " (fixed)"
           }

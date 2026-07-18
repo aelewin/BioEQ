@@ -505,6 +505,19 @@ observeEvent(input$data_file, {
 
 
 
+# F11: Clear all downstream analysis state so results from a previous dataset
+# never linger. Used by both the explicit Reset button and a new file upload.
+clear_downstream_analysis <- function() {
+  values$nca_results <- NULL
+  values$anova_results <- NULL
+  values$be_results <- NULL
+  values$analysis_config <- NULL
+  values$carryover_results <- NULL
+  values$pk_parameter_info <- NULL
+  values$columns_mapped <- FALSE
+  values$analysis_complete <- FALSE
+}
+
 # Reset button observer
 observeEvent(input$reset_upload, {
   # Clear all data and reset state
@@ -512,14 +525,21 @@ observeEvent(input$reset_upload, {
   values$uploaded_data_original <- NULL
   values$validation_result <- NULL
   values$data_summary <- NULL
-  
+  clear_downstream_analysis()
+
   # Reset file input (this requires shinyjs)
   if (exists("shinyjs_available") && shinyjs_available) {
     shinyjs::reset("data_file")
   }
-  
+
   showNotification("Upload reset", type = "message", duration = 3)
 })
+
+# F11: When a new file is selected, discard any analysis results/config from the
+# previous dataset before it is processed, so the app can't show stale output.
+observeEvent(input$data_file, {
+  clear_downstream_analysis()
+}, ignoreInit = TRUE)
 
 # Observer to update treatment designation dropdowns when treatment column is mapped
 observe({

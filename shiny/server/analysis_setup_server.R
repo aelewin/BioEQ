@@ -43,11 +43,11 @@ output$is_parallel_design <- reactive({
     tryCatch({
       data <- values$uploaded_data
       # Use capitalized column names
-      n_treatments <- length(unique(data$Treatment))
       treatments_per_subject <- data %>%
         group_by(Subject) %>%
         summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
-      is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
+      # Crossover/replicate if ANY subject has >1 treatment (robust to missing periods)
+      is_crossover <- max(treatments_per_subject$n_treatments, na.rm = TRUE) >= 2
       return(!is_crossover)  # Return TRUE if NOT crossover (i.e., parallel)
     }, error = function(e) {
       return(FALSE)
@@ -73,10 +73,10 @@ output$is_non_replicate_design <- reactive({
   if (design == "auto" && !is.null(values$uploaded_data)) {
     tryCatch({
       data <- values$uploaded_data
-      n_treatments <- length(unique(data$Treatment))
       treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
-      is_crossover <- all(treatments_per_subject == n_treatments)
-      
+      # Crossover/replicate if ANY subject has >1 treatment (robust to missing periods)
+      is_crossover <- max(treatments_per_subject, na.rm = TRUE) >= 2
+
       if (!is_crossover) return(TRUE)  # parallel
       
       # Check periods to distinguish 2x2x2 from replicate
@@ -94,6 +94,34 @@ output$is_non_replicate_design <- reactive({
   return(TRUE)
 })
 outputOptions(output, "is_non_replicate_design", suspendWhenHidden = FALSE)
+
+# F5: Drive the PK-parameter selection from the data actually uploaded.
+# For pre-calculated PK data the only analysable parameters are those the user
+# mapped, so restrict both the choices and the selection to those (prevents
+# e.g. a Cmax-only dataset from having AUC0-t pre-checked). For concentration-
+# time data the NCA generates the full standard set, so the static defaults
+# (Cmax + AUC0-t) are left untouched.
+observeEvent(list(values$uploaded_data, values$data_type, values$pk_parameter_info), {
+  if (is.null(values$uploaded_data)) return()
+  if (!identical(values$data_type, "pk_parameters")) return()
+
+  primary_choices   <- c("Cmax" = "Cmax", "AUC0-t" = "AUC0t")
+  secondary_choices <- c("AUC0-inf" = "AUC0inf", "pAUC" = "pAUC", "Tmax" = "Tmax")
+
+  # Available parameters = mapped PK params, falling back to matching columns.
+  avail <- names(values$pk_parameter_info %||% list())
+  if (length(avail) == 0) {
+    avail <- intersect(c(primary_choices, secondary_choices), names(values$uploaded_data))
+  }
+
+  p_avail <- primary_choices[primary_choices %in% avail]
+  s_avail <- secondary_choices[secondary_choices %in% avail]
+
+  updateCheckboxGroupInput(session, "primary_pk_params",
+                           choices = p_avail, selected = unname(p_avail))
+  updateCheckboxGroupInput(session, "secondary_pk_params",
+                           choices = s_avail, selected = character(0))
+}, ignoreInit = TRUE)
 
 # Check if groups are detected in the data
 output$groups_detected <- reactive({
@@ -144,8 +172,12 @@ output$detected_design <- renderUI({
                 FUN = function(x) length(unique(x)))
     })
     
-    is_crossover <- isTRUE(all(treatments_per_subject$n_treatments == n_treatments))
-    
+    # A design is crossover/replicate if ANY subject receives more than one
+    # treatment. Using max(...) >= 2 (rather than requiring EVERY subject to have
+    # the full treatment set) is robust to subjects with missing periods, which
+    # otherwise cause a replicate study to be misclassified as parallel.
+    is_crossover <- isTRUE(max(treatments_per_subject$n_treatments, na.rm = TRUE) >= 2)
+
     # Detect replicate design using the BE analysis function
     replicate_result <- NULL
     if (isTRUE(is_crossover) && all(c("Subject", "Period", "Treatment") %in% names(data))) {
@@ -205,12 +237,14 @@ output$detected_design_type <- reactive({
     data <- values$uploaded_data
     
     # Use capitalized column names
-    n_treatments <- length(unique(data$Treatment))
     treatments_per_subject <- data %>%
       group_by(Subject) %>%
       summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
-    is_crossover <- isTRUE(all(treatments_per_subject$n_treatments == n_treatments))
-    
+    # Crossover/replicate if ANY subject receives >1 treatment (robust to
+    # subjects with missing periods). True parallel designs give every subject a
+    # single treatment. See detected_design above for the matching logic.
+    is_crossover <- isTRUE(max(treatments_per_subject$n_treatments, na.rm = TRUE) >= 2)
+
     if (is_crossover) {
       return("crossover")
     } else {
@@ -1313,7 +1347,15 @@ observeEvent(input$run_analysis, {
       
       # Store the real BE analysis results and merge ANOVA results
       values$be_results <- be_analysis_result
-      
+
+      # Preserve the BE-engine's own ANOVA/scaling output (RSABE ISC variance /
+      # replicateBE Method A/B) BEFORE the simple-ANOVA overwrite below. The
+      # ANOVA tab uses this for RSABE/ABEL so it can show the purpose-built
+      # scaled formatters (variance components + scaled limits + correct
+      # decision) instead of a fixed-limit ABE table. Keyed by base parameter
+      # name (e.g. "Cmax").
+      values$be_results$scaled_anova <- be_analysis_result$anova_results
+
       # ANOVA tab always shows the user's selected ANOVA model results from perform_simple_anova()
       # (keyed by log-transformed parameter names: lnCmax, lnAUC0t, etc., with full Type III SS).
       # replicateBE runs its own internal ANOVA for ABEL scaling, but that's an implementation

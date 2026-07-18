@@ -377,8 +377,10 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
 #' Validation BE wrapper — Parallel design.
 #' Calls the app's be_parallel() twice (Welch and classical) so the
 #' validation can compare both CI flavors against published references.
+#' `alpha` is the per-side alpha (0.05); be_parallel builds the 90% BE CI as
+#' 1 - 2*alpha, consistent with the crossover path.
 #' @keywords internal
-.be_parallel <- function(data, alpha = 0.10) {
+.be_parallel <- function(data, alpha = 0.05) {
   app_in <- .app_be_input(data)
   pk_col <- attr(app_in, "pk_column")
   # Coerce treatment labels to T/R if necessary (app expects these)

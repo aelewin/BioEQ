@@ -1494,11 +1494,14 @@ analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction 
     return(NULL)
   }
   
-  # EXACTLY like reference code: t.test on log data
+  # BE requires the 90% CI = two one-sided tests at `alpha` (per-side).
+  # `alpha` here is the per-side alpha (0.05), consistent with the crossover
+  # path which uses qt(1-alpha). A two-sided t.test at conf.level = 1 - 2*alpha
+  # therefore yields the correct 90% BE interval.
   test_result <- t.test(
-    test_data$log_param, 
-    ref_data$log_param, 
-    conf.level = 1 - alpha,  # Correct confidence level calculation for two-sided test
+    test_data$log_param,
+    ref_data$log_param,
+    conf.level = 1 - 2 * alpha,  # 90% CI for BE (per-side alpha)
     var.equal = !welch_correction    # Use welch_correction parameter
   )
   
@@ -1514,7 +1517,7 @@ analyze_parallel_parameter <- function(data, parameter, alpha, welch_correction 
     point_estimate = point_estimate,
     ci_lower = ci_lower,
     ci_upper = ci_upper,
-    confidence_level = (1 - alpha) * 100,  # Correct confidence level
+    confidence_level = (1 - 2 * alpha) * 100,  # 90% CI for BE (1 - 2*alpha)
     t_statistic = test_result$statistic,
     df = test_result$parameter,
     p_value = test_result$p.value
@@ -2619,8 +2622,13 @@ detect_replicate_design <- function(data) {
         design_info$is_replicate <- TRUE
         design_info$is_partial_replicate <- TRUE
       } else if (seq_class == "full_rep_3") {
-        design_info$design_name <- "2x3x3 (Full Replicate)"
-        design_info$design_type <- "2x3x3 Full Replicate"
+        # 2 treatments, 2 sequences, 3 periods (TRT/RTR): both T and R are
+        # replicated across the two sequences, so both s_wT and s_wR are
+        # estimable — a 3-period full replicate. (Notation: 2×2×3, matching the
+        # partial-replicate label above; the previous "2x3x3" wrongly implied 3
+        # sequences.)
+        design_info$design_name <- "2x2x3 Full Replicate (TRT/RTR)"
+        design_info$design_type <- "2x2x3 Full Replicate"
         design_info$is_replicate <- TRUE
         design_info$is_partial_replicate <- FALSE
       } else {

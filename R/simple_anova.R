@@ -652,16 +652,28 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           cat("  [DEBUG] ANOVA table obtained\n")
           cat(sprintf("  [DEBUG] ANOVA table dimensions: %d rows, %d cols\n", nrow(anova_table), ncol(anova_table)))
           
-          # Type III SS via marginal anova is not supported by nlme; suppress to avoid
-          # showing Type I SS under a Type III label
-          cat("  [DEBUG] Skipping Type III SS for nlme (not supported)\n")
-          type3_ss <- NULL
+          # Type III (marginal) tests of fixed effects — nlme supports this via
+          # anova(model, type = "marginal"); this is the appropriate per-term
+          # significance table for a mixed model (SAS PROC MIXED "Type 3 Tests
+          # of Fixed Effects" equivalent): Sequence, Period, Treatment each with
+          # numDF/denDF/F-value/p-value.
+          cat("  [DEBUG] Computing Type III (marginal) fixed-effects tests...\n")
+          type3_ss <- tryCatch({
+            anova(model, type = "marginal")
+          }, error = function(e) {
+            cat(sprintf("  [DEBUG] Marginal anova failed (%s); falling back to sequential\n", e$message))
+            anova_table
+          })
           cat("  [DEBUG] Type III SS table created\n")
-          
+
           # Create comprehensive ANOVA table (Model/Error/Corrected Total) for nlme
-          # For mixed models, we focus on fixed effects
+          # For mixed models, we focus on fixed effects.
+          # NOTE: nlme's `model$dims` does not expose a `$p` (fixed-effect count)
+          # element in current nlme versions — use length(fixef(model)) instead,
+          # which previously caused residual_df/model_df to silently become NA.
           cat("  [DEBUG] Creating comprehensive ANOVA table...\n")
-          residual_df <- as.numeric(model$dims$N - model$dims$p)
+          n_fixef <- length(nlme::fixef(model))
+          residual_df <- as.numeric(model$dims$N - n_fixef)
           residual_ss <- sum(resid(model)^2)
           residual_ms <- residual_ss / residual_df
           cat("  [DEBUG] Residual calculations done\n")
@@ -694,7 +706,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           
           total_ss <- sum((y_values - mean(y_values, na.rm = TRUE))^2, na.rm = TRUE)
           model_ss <- total_ss - residual_ss
-          model_df <- as.numeric(model$dims$p - 1)  # Excluding intercept
+          model_df <- as.numeric(n_fixef - 1)  # Excluding intercept
           model_ms <- model_ss / model_df
           cat("  [DEBUG] Model calculations done\n")
           
