@@ -173,9 +173,9 @@ tryCatch({
 .source_R("anomaly_detection.R")         # Fraud / anomaly detection analytics
 .source_R("randomization.R")             # Randomization engine
 
-# Source template configuration
-source("templates/report_generation.R", local = TRUE)
+# Source report generation utilities
 source("utils/sas_style_report.R", local = TRUE)
+source("utils/sample_size_report.R", local = TRUE)
 
 # Source UI and server components
 source("ui/main_ui.R", local = TRUE)
@@ -1698,7 +1698,8 @@ server <- function(input, output, session) {
           be_results      = values$be_results,
           nca_results     = values$nca_results,
           analysis_config = values$analysis_config,
-          output_file     = file
+          output_file     = file,
+          data_type       = values$data_type
         )
         showNotification("BE analysis report generated.", type = "message")
       }, error = function(e) {

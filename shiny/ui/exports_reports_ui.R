@@ -62,7 +62,7 @@ fluidPage(
           style = "margin: 0 0 4px 0; font-size: 20px; font-weight: 600;"
         ),
         p(
-          "Download analysis results as CSV files for further analysis or regulatory submissions.",
+          "Download analysis results as CSV files or a comprehensive analysis report.",
           style = "margin: 0; font-size: 13px; opacity: 0.85;"
         )
       )
@@ -173,9 +173,10 @@ fluidPage(
           h4(icon("file-alt"), " Reports"),
           p(class = "subtitle",
             "Comprehensive SAS-style analysis report (HTML). ",
-            "Combines untransformed descriptive statistics, log-scale ANOVA ",
-            "tables (Type I & III), per-product intra-subject variability, ",
-            "and the final BE conclusion in a single self-contained document."),
+            "Combines the analysis configuration, untransformed descriptive statistics, ",
+            "log-scale ANOVA tables (Type I & III), per-product intra-subject variability, ",
+            "the final BE conclusion, and a reproducible analysis summary ",
+            "in a single self-contained document."),
           fluidRow(
             column(6,
               downloadButton("download_sas_style_report",
@@ -192,9 +193,10 @@ fluidPage(
               div(
                 class = "alert alert-info",
                 style = "margin-bottom: 0; padding: 10px; font-size: 12px;",
-                icon("tools"), " ",
-                strong("PDF & Word formats coming soon."),
-                " Additional regulatory-ready report templates are in active development."
+                icon("print"), " ",
+                "Open the downloaded report in a browser and use ",
+                strong("Print → Save as PDF"), " for a PDF copy — ",
+                "the layout is print-formatted."
               )
             )
           )

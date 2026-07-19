@@ -251,6 +251,23 @@ randomization_server <- function(id, ss_result = NULL) {
     # =========================================================================
     # Audit / Report
     # =========================================================================
+
+    # Just the reproduction code (no surrounding prose) — shared by the plain
+    # -text audit's "Verification" section and the HTML report's.
+    .repro_code <- function(m) {
+      paste0(
+        "  source('R/randomization.R')\n",
+        "  res <- generate_randomization(\n",
+        sprintf("    design     = '%s',\n", m$design),
+        sprintf("    n_total    = %d,\n",   m$n_total),
+        sprintf("    block_size = %d,\n",   m$block_size),
+        sprintf("    seed       = %d%s)\n",  m$seed,
+                if (!is.null(m$strata) && length(m$strata) > 0)
+                  sprintf(",\n    strata = %s", deparse(m$strata)) else ""),
+        "  identical(res$meta$schedule_hash, '", m$schedule_hash, "')\n"
+      )
+    }
+
     .audit_text <- function() {
       r <- rnd_result()
       if (is.null(r)) return("No schedule generated yet.")
@@ -285,15 +302,7 @@ randomization_server <- function(id, ss_result = NULL) {
         "Verification\n",
         "------------\n",
         "Reproduce in R (>= 3.6.0):\n",
-        sprintf("  source('R/randomization.R')\n"),
-        sprintf("  res <- generate_randomization(\n"),
-        sprintf("    design     = '%s',\n", m$design),
-        sprintf("    n_total    = %d,\n",   m$n_total),
-        sprintf("    block_size = %d,\n",   m$block_size),
-        sprintf("    seed       = %d%s)\n",  m$seed,
-                if (!is.null(m$strata) && length(m$strata) > 0)
-                  sprintf(",\n    strata = %s", deparse(m$strata)) else ""),
-        "  identical(res$meta$schedule_hash, '", m$schedule_hash, "')\n"
+        .repro_code(m)
       )
     }
 
@@ -315,7 +324,7 @@ randomization_server <- function(id, ss_result = NULL) {
         # Self-contained HTML — no rmarkdown dependency
         html <- c(
           "<!doctype html><html><head><meta charset='utf-8'>",
-          "<title>BioEQ Randomization Report</title>",
+          "<title>BioEQ Randomization Audit Record</title>",
           "<style>",
           "body{font-family:'Inter',Arial,sans-serif;max-width:1000px;margin:30px auto;padding:0 20px;color:#1f2937;}",
           "h1{color:#1e3a5f;border-bottom:2px solid #2c5282;padding-bottom:6px;}",
@@ -326,8 +335,14 @@ randomization_server <- function(id, ss_result = NULL) {
           ".meta td:first-child{width:220px;font-weight:600;background:#f8fafc;}",
           "pre{background:#f8fafc;border:1px solid #e2e8f0;padding:10px;font-size:12px;}",
           ".sig{margin-top:40px;border-top:1px dashed #94a3b8;padding-top:14px;font-size:13px;}",
+          "@media print{",
+          "  body{margin:12px;max-width:none;}",
+          "  h1,h2{break-after:avoid;page-break-after:avoid;}",
+          "  pre{break-inside:avoid;page-break-inside:avoid;}",
+          "  table tr{break-inside:avoid;page-break-inside:avoid;}",
+          "}",
           "</style></head><body>",
-          "<h1>BioEQ Randomization Report</h1>",
+          "<h1>BioEQ Randomization Audit Record</h1>",
           sprintf("<p><strong>Generated:</strong> %s</p>", m$generated_at),
 
           "<h2>Study Parameters</h2><table class='meta'>",
@@ -362,11 +377,8 @@ randomization_server <- function(id, ss_result = NULL) {
           .df_to_html(r$schedule),
 
           "<h2>Verification</h2>",
-          "<p>Any independent reviewer can reproduce this schedule by running the",
-          " R code below. The resulting <code>schedule_hash</code> must match the",
-          " value above.</p>",
           "<pre>",
-          .escape_html(.audit_text()),
+          .escape_html(paste0("Reproduce in R (>= 3.6.0):\n", .repro_code(m))),
           "</pre>",
 
           "<div class='sig'>",

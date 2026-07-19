@@ -343,8 +343,8 @@ tagList(
                 label = NULL,
                 choices = list(
                   "Average Bioequivalence (ABE)" = "ABE",
-                  "Reference-Scaled Average BE (RSABE)" = "RSABE", 
-                  "Average BE with Expanding Limits (ABEL)" = "ABEL"
+                  "Average BE with Expanding Limits (ABEL)" = "ABEL",
+                  "Reference-Scaled Average BE (RSABE)" = "RSABE"
                 ),
                 selected = "ABE",
                 inline = FALSE

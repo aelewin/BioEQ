@@ -674,6 +674,170 @@
 }
 
 # ---------------------------------------------------------------------------
+# Analysis Configuration summary — the parameters selected for this run
+# ---------------------------------------------------------------------------
+.section_analysis_config <- function(analysis_config, be_results) {
+  if (is.null(analysis_config)) return("")
+  ac <- analysis_config
+  analysis_type <- be_results$analysis_type %||% ac$be_analysis_type %||% "ABE"
+  is_parallel <- identical(ac$study_design, "parallel") ||
+                 identical(be_results$design, "parallel") ||
+                 !is.null(be_results$statistical_results)
+
+  rows <- list()
+  add <- function(label, value) {
+    if (!is.null(value) && !(is.character(value) && !nzchar(value)) && !is.na(value))
+      rows[[length(rows) + 1]] <<- c(label, as.character(value))
+  }
+
+  add("Study Design", be_results$design %||% ac$study_design)
+  add("Bioequivalence Analysis Type", analysis_type)
+  if (identical(analysis_type, "RSABE")) {
+    add("RSABE Method", switch(ac$rsabe_method %||% "fda_linearized",
+                                "fda_linearized" = "FDA Linearized Scaled Criterion (Howe UCB)",
+                                "nctost" = "Non-Central TOST (ncTOST)",
+                                ac$rsabe_method))
+  } else if (identical(analysis_type, "ABEL")) {
+    add("ABEL-eligible Parameters",
+        paste(ac$abel_eligible_params %||% character(0), collapse = ", "))
+  }
+  add("ANOVA Model", switch(ac$anova_model %||% "fixed",
+                             "fixed" = "Fixed Effects (lm)",
+                             "nlme" = "Mixed Effects — nlme (REML)",
+                             "satterthwaite" = "Mixed Effects — Satterthwaite DF",
+                             "kenward-roger" = "Mixed Effects — Kenward-Roger DF",
+                             ac$anova_model))
+  if (!is_parallel && !identical(ac$anova_model, "fixed"))
+    add("Random Effects Structure", ac$random_effects)
+  if (is_parallel)
+    add("Parallel Variance Assumption",
+        if (isTRUE(ac$welch_correction)) "Welch correction (unequal variances)"
+        else "Equal variances assumption")
+  add("PK Parameters Analyzed",
+      paste(ac$selected_pk_params %||% ac$pk_parameters %||% character(0), collapse = ", "))
+  add("AUC Calculation Method", ac$auc_method)
+  add("Lambda_z Estimation Method", ac$lambda_z_method)
+  add("Missing Data Handling (middle points)", ac$missing_data_middle)
+  add("Missing Data Handling (terminal points)", ac$missing_data_terminal)
+  add("Carryover Assessment (ICH M13A)",
+      if (isTRUE(ac$test_carryover))
+        sprintf("Performed (exclusion threshold %s%%)", ac$carryover_threshold)
+      else "Not performed")
+  alpha_cfg <- ac$alpha_level %||% 0.05
+  add("Alpha / Confidence Level",
+      sprintf("%.3f (%.0f%% CI)", alpha_cfg, (1 - 2 * alpha_cfg) * 100))
+  add("Acceptance Limits (default)",
+      sprintf("%.2f%% – %.2f%%", ac$be_lower %||% 80, ac$be_upper %||% 125))
+
+  if (length(rows) == 0) return("")
+  df <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
+  colnames(df) <- c("Setting", "Value")
+  .df_to_html(df)
+}
+
+# ---------------------------------------------------------------------------
+# Statistical Method — parallel-group two-sample t-test
+# (crossover designs get their ANOVA from sections 3/4 below; a parallel
+# design has no Sequence/Period/Subject(Sequence) structure, so those
+# sections render empty — this is the appropriate substitute.)
+# ---------------------------------------------------------------------------
+.section_parallel_ttest <- function(be_results) {
+  ci_results <- be_results$confidence_intervals
+  stats_results <- be_results$statistical_results
+  if (is.null(ci_results) || is.null(stats_results) || length(stats_results) == 0) return("")
+
+  rows <- list()
+  for (p in names(stats_results)) {
+    st <- stats_results[[p]]
+    ci <- ci_results[[p]]
+    if (is.null(st) || is.null(ci)) next
+    rows[[length(rows) + 1]] <- data.frame(
+      Parameter   = .display_param(p),
+      Method      = st$method %||% "Two-sample t-test",
+      N_Test      = .fmt_int(st$n_test),
+      N_Reference = .fmt_int(st$n_ref),
+      t_Statistic = .fmt_num(ci$t_statistic %||% NA, 4),
+      DF          = .fmt_num(st$degrees_freedom %||% ci$df %||% NA, 2),
+      P_Value     = .fmt_p(st$p_value %||% ci$p_value %||% NA),
+      stringsAsFactors = FALSE
+    )
+  }
+  if (length(rows) == 0) return("")
+  tab <- do.call(rbind, rows)
+  colnames(tab) <- c("Parameter", "Method", "N (Test)", "N (Reference)",
+                     "t Statistic", "DF", "P-value")
+  paste0(
+    .df_to_html(tab),
+    "<p class='sas-note'>Bioequivalence for parallel-group designs is assessed via a ",
+    "two-sample t-test on log-transformed data (Welch approximation used for unequal ",
+    "variances where selected). Point estimate and confidence interval are shown in the ",
+    "Bioequivalence Conclusion below.</p>"
+  )
+}
+
+# ---------------------------------------------------------------------------
+# Reproducible Analysis Summary — the function calls and parameters used
+# ---------------------------------------------------------------------------
+.section_reproducible_code <- function(analysis_config, be_results, ran_nca) {
+  ac <- analysis_config %||% list()
+  analysis_type <- be_results$analysis_type %||% ac$be_analysis_type %||% "ABE"
+  design <- be_results$design %||% ac$study_design %||% "auto"
+  is_parallel <- identical(design, "parallel") || !is.null(be_results$statistical_results)
+  params <- ac$selected_pk_params %||% ac$pk_parameters %||% character(0)
+  params_str <- paste0("c(", paste(sprintf("\"%s\"", params), collapse = ", "), ")")
+
+  nca_block <- if (isTRUE(ran_nca)) paste0(
+    "# Non-Compartmental Analysis (per subject)\n",
+    "nca_results <- perform_enhanced_nca_analysis(\n",
+    "  data,\n",
+    "  lambda_points = ", ac$lambda_z_points %||% 3, "\n",
+    ")\n",
+    "# AUC method: ", ac$auc_method %||% "mixed", "\n",
+    "# Lambda_z method: ", ac$lambda_z_method %||% "aic", "\n\n"
+  ) else ""
+
+  extra_params <- character(0)
+  if (identical(analysis_type, "RSABE")) {
+    extra_params <- c(extra_params, sprintf("    rsabe_method  = \"%s\"",
+                                             ac$rsabe_method %||% "fda_linearized"))
+  }
+  if (identical(analysis_type, "ABEL")) {
+    extra_params <- c(extra_params, sprintf(
+      "    abel_eligible_params = c(%s)",
+      paste(sprintf("\"%s\"", ac$abel_eligible_params %||% "Cmax"), collapse = ", ")))
+  }
+  if (is_parallel) {
+    extra_params <- c(extra_params,
+                       sprintf("    welch_correction = %s", isTRUE(ac$welch_correction)))
+  } else {
+    extra_params <- c(extra_params, sprintf("    anova_model   = \"%s\"",
+                                             ac$anova_model %||% "fixed"))
+  }
+
+  be_block <- paste0(
+    "# Bioequivalence Analysis\n",
+    "be_results <- perform_be_analysis_by_type(\n",
+    "  data          = ", if (isTRUE(ran_nca)) "nca_results" else "data", ",\n",
+    "  analysis_type = \"", analysis_type, "\",\n",
+    "  design        = \"", design, "\",\n",
+    "  params = list(\n",
+    "    alpha_level   = ", ac$alpha_level %||% 0.05, ",\n",
+    "    be_limits     = list(lower = ", ac$be_lower %||% 80,
+    ", upper = ", ac$be_upper %||% 125, "),\n",
+    "    pk_parameters = ", params_str,
+    if (length(extra_params) > 0) paste0(",\n", paste(extra_params, collapse = ",\n")) else "",
+    "\n  )\n",
+    ")\n"
+  )
+
+  paste0(
+    "<pre class='sas-code'>", .html_escape(paste0(nca_block, be_block)), "</pre>",
+    "<p class='sas-note'>Reflects the actual function calls and parameter values used to ",
+    "produce this report; provided for reproducibility, not a verbatim execution transcript.</p>"
+  )
+}
+
+# ---------------------------------------------------------------------------
 # Section 6: Final BE summary (SAS-style normal-scale results table)
 # ---------------------------------------------------------------------------
 .section_be_summary <- function(be_results, sd, alpha) {
@@ -729,26 +893,46 @@
                    nlevels(droplevels(d$Sequence)) >= 2
         has_per <- is.factor(d$Period) &&
                    nlevels(droplevels(d$Period)) >= 2
-        if (has_seq) d$Sequence <- droplevels(d$Sequence)
-        if (has_per) d$Period <- droplevels(d$Period)
-        fml <- if (has_seq) y ~ Sequence + Subject:Sequence + Period + Treatment
-               else y ~ Subject + Period + Treatment
-        if (!has_per) fml <- update(fml, . ~ . - Period)
-        fit <- tryCatch(lm(fml, data = d), error = function(e) NULL)
-        if (!is.null(fit)) {
-          treat_lvls <- levels(d$Treatment)
-          ref_lvl <- be_results$reference_treatment %||% treat_lvls[length(treat_lvls)]
-          test_lvl <- be_results$test_treatment %||% treat_lvls[1]
-          if (!ref_lvl %in% treat_lvls) ref_lvl <- treat_lvls[2]
-          if (!test_lvl %in% treat_lvls) test_lvl <- treat_lvls[1]
-          predict_at <- function(lv) {
-            d_pred <- d; d_pred$Treatment <- factor(lv, levels = treat_lvls)
-            mean(predict(fit, newdata = d_pred))
-          }
-          ls_test <- predict_at(test_lvl)
-          ls_ref  <- predict_at(ref_lvl)
+        treat_lvls <- levels(d$Treatment)
+        # NOTE: be_results$reference_treatment / $test_treatment are never
+        # actually set anywhere in the analysis engine (R/be_analysis.R), so
+        # relying on them (as this block previously did, falling back to
+        # treat_lvls[length(treat_lvls)]/treat_lvls[1]) silently swapped
+        # Test and Reference for the standard "R"/"T" labeling convention
+        # used throughout the app. Use the literal R/T convention directly.
+        ref_lvl <- be_results$reference_treatment %||%
+                   (if ("R" %in% treat_lvls) "R" else treat_lvls[length(treat_lvls)])
+        test_lvl <- be_results$test_treatment %||%
+                    (if ("T" %in% treat_lvls) "T" else treat_lvls[1])
+        if (!ref_lvl %in% treat_lvls) ref_lvl <- setdiff(treat_lvls, test_lvl)[1]
+        if (!test_lvl %in% treat_lvls) test_lvl <- setdiff(treat_lvls, ref_lvl)[1]
+
+        if (!has_seq && !has_per) {
+          # No crossover structure (parallel, or any one-observation-per-
+          # subject design): Subject and Treatment are perfectly confounded,
+          # so a Subject+Treatment lm() refit cannot estimate a Treatment
+          # effect. LS means reduce to simple per-treatment-group means.
+          ls_test <- mean(d$y[d$Treatment == test_lvl], na.rm = TRUE)
+          ls_ref  <- mean(d$y[d$Treatment == ref_lvl], na.rm = TRUE)
           geo_test <- exp(ls_test); geo_ref <- exp(ls_ref)
-          if (is.na(df_val)) df_val <- df.residual(fit)
+          if (is.na(df_val)) df_val <- ci$df %||% NA
+        } else {
+          if (has_seq) d$Sequence <- droplevels(d$Sequence)
+          if (has_per) d$Period <- droplevels(d$Period)
+          fml <- if (has_seq) y ~ Sequence + Subject:Sequence + Period + Treatment
+                 else y ~ Subject + Period + Treatment
+          if (!has_per) fml <- update(fml, . ~ . - Period)
+          fit <- tryCatch(lm(fml, data = d), error = function(e) NULL)
+          if (!is.null(fit)) {
+            predict_at <- function(lv) {
+              d_pred <- d; d_pred$Treatment <- factor(lv, levels = treat_lvls)
+              mean(predict(fit, newdata = d_pred))
+            }
+            ls_test <- predict_at(test_lvl)
+            ls_ref  <- predict_at(ref_lvl)
+            geo_test <- exp(ls_test); geo_ref <- exp(ls_ref)
+            if (is.na(df_val)) df_val <- df.residual(fit)
+          }
         }
       }
     }
@@ -806,7 +990,8 @@
 generate_sas_style_html_report <- function(be_results,
                                            nca_results,
                                            analysis_config = NULL,
-                                           output_file) {
+                                           output_file,
+                                           data_type = NULL) {
   alpha <- analysis_config$alpha_level %||% 0.05
   ci_pct <- round((1 - alpha * 2) * 100)
   ci_label <- paste0(ci_pct, "% CI")
@@ -815,9 +1000,14 @@ generate_sas_style_html_report <- function(be_results,
             "Average Bioequivalence"
   analysis_type <- be_results$analysis_type %||% "ABE"
   n_subj <- be_results$n_subjects %||% NA
+  is_parallel_run <- identical(design, "parallel") || !is.null(be_results$statistical_results)
+  ran_nca <- identical(data_type, "concentration")
 
   sd <- .get_subject_data(nca_results)
   pk_cols <- .pk_columns(sd)
+
+  # ── Analysis Configuration — selected parameters for this run ─────────────
+  config_block <- .section_analysis_config(analysis_config, be_results)
 
   # ── Section 1: Subject-level listings ─────────────────────────────────────
   listing_untrans <- .section_subject_listing(sd, pk_cols, log_only = FALSE)
@@ -838,15 +1028,25 @@ generate_sas_style_html_report <- function(be_results,
     .section_descriptives_grouped(sd, pk_cols, "Treatment",
                                   "Treatment (pooled)") else ""
 
-  # ── Sections 3 & 4: ANOVA ─────────────────────────────────────────────────
+  # ── Section 3 (parallel only): Statistical Method — two-sample t-test ─────
+  parallel_block <- if (is_parallel_run) .section_parallel_ttest(be_results) else ""
+
+  # ── Sections 3 & 4 (crossover/replicate only): ANOVA ───────────────────────
   per_prod_block <- .section_per_product_anova(sd, pk_cols, be_results)
   full_anova_block <- .section_full_anova(sd, pk_cols, be_results)
 
   # ── Section 5: Intra-subject variability ──────────────────────────────────
-  intra_block <- .section_intra_cv(be_results$anova_results$anova_results)
+  # Not applicable to parallel designs: there is no within-subject repeated
+  # dosing at all (each subject receives a single treatment), so no
+  # intra-subject variance is estimable, unlike a crossover/replicate design.
+  intra_block <- if (is_parallel_run) "" else
+    .section_intra_cv(be_results$anova_results$anova_results)
 
   # ── Section 6: Final BE summary ───────────────────────────────────────────
   be_block <- .section_be_summary(be_results, sd, alpha)
+
+  # ── Reproducible Analysis Summary ─────────────────────────────────────────
+  code_block <- .section_reproducible_code(analysis_config, be_results, ran_nca)
 
   # ── Header ────────────────────────────────────────────────────────────────
   header_html <- paste0(
@@ -867,6 +1067,11 @@ generate_sas_style_html_report <- function(be_results,
   # ── Body assembly ─────────────────────────────────────────────────────────
   body <- paste0(
     header_html,
+
+    if (nzchar(config_block)) paste0(
+      "<h2 class='sas-section'>Analysis Configuration</h2>",
+      config_block) else "",
+
     if (nzchar(listing_untrans) || nzchar(listing_log))
       "<h2 class='sas-section'>1. Subject-Level Pharmacokinetic Listings</h2>"
     else "",
@@ -894,6 +1099,10 @@ generate_sas_style_html_report <- function(be_results,
       "<h3 class='sas-subhead'>2.4 Pooled summary statistics &mdash; by Treatment</h3>",
       desc_treat) else "",
 
+    if (nzchar(parallel_block)) paste0(
+      "<h2 class='sas-section'>3. Statistical Method &mdash; Two-Sample t-test</h2>",
+      parallel_block) else "",
+
     if (nzchar(per_prod_block)) paste0(
       "<h2 class='sas-section'>3. Per-product ANOVA &mdash; Log-transformed Data (Intra CV%)</h2>",
       "<p class='sas-note'>Reference (and Test, when estimable) subset only. ",
@@ -915,6 +1124,10 @@ generate_sas_style_html_report <- function(be_results,
     if (nzchar(be_block)) paste0(
       "<h2 class='sas-section'>6. Bioequivalence Conclusion &mdash; Normal-scale Results of Log-transformed Data</h2>",
       be_block) else "",
+
+    if (nzchar(code_block)) paste0(
+      "<h2 class='sas-section'>7. Reproducible Analysis Summary</h2>",
+      code_block) else "",
 
     "<hr class='sas-rule'>",
     "<p class='sas-footer'>Generated by BioEQ. ",
@@ -956,6 +1169,18 @@ generate_sas_style_html_report <- function(be_results,
                  margin:4px 0 12px 0; }
     p.sas-footer { color:#6c757d; font-size:11px; margin-top:24px; }
     hr.sas-rule { border:none; border-top:1px dashed #ced4da; margin:18px 0; }
+    pre.sas-code { background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px;
+                   padding:14px 16px; font-size:12px; line-height:1.5;
+                   overflow-x:auto; white-space:pre; font-family:'SF Mono',
+                   Consolas,'Courier New',monospace; color:#2d3748; }
+
+    @media print {
+      body { margin:12px; max-width:none; }
+      h2.sas-section { break-after:avoid; page-break-after:avoid; }
+      h3.sas-subhead, h4.sas-subhead { break-after:avoid; page-break-after:avoid; }
+      table.sas-table, pre.sas-code { break-inside:avoid; page-break-inside:avoid; }
+      table.sas-table tbody tr { break-inside:avoid; page-break-inside:avoid; }
+    }
   "
 
   html <- paste0(

@@ -684,7 +684,29 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       
       # BE conclusion
       be_pass <- abel_result[1, "BE"] == "pass"
-      
+
+      # ---------------------------------------------------------------
+      # Independent ANOVA table for display (replicateBE itself does not
+      # expose the SS decomposition). Reuse fit_rsabe_model() — verified
+      # to reproduce replicateBE's own PE/CI exactly for both Method A
+      # (fixed) and Method B (mixed) on real 4x4 replicate data — fitting
+      # the same y ~ seq + subj:seq + prd + drug (fixed) or
+      # y ~ seq + prd + drug, random=~1|subj (mixed) model on log-scale PK.
+      # ---------------------------------------------------------------
+      real_anova <- tryCatch({
+        log_col <- ".log_pk_for_anova"
+        anova_input <- data
+        anova_input[[log_col]] <- if (data_is_logged) {
+          as.numeric(data[[param_to_use]])
+        } else {
+          log(as.numeric(data[[param_to_use]]))
+        }
+        fit_rsabe_model(anova_input, log_col, anova_model = if (use_method_a) "fixed" else "nlme")
+      }, error = function(e) {
+        cat(sprintf("  ⚠ Could not fit independent ANOVA model for %s: %s\n", base_param_name, e$message))
+        NULL
+      })
+
       # Extract ANOVA-related information from replicateBE output
       # These will be used to populate ANOVA results display
       anova_df <- abel_result[1, "DF"]  # Degrees of freedom
@@ -742,13 +764,8 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       # Create structure similar to standard ANOVA output for results display
       # Store under BASE parameter name to avoid duplicates
       all_results[[base_param_name]] <- list(
-        model = NULL,  # replicateBE doesn't return model object
-        anova = data.frame(
-          Source = c("Treatment", "Subject", "Period", "Residual"),
-          DF = c(1, n_total - 1, design_info$n_periods - 1, anova_df),
-          MS = c(NA, NA, NA, sw_r^2),  # Only residual MS available from sw_r
-          stringsAsFactors = FALSE
-        ),
+        model = if (!is.null(real_anova)) real_anova$model else NULL,
+        anova = if (!is.null(real_anova)) real_anova$anova_table else NULL,
         treatment_coef = log(gmr),  # Log of GMR
         treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha, anova_df),  # Back-calculate SE; one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
         residual_mse = sw_r^2,

@@ -4,7 +4,6 @@
 # Source dashboard utilities and interpretation guides
 source("utils/dashboard_utils.R", local = TRUE)
 source("utils/interpretation_guides.R", local = TRUE)
-source("utils/report_generation.R", local = TRUE)
 
 #' Convert log-transformed parameter names to display names
 #' 
@@ -221,29 +220,45 @@ calculate_pk_comparison <- function(nca_data, param_name) {
 
 # Format replicateBE ANOVA results for display
 format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
-  
+
   # Extract replicateBE output
   rbe_output <- param_result$replicatebe_output
-  
+
+  # NOTE: replicateBE's own `Method` column is unreliable for distinguishing
+  # A vs B — the installed package version returns "A" even when method.B()
+  # was called (contradicts its documented "B-<option>" format). Use our own
+  # anova_method field (set directly by perform_abel_placeholder()) instead.
+  is_method_a <- identical(param_result$anova_method, "lm")
+
+  # replicateBE::method.A()/method.B() name the acceptance-limit columns
+  # differently depending on whether the drug ended up scaled: `L(%)`/`U(%)`
+  # when reference-scaling applied (CVwR > 30%, high-variability), but
+  # `BE.lo(%)`/`BE.hi(%)` when it did not (standard 80-125% limits used).
+  # Reading only `L(%)`/`U(%)` (as this function previously did) returned
+  # NULL for any non-scaled result, which crashed several `if()`/sprintf()
+  # calls below ("missing value where TRUE/FALSE needed") — e.g. a full
+  # replicate with CVwR just under the 30% switching threshold.
+  limit_lo <- rbe_output$`L(%)` %||% rbe_output$`BE.lo(%)`
+  limit_hi <- rbe_output$`U(%)` %||% rbe_output$`BE.hi(%)`
+
   # Determine variability classification. EMA ABEL switches at CV_wR > 30%.
   cv_wr <- rbe_output$`CVwR(%)`
   is_hv <- !is.na(cv_wr) && cv_wr > 30  # EMA ABEL uses 30% switching CV
-  
+
   # Determine if limits are scaled vs fixed
   limits_are_scaled <- FALSE
   tryCatch({
-    lo <- rbe_output$`L(%)`
-    hi <- rbe_output$`U(%)`
-    if (!is.na(lo) && !is.na(hi) && (lo < 79.9 || hi > 125.1)) limits_are_scaled <- TRUE
+    if (!is.na(limit_lo) && !is.na(limit_hi) && (limit_lo < 79.9 || limit_hi > 125.1)) limits_are_scaled <- TRUE
   }, error = function(e) NULL)
-  
+
   # Evaluate individual criteria like RSABE
   pe_pct <- rbe_output$`PE(%)`
   pe_pass <- !is.na(pe_pct) && pe_pct >= 80 & pe_pct <= 125
   ci_lo <- rbe_output$`CL.lo(%)`
   ci_hi <- rbe_output$`CL.hi(%)`
   be_pass <- rbe_output$BE == "pass"
-  ci_within <- !is.na(ci_lo) && !is.na(ci_hi) && ci_lo >= rbe_output$`L(%)` && ci_hi <= rbe_output$`U(%)`
+  ci_within <- !is.na(ci_lo) && !is.na(ci_hi) && !is.na(limit_lo) && !is.na(limit_hi) &&
+               ci_lo >= limit_lo && ci_hi <= limit_hi
   
   # Detect whether test (swT) is estimable (full vs partial replicate)
   swT_val <- suppressWarnings(as.numeric(rbe_output$swT))
@@ -272,7 +287,7 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
             tags$tbody(
               tags$tr(tags$td(strong("Design:")), tags$td(rbe_output$Design)),
               tags$tr(tags$td(strong("Method:")),
-                tags$td(if (rbe_output$Method == "A") "Method A (ANOVA/lm)" else "Method B (Mixed Model/lme4)")),
+                tags$td(if (is_method_a) "Method A (ANOVA/lm)" else "Method B (Mixed Model/lme4)")),
               tags$tr(tags$td(strong("Total Subjects:")), tags$td(sprintf("%g", rbe_output$n))),
               tags$tr(tags$td(strong("Test Subjects:")), tags$td(sprintf("%g", rbe_output$nTT))),
               tags$tr(tags$td(strong("Ref Subjects:")), tags$td(sprintf("%g", rbe_output$nRR))),
@@ -313,8 +328,9 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
               tags$tr(tags$td(strong("Point Estimate:")), tags$td(sprintf("%.2f%%", pe_pct))),
               tags$tr(tags$td(strong("CI Lower:")), tags$td(sprintf("%.2f%%", ci_lo))),
               tags$tr(tags$td(strong("CI Upper:")), tags$td(sprintf("%.2f%%", ci_hi))),
-              tags$tr(tags$td(strong("Scaled limits:")),
-                tags$td(sprintf("[%.2f%%, %.2f%%]", rbe_output$`L(%)`, rbe_output$`U(%)`))),
+              tags$tr(tags$td(strong(if (limits_are_scaled) "Scaled limits:" else "Acceptance limits:")),
+                tags$td(if (!is.na(limit_lo) && !is.na(limit_hi))
+                  sprintf("[%.2f%%, %.2f%%]", limit_lo, limit_hi) else "—")),
               tags$tr(
                 tags$td(strong("CI within limits:")),
                 tags$td(class = if (ci_within) "text-success font-weight-bold" else "text-danger font-weight-bold",
@@ -347,22 +363,58 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
     )
   )
   
-  # ── ANOVA Table Note ──
-  anova_note <- div(class = "card mb-3",
-    div(class = "card-header",
-      h6(class = "card-title mb-0", icon("table"), " ANOVA Table")
-    ),
-    div(class = "card-body",
-      div(class = "alert alert-secondary mb-0",
-        icon("info-circle"), " ",
-        strong("Full ANOVA table not available. "),
-        "The replicateBE package computes BE results internally using ",
-        if (rbe_output$Method == "A") "Method A (ANOVA/lm)" else "Method B (mixed model/lme4)",
-        " but does not expose the full ANOVA sum-of-squares decomposition. ",
-        "The variance components, degrees of freedom, and BE limits shown above are the complete statistical output from replicateBE."
+  # ── ANOVA Table (independently fit to reproduce replicateBE's PE/CI) ──
+  # replicateBE itself does not expose the SS decomposition, so this is fit
+  # separately in R/be_analysis.R via fit_rsabe_model() on the same data,
+  # using the same model replicateBE fits internally (y ~ seq + subj:seq +
+  # prd + drug for Method A; y ~ seq + prd + drug, random=~1|subj for Method
+  # B) — verified to reproduce replicateBE's own PE/CI exactly.
+  anova_note <- NULL
+  if (!is.null(param_result$anova)) {
+    tryCatch({
+      anova_df <- as.data.frame(param_result$anova)
+      anova_note <- div(class = "card mb-3",
+        div(class = "card-header",
+          h6(class = "card-title mb-0", icon("table"), " ANOVA Table")
+        ),
+        div(class = "card-body",
+          p(style = "font-size: 0.85em; color: #6c757d; margin-bottom: 10px;",
+            "Analysis of Variance table from an independently fit treatment-effect model (",
+            if (is_method_a) "fixed effects, matching Method A" else "mixed effects/nlme REML, matching Method B",
+            "), reproducing replicateBE's point estimate and confidence interval."),
+          div(class = "table-responsive",
+            tags$table(class = "table table-striped table-hover table-sm",
+              tags$thead(class = "table-primary",
+                tags$tr(
+                  tags$th("Source"),
+                  lapply(names(anova_df), function(col) tags$th(col))
+                )
+              ),
+              tags$tbody(
+                lapply(1:nrow(anova_df), function(i) {
+                  tags$tr(
+                    tags$td(style = "font-weight: bold;", rownames(anova_df)[i]),
+                    lapply(1:ncol(anova_df), function(j) {
+                      val <- anova_df[i, j]
+                      col_name <- names(anova_df)[j]
+                      formatted <- if (is.numeric(val) && !is.na(val)) {
+                        if (col_name %in% c("Pr(>F)", "p-value", "Pr(>|t|)")) format.pval(val, digits = 4)
+                        else if (col_name %in% c("Df", "NumDF", "DenDF", "numDF", "denDF", "npar")) as.character(round(val))
+                        else if (col_name %in% c("Sum Sq", "Mean Sq")) sprintf("%.4f", val)
+                        else if (col_name %in% c("F value", "F-value")) sprintf("%.2f", val)
+                        else sprintf("%.4f", val)
+                      } else as.character(val)
+                      tags$td(formatted)
+                    })
+                  )
+                })
+              )
+            )
+          )
+        )
       )
-    )
-  )
+    }, error = function(e) NULL)
+  }
   
   # ── Log-Scale Results (collapsed by default) ──
   log_scale_panel <- NULL
@@ -399,7 +451,7 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
     p(paste0(
       "This analysis was performed using the replicateBE package (EMA ABEL). ",
       "The package implements ", 
-      if(rbe_output$Method == "A") "Method A (Linear Model/ANOVA)" else {
+      if(is_method_a) "Method A (Linear Model/ANOVA)" else {
         df_label <- switch(as.character(be_res$df_approximation %||% 2),
           "1" = "Satterthwaite",
           "2" = "nlme/SAS CONTAIN",

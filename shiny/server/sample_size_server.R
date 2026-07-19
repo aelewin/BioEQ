@@ -53,6 +53,26 @@ observeEvent(input$ss_method, {
 # ── Reactive: store last successful result ──
 ss_result <- reactiveVal(NULL)
 
+output$ss_has_result <- reactive({ !is.null(ss_result()) })
+outputOptions(output, "ss_has_result", suspendWhenHidden = FALSE)
+
+# ── Download report (HTML) ──
+output$ss_download_report <- downloadHandler(
+  filename = function() paste0("BioEQ_SampleSize_Report_", Sys.Date(), ".html"),
+  content = function(file) {
+    req(ss_result())
+    tryCatch({
+      generate_sample_size_report(ss_result(), file)
+      showNotification("Sample size report generated.", type = "message")
+    }, error = function(e) {
+      showNotification(paste("Report generation failed:", e$message),
+                       type = "error", duration = 8)
+      writeLines(sprintf("<html><body><h1>Report generation failed</h1><p>%s</p></body></html>",
+                         e$message), file)
+    })
+  }
+)
+
 # ── Calculate sample size ──
 observeEvent(input$calculate_ss, {
   req(input$ss_cv, input$ss_theta0, input$ss_target_power, input$ss_alpha)

@@ -224,8 +224,17 @@ tagList(
         solidHeader = TRUE,
         width = 12,
         icon = icon("table"),
-        
-        uiOutput("ss_result_display")
+
+        uiOutput("ss_result_display"),
+        conditionalPanel(
+          condition = "output.ss_has_result",
+          div(style = "margin-top: 12px; text-align: right;",
+            downloadButton("ss_download_report",
+              label = "Download Report (HTML)",
+              icon = icon("file-code"),
+              class = "btn-outline-success btn-sm")
+          )
+        )
       ),
       
       # Power Curve box
