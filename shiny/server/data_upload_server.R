@@ -30,7 +30,7 @@ validate_bioeq_data_enhanced <- function(data) {
     subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
     treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
     period = c("period", "per", "phase", "visit"),
-    sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+    sequence = c("sequence", "seq", "period_sequence"),
     time = c("time", "timepoint", "hour", "hours", "hr", "sampling_time"),
     concentration = c("concentration", "conc", "result", "value", "plasma_conc", "serum_conc")
   )
@@ -1066,7 +1066,7 @@ validate_pk_data_enhanced <- function(data) {
   
   # Additional optional columns
   optional_mappings <- list(
-    sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+    sequence = c("sequence", "seq", "period_sequence"),
     period = c("period", "prd", "per", "phase", "occasion", "visit"),
     dose = c("dose", "amt", "amount_dose", "dosage"),
     weight = c("weight", "wt", "bw", "bodyweight"),
@@ -1109,7 +1109,7 @@ validate_pk_data_enhanced <- function(data) {
     if ("Sequence" %in% names(processed_data)) mapped_columns[["Sequence"]] <- "Sequence"
     
     # Identify PK parameter columns (non-standard columns that aren't the core columns)
-    core_columns <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration")
+    core_columns <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration", "group")
     potential_pk_columns <- setdiff(names(processed_data), core_columns)
     for (col in potential_pk_columns) {
       mapped_pk_parameters[[col]] <- col
@@ -1344,7 +1344,7 @@ output$concentration_column_mapper <- renderUI({
         subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
         treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
         period = c("period", "per", "phase", "visit"),
-        sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+        sequence = c("sequence", "seq", "period_sequence"),
         time = c("time", "timepoint", "hour", "hours", "hr", "sampling_time"),
         concentration = c("concentration", "conc", "result", "value", "plasma_conc", "serum_conc")
       )
@@ -1720,7 +1720,9 @@ observeEvent(input$confirm_concentration_mapping, {
   
   # Remove columns that were NOT mapped AND columns mapped to "other/ignore"
   # Build list of columns to keep (already renamed to standard names)
-  columns_to_keep <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration")
+  # "group" is optional (facility/dosing-cohort grouping) — kept when mapped so
+  # it survives into the NCA/ANOVA pipeline instead of being silently dropped.
+  columns_to_keep <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration", "group")
   
   # Add PK parameter names (these are the RENAMED standard names)
   if (length(pk_parameter_info) > 0) {
@@ -1823,7 +1825,7 @@ output$pk_parameter_selector <- renderUI({
         subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
         treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
         period = c("period", "per", "phase", "visit"),
-        sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+        sequence = c("sequence", "seq", "period_sequence"),
         group = c("group", "grp", "cohort", "site", "batch", "study_group", "dose_group"),
         dose = c("dose", "dosage", "dose_amount"),
         weight = c("weight", "bw", "body_weight"),

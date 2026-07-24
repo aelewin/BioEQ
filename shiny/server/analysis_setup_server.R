@@ -810,9 +810,15 @@ observeEvent(input$run_analysis, {
         cat("✅ No missing data detected\n")
       }
       
+      # "group" (dosing/facility cohort) is optional design metadata — carry it
+      # through the NCA step like Subject/Treatment/Period/Sequence when present,
+      # so it remains available for the group-effect ANOVA option downstream.
+      nca_id_cols <- c("Subject", "Treatment", "Period", "Sequence")
+      if ("group" %in% names(analysis_data)) nca_id_cols <- c(nca_id_cols, "group")
+
       nca_results <- perform_nca_analysis(
         data = analysis_data,  # Use processed data with missing values handled
-        id_cols = c("Subject", "Treatment", "Period", "Sequence"),
+        id_cols = nca_id_cols,
         time_col = "Time",
         conc_col = "Concentration",
         lambda_z_method = analysis_config$lambda_z_method,
@@ -822,18 +828,21 @@ observeEvent(input$run_analysis, {
         pAUC_start = analysis_config$pAUC_start,
         pAUC_end = analysis_config$pAUC_end
       )
-      
+
       # Add missing design variables for ANOVA analysis
       # The NCA analysis might not preserve all design variables, so we add them back
-      if (!("Sequence" %in% names(nca_results)) || !("Period" %in% names(nca_results))) {
-        
+      if (!("Sequence" %in% names(nca_results)) || !("Period" %in% names(nca_results)) ||
+          ("group" %in% names(analysis_data) && !("group" %in% names(nca_results)))) {
+
         # Create unique identifier for merging - use CAPITALIZED column names
         analysis_data$merge_id <- paste(analysis_data$Subject, analysis_data$Treatment, sep = "_")
         nca_results$merge_id <- paste(nca_results$Subject, nca_results$Treatment, sep = "_")
-        
+
         # Get design variables from original data
-        design_vars <- analysis_data[!duplicated(analysis_data$merge_id), c("merge_id", "Subject", "Sequence", "Period", "Treatment")]
-        
+        design_cols <- c("merge_id", "Subject", "Sequence", "Period", "Treatment")
+        if ("group" %in% names(analysis_data)) design_cols <- c(design_cols, "group")
+        design_vars <- analysis_data[!duplicated(analysis_data$merge_id), design_cols]
+
         # Merge design variables with NCA results
         nca_results <- merge(nca_results, design_vars, by = "merge_id", all.x = TRUE, suffixes = c("", ".design"))
         nca_results$merge_id <- NULL  # Remove temporary merge column

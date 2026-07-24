@@ -594,9 +594,10 @@ tagList(
                     "Subject as a random intercept — (1|subject) — is the standard random-effects structure for a bioequivalence mixed model."
                   ),
                   
-                  # Group as random effect option (only for ABE mixed models)
+                  # Group as random effect option (only for ABE mixed models,
+                  # standard 2x2 crossover only for now)
                   conditionalPanel(
-                    condition = "output.groups_detected",
+                    condition = "output.groups_detected && output.is_non_replicate_design && !output.is_parallel_design",
                     div(style = "margin-top: 10px; padding: 10px; background-color: #fff3cd; border-radius: 5px; border-left: 3px solid #ffc107;",
                       h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #856404;"),
                       checkboxInput(
@@ -605,16 +606,17 @@ tagList(
                         value = FALSE
                       ),
                       div(style = "font-size: 11px; color: #856404; margin-top: 5px;",
-                        "Groups detected in data. Check to include group-to-group variability in mixed-effects model."
+                        "Groups detected in data (2×2 crossover). Check to include group-to-group variability in the mixed-effects model."
                       )
                     )
                   )
                 )
               ),
               
-              # Group effects for fixed models (ABE only — ABEL/RSABE handle their own models)
+              # Group effects for fixed AND mixed models (ABE, standard 2x2 crossover only for now —
+              # ABEL/RSABE handle their own models; replicate/parallel designs not yet supported).
               conditionalPanel(
-                condition = "input.anova_model == 'fixed' && output.groups_detected && input.be_analysis_type == 'ABE'",
+                condition = "(input.anova_model == 'fixed' || input.anova_model == 'nlme') && output.groups_detected && input.be_analysis_type == 'ABE' && output.is_non_replicate_design && !output.is_parallel_design",
                 div(style = "margin-top: 10px; padding: 10px; background-color: #d1ecf1; border-radius: 5px; border-left: 3px solid #17a2b8;",
                   h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #0c5460;"),
                   checkboxInput(
@@ -628,7 +630,7 @@ tagList(
                     value = FALSE
                   ),
                   div(style = "font-size: 11px; color: #0c5460; margin-top: 5px;",
-                    "Groups detected in data. Including group effects accounts for between-group variability."
+                    "Groups detected in data (2×2 crossover). Adds a Group term to the ANOVA to assess whether dosing/facility group explains any variance."
                   )
                 )
               )
