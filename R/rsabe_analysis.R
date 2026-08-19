@@ -75,15 +75,16 @@ hedges_correction <- function(df) {
 #' formulas retain the z terms.
 #'
 #' @param design_info Design info from detect_replicate_design()
-#' @param isc_result ISC variance results (provides s2_wR, s2_wT, n_R, n_T)
+#' @param refvar_result Reference/Test intra-subject variance results, from
+#'   compute_reference_anova_variance() (provides s2_wR, s2_wT, n_R, n_T)
 #' @return List with K, z, df_nct (degrees of freedom for noncentral t)
 #' @export
-compute_K_constant <- function(design_info, isc_result) {
+compute_K_constant <- function(design_info, refvar_result) {
   
-  s2_wR <- isc_result$s2_wR
-  s2_wT <- isc_result$s2_wT
-  n_R <- isc_result$n_R  # Number of subjects with replicated R
-  n_T <- isc_result$n_T  # Number of subjects with replicated T
+  s2_wR <- refvar_result$s2_wR
+  s2_wT <- refvar_result$s2_wT
+  n_R <- refvar_result$n_R  # Number of subjects with replicated R
+  n_T <- refvar_result$n_T  # Number of subjects with replicated T
   
   design_type <- design_info$design_type
   n_total <- design_info$n_subjects_total
@@ -156,7 +157,7 @@ compute_K_constant <- function(design_info, isc_result) {
       K <- sqrt((z2 + 0.5) / n_per_seq)
       # df for s_WR: only subjects in sequences with replicated R
       # In TRR/RTR/RRT, 2 out of 3 sequences have replicated R
-      # df = n_R (from ISC, already computed correctly)
+      # df = n_R (already computed correctly by compute_reference_anova_variance())
       df_nct <- n_R
     } else {
       n_per_seq <- n_total / 3
@@ -181,7 +182,7 @@ compute_K_constant <- function(design_info, isc_result) {
       K <- sqrt(0.75 * (z2 + 1) / n_per_seq)
       # For TRT/RTR, s_WR comes from RTR sequence only
       # df = number of subjects in the sequence with replicated R minus 1
-      # The ISC already handles this — use n_R from ISC
+      # compute_reference_anova_variance() already handles this — use its n_R
       df_nct <- n_R
     } else {
       n_per_seq <- n_total / 2
@@ -393,32 +394,50 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
   # Response variable
   model_data$y <- model_data[[param_col]]
   
+  # Comprehensive SAS-style ANOVA breakdown (Sequence/Subject(Sequence)/Period/
+  # Treatment/Residual, Type III SS, plus the Subject(Seq)-as-error-term test for
+  # Sequence) — a parallel/accompanying table alongside RSABE's own Howe UCB /
+  # ncTOST / ISC-based scaling decision (which is computed separately, unaffected
+  # by this). Reuses the exact same builder ABE's perform_simple_anova() uses, so
+  # the underlying model always determines it — never independently recomputed.
+  anova_comprehensive <- NULL
+  subj_seq_analysis <- NULL
+  type3_ss <- NULL
+
   if (anova_model == "fixed") {
     # Fixed effects model: y ~ seq + subj:seq + prd + drug
     model <- lm(y ~ seq + subj:seq + prd + drug, data = model_data, na.action = na.omit)
     model_summary <- summary(model)
     anova_table <- anova(model)
-    
+
     coeffs <- coef(model)
     if (!(drug_coef_name %in% names(coeffs))) {
       stop("Treatment coefficient '", drug_coef_name, "' not found in model")
     }
-    
+
     d_hat <- coeffs[[drug_coef_name]]
     se_d <- model_summary$coefficients[drug_coef_name, "Std. Error"]
     df_d <- anova_table["Residuals", "Df"]
     residual_mse <- anova_table["Residuals", "Mean Sq"]
-    
+
     cat(sprintf("    Fixed model: d̂=%.6f, SE=%.6f, df=%d\n", d_hat, se_d, df_d))
-    
+
+    built <- tryCatch(build_crossover_anova_tables(model), error = function(e) NULL)
+    if (!is.null(built)) {
+      anova_comprehensive <- built$comprehensive_anova
+      subj_seq_analysis <- built$subj_seq_analysis
+    }
+
   } else {
     # Mixed effects model using nlme
-    # Note: RSABE only supports fixed and nlme. If user selected satterthwaite or 
-    # kenward-roger, map to nlme with a warning (RSABE variance estimation uses ISC
-    # not the ANOVA model, so the DF approximation method is less critical here).
+    # Note: RSABE only supports fixed and nlme. If user selected satterthwaite or
+    # kenward-roger, map to nlme with a warning (RSABE's intra-subject reference
+    # variance is estimated via a separate Reference-only ANOVA — see
+    # compute_reference_anova_variance() — not this treatment-effect model, so
+    # the DF approximation method chosen here is less critical).
     if (anova_model %in% c("satterthwaite", "kenward-roger")) {
       cat(sprintf("    ⚠️  RSABE does not support '%s' DF approximation. Using nlme (REML) instead.\n", anova_model))
-      cat("    Note: RSABE variance is estimated via ISC, not from the ANOVA model.\n")
+      cat("    Note: RSABE's s2_wR/CVwR come from a separate Reference-only ANOVA, not this model.\n")
     }
     
     if (!requireNamespace("nlme", quietly = TRUE)) {
@@ -444,13 +463,42 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
     residual_mse <- model_summary$sigma^2
     
     anova_table <- anova(model)
-    
+
+    # Type III (marginal) tests of fixed effects — the mixed-model equivalent of
+    # the fixed branch's comprehensive table above (SAS PROC MIXED "Type 3 Tests
+    # of Fixed Effects"): Sequence, Period, Treatment each with numDF/denDF/F/p.
+    type3_ss <- tryCatch(anova(model, type = "marginal"), error = function(e) anova_table)
+
     cat(sprintf("    Mixed model: d̂=%.6f, SE=%.6f, df=%d\n", d_hat, se_d, df_d))
   }
-  
+
   # Point estimate (geometric mean ratio)
   pe_ratio <- exp(d_hat) * 100  # as percentage
-  
+
+  # Least-squares means for Reference and Test — the population-average log-scale
+  # mean for each treatment from this SAME model, marginalized over seq/period
+  # (and, for the fixed model, the subj:seq nesting) via emmeans. By construction
+  # LSMean(Test) - LSMean(Reference) equals d_hat exactly; this just makes the
+  # two individual means visible (and their geometric-mean back-transforms),
+  # matching how SAS PROC GLM/MIXED reports FORM LSMEANs alongside the estimate.
+  lsmeans_result <- tryCatch({
+    emm <- emmeans::emmeans(model, ~ drug)
+    emm_df <- as.data.frame(emm)
+    drug_levels <- levels(model_data$drug)
+    ref_level <- drug_levels[1]
+    test_level <- drug_levels[2]
+    lsm_ref  <- emm_df$emmean[emm_df$drug == ref_level]
+    lsm_test <- emm_df$emmean[emm_df$drug == test_level]
+    list(
+      ref_level = ref_level, test_level = test_level,
+      lsmean_ref_log = lsm_ref, lsmean_test_log = lsm_test,
+      lsmean_ref_geo = exp(lsm_ref), lsmean_test_geo = exp(lsm_test)
+    )
+  }, error = function(e) {
+    cat(sprintf("    ⚠️  Could not compute LSMeans via emmeans: %s\n", e$message))
+    NULL
+  })
+
   return(list(
     d_hat = d_hat,
     se_d = se_d,
@@ -459,6 +507,10 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
     residual_mse = residual_mse,
     model = model,
     anova_table = anova_table,
+    anova_comprehensive = anova_comprehensive,
+    subj_seq_analysis = subj_seq_analysis,
+    type3_ss = type3_ss,
+    lsmeans_result = lsmeans_result,
     anova_model = anova_model,
     drug_coef_name = drug_coef_name,
     n_observations = nrow(model_data),
@@ -685,8 +737,9 @@ rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
 #' @param d_hat Treatment difference estimate (log-scale: μ_T - μ_R)
 #' @param se_d Standard error of d_hat (from ANOVA)
 #' @param df_d Degrees of freedom for d_hat (from ANOVA, used for CI only)
-#' @param s2_wR Within-subject reference variance (from ISC)
-#' @param df_wR Degrees of freedom for s2_wR (from ISC)
+#' @param s2_wR Within-subject reference variance (from a Reference-only ANOVA;
+#'   see compute_reference_anova_variance())
+#' @param df_wR Degrees of freedom for s2_wR (from the same Reference-only ANOVA)
 #' @param K Design-dependent constant from compute_K_constant()
 #' @param df_nct Degrees of freedom for the noncentral t (from compute_K_constant())
 #' @param alpha Significance level (default 0.05)
@@ -837,9 +890,10 @@ rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
 #' Workflow:
 #'   1. Detect replicate design structure
 #'   2. For each log-transformed PK parameter:
-#'     a. Fit ANOVA model → get d̂, SE_d, df_d
-#'     b. Compute ISC variances → get s²_wR, df_wR
-#'     c. Check switching condition: CV_wR > 30% (s²_wR > s²_w0)
+#'     a. Fit ANOVA model (complete dataset, all subjects) → get d̂, SE_d, df_d
+#'     b. Fit a Reference-only ANOVA (subjects with >=2 Reference periods
+#'        only) → get s²_wR, df_wR — see compute_reference_anova_variance()
+#'     c. Check switching condition: CV_wR ≈ 30% (s_wR ≥ 0.294)
 #'     d. If HV: apply RSABE (scaled limits)
 #'        If not HV: fall back to ABE (fixed 80-125%)
 #'     e. Check point estimate constraint (FDA): PE must be within 80-125%
@@ -996,15 +1050,31 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
       # Step 1: Fit ANOVA model for treatment effect
       model_result <- fit_rsabe_model(analysis_data, log_col_name, anova_model)
       
-      # Step 2: Compute ISC variances
-      isc_result <- compute_isc_variance(analysis_data, log_col_name)
-      
+      # Step 2: Compute intra-subject Reference (and Test) variance via a
+      # Reference-only (Test-only) ANOVA — Sequence + Subject(Sequence) +
+      # Period, fit separately on each arm, restricted to subjects with >= 2
+      # periods of that treatment. Verified to exactly reproduce
+      # replicateBE::method.A()'s own CVwR/CVwT to machine precision on real
+      # data (see R/simple_anova.R's compute_reference_anova_variance()) —
+      # this is the same intra-subject-variance step ABEL uses (via
+      # replicateBE internally), applied directly here since RSABE doesn't
+      # route through replicateBE for its Howe UCB/ncTOST scaling decision.
+      # This REPLACES the previous ISC (individual-subject-contrast) method:
+      # ISC is still available as compute_isc_variance() but is no longer the
+      # primary source — the ANOVA-based estimate is the one FDA/SAS-style
+      # analyses report and the one now used for the switching decision.
+      refvar_result <- compute_reference_anova_variance(analysis_data, log_col_name)
+
       # Step 3: Check switching condition — FDA applies reference scaling only
-      # when s_wR ≥ 0.294 (CV_wR ≈ 30%), NOT at σ_w0 = 0.25 (CV 25.4%).
-      is_hv <- (isc_result$s2_wR >= s2_wR_switch)
+      # when s_wR ≥ 0.294 (CV_wR ≈ 30%), NOT at σ_w0 = 0.25 (CV 25.4%). ONLY
+      # Reference variability determines this — Test variability (s2_wT) is
+      # not part of the switching criterion; it factors into the scaled
+      # criterion/bound computation for heteroscedastic designs (see
+      # compute_K_constant()), which is a separate step below.
+      is_hv <- (refvar_result$s2_wR >= s2_wR_switch)
 
       cat(sprintf("  Switching: s_wR (%.4f) %s cutoff (%.3f) → %s\n",
-                  sqrt(isc_result$s2_wR), ifelse(is_hv, "≥", "<"), s_wR_switch,
+                  sqrt(refvar_result$s2_wR), ifelse(is_hv, "≥", "<"), s_wR_switch,
                   ifelse(is_hv, "HIGH VARIABILITY → Use RSABE", "LOW VARIABILITY → Use ABE")))
       
       if (is_hv) {
@@ -1015,23 +1085,23 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
         if (rsabe_method == "nctost") {
           # ncTOST exact method — per Tóthfalusi & Endrényi (2016)
           # Compute design-dependent constant K and degrees of freedom
-          K_result <- compute_K_constant(design_info, isc_result)
+          K_result <- compute_K_constant(design_info, refvar_result)
           K_val <- K_result$K
           df_nct_val <- K_result$df_nct
           
           # If K could not be computed from design structure, estimate from SE_d / s_wR
           if (is.na(K_val)) {
-            K_val <- model_result$se_d / sqrt(isc_result$s2_wR)
+            K_val <- model_result$se_d / sqrt(refvar_result$s2_wR)
             cat(sprintf("    K estimated from SE_d/s_wR: %.6f / %.6f = %.6f\n",
-                        model_result$se_d, sqrt(isc_result$s2_wR), K_val))
+                        model_result$se_d, sqrt(refvar_result$s2_wR), K_val))
           }
           
           rsabe_test <- rsabe_nctost_test(
             d_hat = model_result$d_hat,
             se_d = model_result$se_d,
             df_d = model_result$df_d,
-            s2_wR = isc_result$s2_wR,
-            df_wR = isc_result$df_wR,
+            s2_wR = refvar_result$s2_wR,
+            df_wR = refvar_result$df_wR,
             K = K_val,
             df_nct = df_nct_val,
             alpha = alpha,
@@ -1049,8 +1119,8 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
             d_hat = model_result$d_hat,
             se_d = model_result$se_d,
             df_d = model_result$df_d,
-            s2_wR = isc_result$s2_wR,
-            df_wR = isc_result$df_wR,
+            s2_wR = refvar_result$s2_wR,
+            df_wR = refvar_result$df_wR,
             alpha = alpha,
             theta_s = theta_s
           )
@@ -1089,8 +1159,8 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
           geometric_mean_ratio = model_result$pe_ratio / 100,
           within_limits = be_pass,
           # RSABE-specific
-          cv_wr = isc_result$cv_wR,
-          cv_wt = isc_result$cv_wT %||% NA,
+          cv_wr = refvar_result$cv_wR,
+          cv_wt = refvar_result$cv_wT %||% NA,
           scaled_lower_limit = scaled_lower,
           scaled_upper_limit = scaled_upper,
           limits_used = list(lower = scaled_lower, upper = scaled_upper, type = "scaled"),
@@ -1098,9 +1168,9 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
           regulator = "FDA",
           degrees_freedom = model_result$df_d,
           n_subjects = model_result$n_subjects,
-          sw_test = if (!is.na(isc_result$s2_wT)) sqrt(isc_result$s2_wT) else NA,
-          sw_reference = sqrt(isc_result$s2_wR),
-          sw_ratio = if (!is.na(isc_result$s2_wT)) sqrt(isc_result$s2_wT / isc_result$s2_wR) else NA,
+          sw_test = if (!is.na(refvar_result$s2_wT)) sqrt(refvar_result$s2_wT) else NA,
+          sw_reference = sqrt(refvar_result$s2_wR),
+          sw_ratio = if (!is.na(refvar_result$s2_wT)) sqrt(refvar_result$s2_wT / refvar_result$s2_wR) else NA,
           # RSABE decision components
           rsabe_scaling = TRUE,
           pe_constraint_pass = pe_within_constraint,
@@ -1110,7 +1180,7 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
         
         rsabe_details[[base_param_name]] <- list(
           rsabe_test = rsabe_test,
-          isc_result = isc_result,
+          refvar_result = refvar_result,
           model_result = model_result,
           is_hv = TRUE,
           pe_constraint_pass = pe_within_constraint,
@@ -1142,8 +1212,8 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
           confidence_level = (1 - 2 * alpha) * 100,
           geometric_mean_ratio = model_result$pe_ratio / 100,
           within_limits = be_pass,
-          cv_wr = isc_result$cv_wR,
-          cv_wt = isc_result$cv_wT %||% NA,
+          cv_wr = refvar_result$cv_wR,
+          cv_wt = refvar_result$cv_wT %||% NA,
           scaled_lower_limit = 80.0,
           scaled_upper_limit = 125.0,
           limits_used = list(lower = 80, upper = 125, type = "fixed"),
@@ -1151,9 +1221,9 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
           regulator = "FDA",
           degrees_freedom = model_result$df_d,
           n_subjects = model_result$n_subjects,
-          sw_test = if (!is.na(isc_result$s2_wT)) sqrt(isc_result$s2_wT) else NA,
-          sw_reference = sqrt(isc_result$s2_wR),
-          sw_ratio = if (!is.na(isc_result$s2_wT)) sqrt(isc_result$s2_wT / isc_result$s2_wR) else NA,
+          sw_test = if (!is.na(refvar_result$s2_wT)) sqrt(refvar_result$s2_wT) else NA,
+          sw_reference = sqrt(refvar_result$s2_wR),
+          sw_ratio = if (!is.na(refvar_result$s2_wT)) sqrt(refvar_result$s2_wT / refvar_result$s2_wR) else NA,
           rsabe_scaling = FALSE,
           pe_constraint_pass = NA,
           rsabe_criterion_pass = NA,
@@ -1162,7 +1232,7 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
         
         rsabe_details[[base_param_name]] <- list(
           rsabe_test = NULL,
-          isc_result = isc_result,
+          refvar_result = refvar_result,
           model_result = model_result,
           is_hv = FALSE,
           pe_constraint_pass = NA,
@@ -1174,18 +1244,35 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
       all_results[[base_param_name]] <- list(
         model = model_result$model,
         anova = model_result$anova_table,
+        # Parallel/accompanying comprehensive ANOVA table (SAS-style Source/DF/SS/MS/F/p
+        # breakdown for fixed; Type III marginal tests for nlme) — alongside, not replacing,
+        # the RSABE-specific Howe UCB/ncTOST scaling decision computed elsewhere in this
+        # function (which uses s2_wR from the Reference-only ANOVA below, not this table).
+        # See build_crossover_anova_tables() in R/simple_anova.R.
+        anova_comprehensive = model_result$anova_comprehensive,
+        subj_seq_analysis = model_result$subj_seq_analysis,
+        type3_ss = model_result$type3_ss,
+        lsmeans_result = model_result$lsmeans_result,
         treatment_coef = model_result$d_hat,
         treatment_se = model_result$se_d,
         residual_mse = model_result$residual_mse,
         residual_df = model_result$df_d,
         n_observations = model_result$n_observations,
         anova_method = model_result$anova_model,
-        cv_wr_percent = isc_result$cv_wR,
-        cv_wt_percent = isc_result$cv_wT %||% NA,
-        s2_wR = isc_result$s2_wR,
-        s2_wT = isc_result$s2_wT,
-        df_wR = isc_result$df_wR,
-        df_wT = isc_result$df_wT
+        cv_wr_percent = refvar_result$cv_wR,
+        cv_wt_percent = refvar_result$cv_wT %||% NA,
+        s2_wR = refvar_result$s2_wR,
+        s2_wT = refvar_result$s2_wT,
+        df_wR = refvar_result$df_wR,
+        df_wT = refvar_result$df_wT,
+        # Reference-only / Test-only ANOVA tables (Sequence + Subject(Sequence) +
+        # Period, no Treatment term) — the actual computation behind cv_wr_percent/
+        # cv_wt_percent above, shown so the user can see the ANOVA that produced
+        # the intra-subject variance, not just the resulting number.
+        anova_wR = refvar_result$anova_wR,
+        anova_wT = refvar_result$anova_wT,
+        n_wR = refvar_result$n_R,
+        n_wT = refvar_result$n_T
       )
       
       conclusion_list[[base_param_name]] <- be_pass
@@ -1207,7 +1294,7 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
       anova_results = all_results,
       design = design_info$design_type,
       parameters = names(all_results),
-      note = sprintf("RSABE analysis using %s with ISC variance estimation", method_label)
+      note = sprintf("RSABE analysis using %s with Reference-only-ANOVA variance estimation", method_label)
     ),
     design_type = design_info$design_type,
     n_subjects = length(unique(data$Subject)),

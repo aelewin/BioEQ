@@ -153,14 +153,18 @@
 }
 
 .format_descr <- function(df) {
+  # NCA parameter values shown at 2 decimal places throughout (matches the SAS
+  # reference output's display convention, and the per-subject listing below —
+  # these were previously inconsistent, showing the same raw values at 4
+  # decimals here but 2 decimals in .section_subject_listing).
   data.frame(
     Variable = df$Variable,
     N = vapply(df$N, .fmt_int, ""),
-    Mean = vapply(df$Mean, .fmt_num, "", digits = 4),
-    `Std Dev` = vapply(df$SD, .fmt_num, "", digits = 4),
-    Minimum = vapply(df$Min, .fmt_num, "", digits = 4),
-    Median = vapply(df$Median, .fmt_num, "", digits = 4),
-    Maximum = vapply(df$Max, .fmt_num, "", digits = 4),
+    Mean = vapply(df$Mean, .fmt_num, "", digits = 2),
+    `Std Dev` = vapply(df$SD, .fmt_num, "", digits = 2),
+    Minimum = vapply(df$Min, .fmt_num, "", digits = 2),
+    Median = vapply(df$Median, .fmt_num, "", digits = 2),
+    Maximum = vapply(df$Max, .fmt_num, "", digits = 2),
     `Coeff of Variation (%)` = vapply(df$CV_pct, .fmt_num, "", digits = 2),
     check.names = FALSE, stringsAsFactors = FALSE
   )

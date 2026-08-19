@@ -482,9 +482,7 @@ validation_server <- function(input, output, session) {
     if (is.null(res)) {
       return(div(class = "validation-summary-box",
                  em("No validation runs yet. Click ",
-                    strong("Run Complete Validation Set"),
-                    " or select datasets from the table and click ",
-                    strong("Run Selected Datasets"), ".")))
+                    strong("Run Validation Data Sets"), ".")))
     }
     overall <- vapply(res, function(r) r$overall %||% "NOT_RUN", character(1))
     n_pass  <- sum(overall == "PASS")

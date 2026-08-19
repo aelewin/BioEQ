@@ -693,19 +693,44 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       # the same y ~ seq + subj:seq + prd + drug (fixed) or
       # y ~ seq + prd + drug, random=~1|subj (mixed) model on log-scale PK.
       # ---------------------------------------------------------------
+      log_col <- ".log_pk_for_anova"
+      anova_input <- data
+      anova_input[[log_col]] <- if (data_is_logged) {
+        as.numeric(data[[param_to_use]])
+      } else {
+        log(as.numeric(data[[param_to_use]]))
+      }
       real_anova <- tryCatch({
-        log_col <- ".log_pk_for_anova"
-        anova_input <- data
-        anova_input[[log_col]] <- if (data_is_logged) {
-          as.numeric(data[[param_to_use]])
-        } else {
-          log(as.numeric(data[[param_to_use]]))
-        }
         fit_rsabe_model(anova_input, log_col, anova_model = if (use_method_a) "fixed" else "nlme")
       }, error = function(e) {
         cat(sprintf("  ⚠ Could not fit independent ANOVA model for %s: %s\n", base_param_name, e$message))
         NULL
       })
+
+      # ---------------------------------------------------------------
+      # Reference-only (and Test-only) ANOVA — the same intra-subject-variance
+      # step RSABE uses (compute_reference_anova_variance(), Sequence +
+      # Subject(Sequence) + Period fit only on subjects with >= 2 periods of
+      # that treatment). replicateBE's own CVwR/CVwT above remain the
+      # authoritative numbers (replicateBE is the validated, published EMA
+      # Method A/B implementation) — this is purely a cross-check + the
+      # actual ANOVA table for display, since replicateBE's method.A()/
+      # method.B() don't expose their internal SS decomposition. If the two
+      # disagree beyond rounding, that's flagged rather than silently
+      # overriding replicateBE's number.
+      refvar_result <- tryCatch({
+        compute_reference_anova_variance(anova_input, log_col)
+      }, error = function(e) {
+        cat(sprintf("  ⚠ Could not fit reference-only ANOVA for %s: %s\n", base_param_name, e$message))
+        NULL
+      })
+      if (!is.null(refvar_result) && !is.na(refvar_result$cv_wR)) {
+        cv_wr_check <- abel_result[1, "CVwR(%)"]
+        if (!is.na(cv_wr_check) && abs(refvar_result$cv_wR - cv_wr_check) > 0.05) {
+          cat(sprintf("  ⚠ Reference-only-ANOVA CVwR (%.4f%%) disagrees with replicateBE's CVwR (%.4f%%) for %s — using replicateBE's (authoritative).\n",
+                      refvar_result$cv_wR, cv_wr_check, base_param_name))
+        }
+      }
 
       # Extract ANOVA-related information from replicateBE output
       # These will be used to populate ANOVA results display
@@ -777,7 +802,15 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         cv_wr_percent = cv_wr,
         cv_wt_percent = cv_wt,
         replicatebe_output = abel_result[1, ],  # Store full replicateBE output row
-        data_was_logged = data_is_logged  # Track whether we used pre-logged data
+        data_was_logged = data_is_logged,  # Track whether we used pre-logged data
+        # Reference-only / Test-only ANOVA (Sequence + Subject(Sequence) + Period,
+        # subjects with >=2 periods of that treatment only) — the actual ANOVA
+        # behind CVwR/CVwT above (replicateBE's own numbers remain authoritative;
+        # see compute_reference_anova_variance() cross-check above).
+        anova_wR = if (!is.null(refvar_result)) refvar_result$anova_wR else NULL,
+        anova_wT = if (!is.null(refvar_result)) refvar_result$anova_wT else NULL,
+        n_wR = if (!is.null(refvar_result)) refvar_result$n_R else NA,
+        n_wT = if (!is.null(refvar_result)) refvar_result$n_T else NA
       )
       
       conclusion_list[[base_param_name]] <- be_pass

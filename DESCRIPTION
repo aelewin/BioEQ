@@ -35,6 +35,7 @@ Imports:
     scales,
     lme4,
     lmerTest,
+    emmeans,
     PowerTOST,
     digest,
     zip

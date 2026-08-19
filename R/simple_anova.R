@@ -45,6 +45,315 @@ detect_anova_design <- function(nca_data) {
   }
 }
 
+#' Build SAS-style comprehensive ANOVA tables for a fixed-effects 2x2 crossover model
+#'
+#' Given an `lm(y ~ seq + subj:seq + prd + drug, ...)` fit — the standard fixed-effects
+#' crossover model shared by ABE (`perform_simple_anova`) and RSABE
+#' (`fit_rsabe_model` in R/rsabe_analysis.R) — builds the SAS PROC GLM Type III
+#' Source/DF/Sum-Sq/Mean-Sq/F/Pr(>F) breakdown (Sequence, Subject(Sequence), Period,
+#' Treatment, Residual — all tested against Residual MS, matching SAS's default) plus
+#' the "Tests of Hypotheses Using the Type III MS for Subject(Seq) as Error Term"
+#' table (Sequence tested against the between-subject Subject(Sequence) MS instead).
+#'
+#' Extracted from `perform_simple_anova()`'s fixed-effects branch so RSABE can reuse
+#' the exact same SAS-style decomposition on its own already-fit model, instead of
+#' only ever showing a plain Type I `anova()` table. Pure refactor — behavior for
+#' `perform_simple_anova()` callers is unchanged.
+#'
+#' @param model An `lm` object fit as `y ~ seq + subj:seq + prd + drug`
+#' @param type3_ss Optional pre-computed `drop1(model, test = "F")` result (avoids
+#'   recomputing it when the caller already has one); computed internally if omitted.
+#' @return list(comprehensive_anova = data.frame, subj_seq_analysis = list), or NULL
+#'   if the model's ANOVA row names don't match the expected crossover shape (caller
+#'   should fall back to a generic Model/Error/Corrected-Total summary in that case).
+#' @export
+build_crossover_anova_tables <- function(model, type3_ss = NULL) {
+  anova_table <- tryCatch(anova(model), error = function(e) NULL)
+  if (is.null(anova_table)) return(NULL)
+  if (is.null(type3_ss)) {
+    type3_ss <- tryCatch(drop1(model, test = "F"), error = function(e) NULL)
+  }
+  if (is.null(type3_ss)) return(NULL)
+
+  at_rows      <- rownames(anova_table)
+  seq_row      <- at_rows[at_rows == "seq"]
+  subj_seq_row <- at_rows[grepl("subj.*seq|seq.*subj", at_rows) & at_rows != "seq"]
+  prd_row      <- at_rows[at_rows == "prd"]
+  drug_row     <- at_rows[grepl("^drug", at_rows)]
+  resid_row    <- at_rows[grepl("^Resid", at_rows)]
+
+  if (!(length(seq_row) == 1 && length(subj_seq_row) == 1 &&
+        length(prd_row) == 1 && length(drug_row) == 1 && length(resid_row) == 1)) {
+    return(NULL)
+  }
+
+  # ── Type III (partial/marginal) SS — matches SAS PROC GLM Type III output ──
+  # For subj:seq, prd, drug: extract from drop1() (marginal contribution of each
+  # term after adjusting for all others).
+  # For seq: seq cannot be dropped by drop1() because subj:seq depends on it;
+  # instead derive F from the full-model t-statistic (F = t^2 for 1-DF effect).
+  ss3_seq  <- NA_real_
+  ss3_subj <- NA_real_
+  ss3_prd  <- NA_real_
+  ss3_drug <- NA_real_
+
+  tryCatch({
+    drop1_df   <- as.data.frame(type3_ss)
+    drop1_rows <- rownames(drop1_df)
+
+    sub_r  <- drop1_rows[grepl("subj.*seq|seq.*subj", drop1_rows) & drop1_rows != "<none>"]
+    prd_r  <- drop1_rows[drop1_rows == "prd"]
+    drug_r <- drop1_rows[grepl("^drug", drop1_rows)]
+
+    if (length(sub_r)  == 1) ss3_subj <- drop1_df[sub_r,  "Sum of Sq"]
+    if (length(prd_r)  == 1) ss3_prd  <- drop1_df[prd_r,  "Sum of Sq"]
+    if (length(drug_r) == 1) ss3_drug <- drop1_df[drug_r, "Sum of Sq"]
+  }, error = function(e) NULL)
+
+  # Type III SS for seq via full-model t-statistic (F = t^2 for 1 DF)
+  tryCatch({
+    cs <- summary(model)$coefficients
+    seq_coef_rows <- grep("^seq[^:]", rownames(cs), value = TRUE)
+    if (length(seq_coef_rows) == 1) {
+      t_seq_val <- cs[seq_coef_rows, "t value"]
+      ms_resid_tmp <- anova_table[resid_row, "Mean Sq"]
+      ss3_seq <- t_seq_val^2 * ms_resid_tmp  # 1 DF
+    }
+  }, error = function(e) NULL)
+
+  # Fallback to Type I SS for any term where Type III could not be computed
+  if (is.na(ss3_seq))  ss3_seq  <- anova_table[seq_row,      "Sum Sq"]
+  if (is.na(ss3_subj)) ss3_subj <- anova_table[subj_seq_row, "Sum Sq"]
+  if (is.na(ss3_prd))  ss3_prd  <- anova_table[prd_row,      "Sum Sq"]
+  if (is.na(ss3_drug)) ss3_drug <- anova_table[drug_row,     "Sum Sq"]
+
+  # Degrees of freedom (same as Type I; only SS changes)
+  df_seq      <- anova_table[seq_row,      "Df"]
+  df_subj_seq <- anova_table[subj_seq_row, "Df"]
+  df_prd      <- anova_table[prd_row,      "Df"]
+  df_drug     <- anova_table[drug_row,     "Df"]
+  df_resid    <- anova_table[resid_row,    "Df"]
+  ss_resid    <- anova_table[resid_row,    "Sum Sq"]
+  ms_resid    <- anova_table[resid_row,    "Mean Sq"]
+
+  ms_seq      <- ss3_seq  / df_seq
+  ms_subj_seq <- ss3_subj / df_subj_seq
+  ms_prd      <- ss3_prd  / df_prd
+  ms_drug     <- ss3_drug / df_drug
+
+  # Main ANOVA table: ALL effects tested against Residual MS (SAS PROC GLM default)
+  f_seq_main  <- ms_seq      / ms_resid
+  f_subj_main <- ms_subj_seq / ms_resid
+  f_prd_main  <- ms_prd      / ms_resid
+  f_drug_main <- ms_drug     / ms_resid
+  p_seq_main  <- pf(f_seq_main,  df_seq,      df_resid, lower.tail = FALSE)
+  p_subj_main <- pf(f_subj_main, df_subj_seq, df_resid, lower.tail = FALSE)
+  p_prd_main  <- pf(f_prd_main,  df_prd,      df_resid, lower.tail = FALSE)
+  p_drug_main <- pf(f_drug_main, df_drug,     df_resid, lower.tail = FALSE)
+
+  comprehensive_anova <- data.frame(
+    Source = c("Sequence", "Subject(Sequence)", "Period", "Treatment", "Residual"),
+    Df = c(df_seq, df_subj_seq, df_prd, df_drug, df_resid),
+    `Sum Sq` = c(ss3_seq, ss3_subj, ss3_prd, ss3_drug, ss_resid),
+    `Mean Sq` = c(ms_seq, ms_subj_seq, ms_prd, ms_drug, ms_resid),
+    `F value` = c(f_seq_main, f_subj_main, f_prd_main, f_drug_main, NA),
+    `Pr(>F)`  = c(p_seq_main, p_subj_main, p_prd_main, p_drug_main, NA),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  rownames(comprehensive_anova) <- comprehensive_anova$Source
+
+  # Second table: "Tests of Hypotheses Using the Type III MS for Subject(Seq) as Error Term"
+  # Seq tested against Subject(Sequence) MS (between-subject error)
+  f_seq_vs_subj <- ms_seq / ms_subj_seq
+  p_seq_vs_subj <- pf(f_seq_vs_subj, df_seq, df_subj_seq, lower.tail = FALSE)
+
+  subj_seq_analysis <- list(
+    error_term = list(
+      df = df_subj_seq,
+      ss = ss3_subj,
+      ms = ms_subj_seq
+    ),
+    hypothesis_tests = list(
+      seq = list(
+        df      = df_seq,
+        ss      = ss3_seq,
+        ms      = ms_seq,
+        f_value = f_seq_vs_subj,
+        p_value = p_seq_vs_subj
+      )
+    )
+  )
+
+  list(comprehensive_anova = comprehensive_anova, subj_seq_analysis = subj_seq_analysis)
+}
+
+#' Build a Sequence + Subject(Sequence) + Period ANOVA table for a single-arm
+#' (Reference-only or Test-only) fixed-effects model
+#'
+#' Same Type III SAS-style construction as build_crossover_anova_tables(), but
+#' for a model with no Treatment term (`y ~ seq + subj:seq + prd`), fit on just
+#' one treatment arm's rows. Used to build the intra-subject variance ANOVA
+#' table alongside compute_reference_anova_variance().
+#'
+#' @param model An `lm` object fit as `y ~ seq + subj:seq + prd`
+#' @return A Source/Df/Sum Sq/Mean Sq/F value/Pr(>F) data.frame (Sequence,
+#'   Subject(Sequence), Period, Residual), or NULL if the model's row names
+#'   don't match the expected single-arm crossover shape.
+#' @export
+build_single_arm_anova_table <- function(model) {
+  anova_table <- tryCatch(anova(model), error = function(e) NULL)
+  if (is.null(anova_table)) return(NULL)
+  type3_ss <- tryCatch(drop1(model, test = "F"), error = function(e) NULL)
+
+  at_rows      <- rownames(anova_table)
+  seq_row      <- at_rows[at_rows == "seq"]
+  subj_seq_row <- at_rows[grepl("subj.*seq|seq.*subj", at_rows) & at_rows != "seq"]
+  prd_row      <- at_rows[at_rows == "prd"]
+  resid_row    <- at_rows[grepl("^Resid", at_rows)]
+
+  if (!(length(seq_row) == 1 && length(subj_seq_row) == 1 &&
+        length(prd_row) == 1 && length(resid_row) == 1)) {
+    return(NULL)
+  }
+
+  ss3_seq  <- NA_real_
+  ss3_subj <- NA_real_
+  ss3_prd  <- NA_real_
+
+  if (!is.null(type3_ss)) {
+    tryCatch({
+      drop1_df   <- as.data.frame(type3_ss)
+      drop1_rows <- rownames(drop1_df)
+      sub_r <- drop1_rows[grepl("subj.*seq|seq.*subj", drop1_rows) & drop1_rows != "<none>"]
+      prd_r <- drop1_rows[drop1_rows == "prd"]
+      if (length(sub_r) == 1) ss3_subj <- drop1_df[sub_r, "Sum of Sq"]
+      if (length(prd_r) == 1) ss3_prd  <- drop1_df[prd_r, "Sum of Sq"]
+    }, error = function(e) NULL)
+  }
+
+  # Type III SS for seq via full-model t-statistic (F = t^2 for 1 DF) — same
+  # trick as build_crossover_anova_tables(), needed since drop1() can't drop
+  # seq while subj:seq depends on it.
+  tryCatch({
+    cs <- summary(model)$coefficients
+    seq_coef_rows <- grep("^seq[^:]", rownames(cs), value = TRUE)
+    if (length(seq_coef_rows) == 1) {
+      t_seq_val <- cs[seq_coef_rows, "t value"]
+      ms_resid_tmp <- anova_table[resid_row, "Mean Sq"]
+      ss3_seq <- t_seq_val^2 * ms_resid_tmp
+    }
+  }, error = function(e) NULL)
+
+  if (is.na(ss3_seq))  ss3_seq  <- anova_table[seq_row,      "Sum Sq"]
+  if (is.na(ss3_subj)) ss3_subj <- anova_table[subj_seq_row, "Sum Sq"]
+  if (is.na(ss3_prd))  ss3_prd  <- anova_table[prd_row,      "Sum Sq"]
+
+  df_seq      <- anova_table[seq_row,      "Df"]
+  df_subj_seq <- anova_table[subj_seq_row, "Df"]
+  df_prd      <- anova_table[prd_row,      "Df"]
+  df_resid    <- anova_table[resid_row,    "Df"]
+  ss_resid    <- anova_table[resid_row,    "Sum Sq"]
+  ms_resid    <- anova_table[resid_row,    "Mean Sq"]
+
+  ms_seq      <- ss3_seq  / df_seq
+  ms_subj_seq <- ss3_subj / df_subj_seq
+  ms_prd      <- ss3_prd  / df_prd
+
+  f_seq  <- ms_seq      / ms_resid
+  f_subj <- ms_subj_seq / ms_resid
+  f_prd  <- ms_prd      / ms_resid
+  p_seq  <- pf(f_seq,  df_seq,      df_resid, lower.tail = FALSE)
+  p_subj <- pf(f_subj, df_subj_seq, df_resid, lower.tail = FALSE)
+  p_prd  <- pf(f_prd,  df_prd,      df_resid, lower.tail = FALSE)
+
+  out <- data.frame(
+    Source = c("Sequence", "Subject(Sequence)", "Period", "Residual"),
+    Df = c(df_seq, df_subj_seq, df_prd, df_resid),
+    `Sum Sq` = c(ss3_seq, ss3_subj, ss3_prd, ss_resid),
+    `Mean Sq` = c(ms_seq, ms_subj_seq, ms_prd, ms_resid),
+    `F value` = c(f_seq, f_subj, f_prd, NA),
+    `Pr(>F)`  = c(p_seq, p_subj, p_prd, NA),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  rownames(out) <- out$Source
+  out
+}
+
+#' Compute intra-subject (Reference and Test) variance via a reference-only /
+#' test-only ANOVA — the SAS PROC GLM / EMA Method A approach
+#'
+#' Fits `y ~ seq + subj:seq + prd` (Sequence + Subject(Sequence) + Period, NO
+#' Treatment term — there's only one treatment in each arm) separately on the
+#' Reference-arm rows and the Test-arm rows, restricted in each case to
+#' subjects with >= 2 periods of that treatment (a within-subject variance
+#' component cannot be estimated from a single observation — same requirement
+#' RSABE's ISC method already enforces). The residual mean square of each
+#' fit is s²_w for that arm; CV_w = sqrt(exp(s²_w) - 1) * 100.
+#'
+#' This is the SAME intra-subject-variance step ABEL and RSABE both need
+#' (only the downstream decision — expanded ABEL limits vs. RSABE's Howe UCB/
+#' ncTOST criterion — differs by design). The COMPLETE dataset (all subjects,
+#' every period) is used separately, for the treatment-effect ANOVA — see
+#' build_crossover_anova_tables() — never for this variance step.
+#'
+#' @param data Data frame with Subject, Treatment, Period, Sequence, and the
+#'   (log-transformed) parameter column
+#' @param param_col Name of the log-transformed parameter column
+#' @return list(s2_wR, cv_wR, df_wR, n_R, anova_wR, ref_subjects,
+#'              s2_wT, cv_wT, df_wT, n_T, anova_wT, test_subjects)
+#'   s2_w*/cv_w*/df_w* are NA and anova_w* is NULL for an arm with fewer than
+#'   2 qualifying subjects.
+#' @export
+compute_reference_anova_variance <- function(data, param_col) {
+
+  fit_one_arm <- function(arm_data) {
+    arm_data$Subject <- as.character(arm_data$Subject)
+    arm_data <- arm_data[!is.na(arm_data[[param_col]]), ]
+    counts <- table(arm_data$Subject)
+    qualifying <- names(counts)[counts >= 2]
+
+    result <- list(s2_w = NA_real_, cv_w = NA_real_, df_w = NA_real_,
+                    n = length(qualifying), anova = NULL, subjects = qualifying)
+
+    if (length(qualifying) < 2) return(result)
+
+    sub <- arm_data[arm_data$Subject %in% qualifying, ]
+    sub$subj <- as.factor(sub$Subject)
+    sub$seq  <- as.factor(sub$Sequence)
+    sub$prd  <- as.factor(sub$Period)
+    sub$y    <- sub[[param_col]]
+
+    model <- tryCatch(lm(y ~ seq + subj:seq + prd, data = sub, na.action = na.omit),
+                       error = function(e) NULL)
+    if (is.null(model)) return(result)
+
+    at <- tryCatch(anova(model), error = function(e) NULL)
+    if (is.null(at) || !("Residuals" %in% rownames(at))) return(result)
+
+    s2_w <- at["Residuals", "Mean Sq"]
+    df_w <- at["Residuals", "Df"]
+    cv_w <- sqrt(exp(s2_w) - 1) * 100
+
+    result$s2_w  <- s2_w
+    result$df_w  <- df_w
+    result$cv_w  <- cv_w
+    result$anova <- tryCatch(build_single_arm_anova_table(model), error = function(e) NULL)
+    result
+  }
+
+  ref  <- fit_one_arm(data[data$Treatment == "R", ])
+  test <- fit_one_arm(data[data$Treatment == "T", ])
+
+  list(
+    s2_wR = ref$s2_w,  cv_wR = ref$cv_w,  df_wR = ref$df_w,  n_R = ref$n,
+    anova_wR = ref$anova, ref_subjects = ref$subjects,
+    s2_wT = test$s2_w, cv_wT = test$cv_w, df_wT = test$df_w, n_T = test$n,
+    anova_wT = test$anova, test_subjects = test$subjects
+  )
+}
+
 #'
 perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", random_effects = "(1|subject)",
                                 include_group_fixed = FALSE, include_group_random = FALSE, 
@@ -310,118 +619,14 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           
           # Build SAS-style source-level ANOVA table for crossover; generic fallback otherwise
           if (study_design == "crossover" && !has_groups) {
-            at_rows      <- rownames(anova_table)
-            seq_row      <- at_rows[at_rows == "seq"]
-            subj_seq_row <- at_rows[grepl("subj.*seq|seq.*subj", at_rows) & at_rows != "seq"]
-            prd_row      <- at_rows[at_rows == "prd"]
-            drug_row     <- at_rows[grepl("^drug", at_rows)]
-            resid_row    <- at_rows[grepl("^Resid", at_rows)]
-
-            if (length(seq_row) == 1 && length(subj_seq_row) == 1 &&
-                length(prd_row) == 1 && length(drug_row) == 1 && length(resid_row) == 1) {
-
-              # ── Type III (partial/marginal) SS — matches SAS PROC GLM Type III output ──
-              # For subj:seq, prd, drug: extract from drop1() (marginal contribution of each
-              # term after adjusting for all others).
-              # For seq: seq cannot be dropped by drop1() because subj:seq depends on it;
-              # instead derive F from the full-model t-statistic (F = t^2 for 1-DF effect).
-              ss3_seq  <- NA_real_
-              ss3_subj <- NA_real_
-              ss3_prd  <- NA_real_
-              ss3_drug <- NA_real_
-
-              tryCatch({
-                drop1_df   <- as.data.frame(type3_ss)
-                drop1_rows <- rownames(drop1_df)
-
-                sub_r  <- drop1_rows[grepl("subj.*seq|seq.*subj", drop1_rows) & drop1_rows != "<none>"]
-                prd_r  <- drop1_rows[drop1_rows == "prd"]
-                drug_r <- drop1_rows[grepl("^drug", drop1_rows)]
-
-                if (length(sub_r)  == 1) ss3_subj <- drop1_df[sub_r,  "Sum of Sq"]
-                if (length(prd_r)  == 1) ss3_prd  <- drop1_df[prd_r,  "Sum of Sq"]
-                if (length(drug_r) == 1) ss3_drug <- drop1_df[drug_r, "Sum of Sq"]
-              }, error = function(e) NULL)
-
-              # Type III SS for seq via full-model t-statistic (F = t^2 for 1 DF)
-              tryCatch({
-                cs <- summary(model)$coefficients
-                seq_coef_rows <- grep("^seq[^:]", rownames(cs), value = TRUE)
-                if (length(seq_coef_rows) == 1) {
-                  t_seq_val <- cs[seq_coef_rows, "t value"]
-                  ms_resid_tmp <- anova_table[resid_row, "Mean Sq"]
-                  ss3_seq <- t_seq_val^2 * ms_resid_tmp  # 1 DF
-                }
-              }, error = function(e) NULL)
-
-              # Fallback to Type I SS for any term where Type III could not be computed
-              if (is.na(ss3_seq))  ss3_seq  <- anova_table[seq_row,      "Sum Sq"]
-              if (is.na(ss3_subj)) ss3_subj <- anova_table[subj_seq_row, "Sum Sq"]
-              if (is.na(ss3_prd))  ss3_prd  <- anova_table[prd_row,      "Sum Sq"]
-              if (is.na(ss3_drug)) ss3_drug <- anova_table[drug_row,     "Sum Sq"]
-
-              # Degrees of freedom (same as Type I; only SS changes)
-              df_seq      <- anova_table[seq_row,      "Df"]
-              df_subj_seq <- anova_table[subj_seq_row, "Df"]
-              df_prd      <- anova_table[prd_row,      "Df"]
-              df_drug     <- anova_table[drug_row,     "Df"]
-              df_resid    <- anova_table[resid_row,    "Df"]
-              ss_resid    <- anova_table[resid_row,    "Sum Sq"]
-              ms_resid    <- anova_table[resid_row,    "Mean Sq"]
-
-              ms_seq      <- ss3_seq  / df_seq
-              ms_subj_seq <- ss3_subj / df_subj_seq
-              ms_prd      <- ss3_prd  / df_prd
-              ms_drug     <- ss3_drug / df_drug
-
-              # Main ANOVA table: ALL effects tested against Residual MS (SAS PROC GLM default)
-              f_seq_main  <- ms_seq      / ms_resid
-              f_subj_main <- ms_subj_seq / ms_resid
-              f_prd_main  <- ms_prd      / ms_resid
-              f_drug_main <- ms_drug     / ms_resid
-              p_seq_main  <- pf(f_seq_main,  df_seq,      df_resid, lower.tail = FALSE)
-              p_subj_main <- pf(f_subj_main, df_subj_seq, df_resid, lower.tail = FALSE)
-              p_prd_main  <- pf(f_prd_main,  df_prd,      df_resid, lower.tail = FALSE)
-              p_drug_main <- pf(f_drug_main, df_drug,     df_resid, lower.tail = FALSE)
-
-              comprehensive_anova <- data.frame(
-                Source = c("Sequence", "Subject(Sequence)", "Period", "Treatment", "Residual"),
-                Df = c(df_seq, df_subj_seq, df_prd, df_drug, df_resid),
-                `Sum Sq` = c(ss3_seq, ss3_subj, ss3_prd, ss3_drug, ss_resid),
-                `Mean Sq` = c(ms_seq, ms_subj_seq, ms_prd, ms_drug, ms_resid),
-                `F value` = c(f_seq_main, f_subj_main, f_prd_main, f_drug_main, NA),
-                `Pr(>F)`  = c(p_seq_main, p_subj_main, p_prd_main, p_drug_main, NA),
-                check.names = FALSE,
-                stringsAsFactors = FALSE
-              )
-              rownames(comprehensive_anova) <- comprehensive_anova$Source
-
-              # Second table: "Tests of Hypotheses Using the Type III MS for Subject(Seq) as Error Term"
-              # Seq tested against Subject(Sequence) MS (between-subject error)
-              f_seq_vs_subj <- ms_seq / ms_subj_seq
-              p_seq_vs_subj <- pf(f_seq_vs_subj, df_seq, df_subj_seq, lower.tail = FALSE)
-
-              subj_seq_analysis <- list(
-                error_term = list(
-                  df = df_subj_seq,
-                  ss = ss3_subj,
-                  ms = ms_subj_seq
-                ),
-                hypothesis_tests = list(
-                  seq = list(
-                    df      = df_seq,
-                    ss      = ss3_seq,
-                    ms      = ms_seq,
-                    f_value = f_seq_vs_subj,
-                    p_value = p_seq_vs_subj
-                  )
-                )
-              )
-
+            built <- build_crossover_anova_tables(model, type3_ss)
+            if (!is.null(built)) {
+              comprehensive_anova <- built$comprehensive_anova
+              subj_seq_analysis   <- built$subj_seq_analysis
             } else {
               # Unexpected row names: fall back to generic 3-row summary
               cat(sprintf("  ⚠️  Expected crossover ANOVA rows not found (rows: %s); using generic summary\n",
-                          paste(at_rows, collapse = ", ")))
+                          paste(rownames(anova_table), collapse = ", ")))
               comprehensive_anova <- data.frame(
                 Source = c("Model", "Error", "Corrected Total"),
                 Df = c(

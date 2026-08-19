@@ -36,6 +36,7 @@ required_packages <- c(
   "nlme",
   "lme4",
   "lmerTest",
+  "emmeans",
   "replicateBE",
   "PowerTOST",
   # Utilities

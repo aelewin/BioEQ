@@ -1132,9 +1132,9 @@ observeEvent(input$run_analysis, {
           
           data.frame(
             Parameter = param,
-            Test_Mean = round(mean(test_vals), 4),
-            Reference_Mean = round(mean(ref_vals), 4),
-            CV_percent = round(cv_pct, 1),
+            Test_Mean = round(mean(test_vals), 2),
+            Reference_Mean = round(mean(ref_vals), 2),
+            CV_percent = round(cv_pct, 2),
             Method = method_label,
             stringsAsFactors = FALSE
           )
