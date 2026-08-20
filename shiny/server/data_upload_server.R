@@ -483,8 +483,11 @@ observeEvent(input$data_file, {
               $('.progress-step:nth-child(2)').addClass('active');
             ")
           }
-          
-          showNotification("Data uploaded successfully!", type = "message", duration = 3)
+          # No separate "Data uploaded successfully!" toast — the
+          # withProgress() bar above already walks through each step to
+          # "Finalizing...", and the column-mapping UI appearing right after
+          # is itself the completion signal. A second toast on top of that
+          # was pure duplication.
       } else {
         values$uploaded_data <- NULL
         values$data_summary <- NULL

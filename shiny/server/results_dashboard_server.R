@@ -1539,6 +1539,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               display_data[[col]] <- ifelse(display_data[[col]] < 0.001,
                                            formatC(display_data[[col]], format = "e", digits = 2),
                                            round(display_data[[col]], 4))
+            } else if (grepl("^ln", col, ignore.case = TRUE)) {
+              # ln-transformed columns (lnCmax, lnAUC0t, ...) get 4 decimals —
+              # normal-scale NCA values stay at 2 (matches the SAS reference
+              # output's display convention).
+              display_data[[col]] <- round(display_data[[col]], 4)
             } else {
               # Round NCA parameter values to 2 decimal places (matches the SAS
               # reference output's display convention, and standardizes this
@@ -3344,18 +3349,23 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
 
       ind <- d$individual
 
+      # ln-transformed (log scale) values get 4 decimals; normal-scale values
+      # stay capped at 2 — the log values are typically small (e.g. ~0.05-0.5)
+      # where 2 decimals loses meaningful precision.
+      value_digits <- if (d$scale == "log") 4 else 2
+
       if (d$is_replicate) {
         display <- ind[, c("Subject", "T1", "T2", "T_mean",
                             "R1", "R2", "R_mean", "Ratio"),
                         drop = FALSE]
-        display[, -1] <- lapply(display[, -1], function(x) round(x, 2))
+        display[, -1] <- lapply(display[, -1], function(x) round(x, value_digits))
         col_names <- c("Subject", "T1", "T2", "T mean",
                         "R1", "R2", "R mean",
                         if (d$scale == "log") "ln(T) − ln(R)" else "T/R Ratio")
       } else {
         display <- ind[, c("Subject", "Test", "Reference", "Ratio"),
                         drop = FALSE]
-        display[, -1] <- lapply(display[, -1], function(x) round(x, 2))
+        display[, -1] <- lapply(display[, -1], function(x) round(x, value_digits))
         col_names <- c("Subject",
                         if (d$scale == "log") "ln(Test)"      else "Test",
                         if (d$scale == "log") "ln(Reference)" else "Reference",
@@ -3371,7 +3381,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         rownames = FALSE,
         colnames = col_names
       ) %>%
-        DT::formatRound(columns = setdiff(names(display), "Subject"), digits = 2)
+        DT::formatRound(columns = setdiff(names(display), "Subject"), digits = value_digits)
     })
 
     output$be_comp_overall_summary <- renderUI({
@@ -3466,7 +3476,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         if (is.null(x) || is.na(x) || !is.finite(x)) return("—")
         sprintf("%.2f%%", x * 100)
       }
-      fmt_ln <- function(x, digits = 2) {
+      fmt_ln <- function(x, digits = 4) {
         if (is.null(x) || is.na(x) || !is.finite(x)) return("—")
         formatC(x, format = "f", digits = digits, big.mark = ",")
       }

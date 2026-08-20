@@ -1464,11 +1464,13 @@ observeEvent(input$run_analysis, {
   
   shinyjs::hide("analysis_progress")
   updateTabItems(session, "sidebar", "results")
-  
-  # Show success notification only if analysis actually completed
-  if (isTRUE(values$analysis_complete)) {
-    showNotification("Analysis completed successfully!", type = "default", duration = 5)
-  }
+
+  # No separate "Analysis completed successfully!" toast here — the
+  # withProgress() bar above already walks through each step and reaches
+  # 100% ("Generating comprehensive results...") right before this point,
+  # and navigating to the Results tab is itself a clear completion signal.
+  # A second toast on top of that was pure duplication (two overlapping
+  # "done" popups for one action).
 })
 
 # Custom template saving

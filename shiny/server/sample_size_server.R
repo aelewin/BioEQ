@@ -69,16 +69,23 @@ observeEvent(input$ss_method, {
     )
     selected_design <- "2x3x3"
   } else if (method == "NTID") {
+    # Unlike ABEL/RSABE, NTID isn't restricted to replicate designs: FDA's
+    # reference-scaled approach (sampleN.NTID) needs a replicate design, but
+    # Parallel/2x2x2 are still valid under the EMA approach \u2014 a standard,
+    # unscaled calculation against a fixed, narrowed acceptance range. See
+    # the ss_design observer below, which sets theta1/theta2 accordingly.
     design_choices <- list(
-      "2\u00d72\u00d74 Full Replicate" = "2x2x4",
+      "2\u00d72\u00d72 Crossover (TR|RT)" = "2x2x2",
+      "Parallel" = "parallel",
       "2\u00d72\u00d73 Replicate" = "2x2x3",
+      "2\u00d72\u00d74 Full Replicate" = "2x2x4",
       "2\u00d73\u00d73 Partial Replicate" = "2x3x3"
     )
     selected_design <- "2x2x4"
   }
-  
+
   updateSelectInput(session, "ss_design", choices = design_choices, selected = selected_design)
-  
+
   # Update theta0 defaults per method
   if (method == "ABE") {
     updateNumericInput(session, "ss_theta0", value = 0.95)
@@ -90,10 +97,29 @@ observeEvent(input$ss_method, {
     updateNumericInput(session, "ss_theta2", value = 1.25)
   } else if (method == "NTID") {
     updateNumericInput(session, "ss_theta0", value = 0.975)
+    # selected_design defaults to "2x2x4" (replicate) above -> standard 80-125%.
+    # If the user then switches to Parallel/2x2x2, the observer below narrows
+    # these to the EMA 90-111% range.
     updateNumericInput(session, "ss_theta1", value = 0.80)
     updateNumericInput(session, "ss_theta2", value = 1.25)
   }
 })
+
+# \u2500\u2500 NTID: narrow BE limits to the EMA 90-111% range for non-replicate
+# designs (Parallel/2x2x2), since FDA's reference-scaled approach \u2014 and its
+# standard 80-125% point-estimate constraint \u2014 only applies when a
+# replicate design is available to estimate reference variability. \u2500\u2500
+observeEvent(input$ss_design, {
+  if (!identical(input$ss_method, "NTID")) return()
+  is_replicate_design <- input$ss_design %in% c("2x2x3", "2x2x4", "2x3x3")
+  if (is_replicate_design) {
+    updateNumericInput(session, "ss_theta1", value = 0.80)
+    updateNumericInput(session, "ss_theta2", value = 1.25)
+  } else {
+    updateNumericInput(session, "ss_theta1", value = 0.90)
+    updateNumericInput(session, "ss_theta2", value = 1.11)
+  }
+}, ignoreInit = TRUE)
 
 # ── Reactive: store last successful result ──
 ss_result <- reactiveVal(NULL)
@@ -196,17 +222,42 @@ observeEvent(input$calculate_ss, {
         )
       })
     } else if (method == "NTID") {
-      console_output <- capture.output({
-        result <- PowerTOST::sampleN.NTID(
-          alpha = alpha,
-          targetpower = target_power,
-          theta0 = theta0,
-          CV = cv,
-          design = design,
-          print = TRUE,
-          details = FALSE
-        )
-      })
+      # FDA's reference-scaled NTID approach (sampleN.NTID) only applies to
+      # replicate designs — it needs a replicated reference to estimate s_wR
+      # and scale the limits internally. For Parallel/2x2x2 (no replicated
+      # reference available), NTID is instead handled the EMA way: a
+      # standard (unscaled) TOST calculation against a fixed, narrowed
+      # 90.00-111.00% acceptance range (vs. the usual 80-125%) — theta1/
+      # theta2 are set accordingly by the design-change observer below.
+      is_replicate_design <- design %in% c("2x2x3", "2x2x4", "2x3x3")
+      if (is_replicate_design) {
+        console_output <- capture.output({
+          result <- PowerTOST::sampleN.NTID(
+            alpha = alpha,
+            targetpower = target_power,
+            theta0 = theta0,
+            CV = cv,
+            design = design,
+            print = TRUE,
+            details = FALSE
+          )
+        })
+      } else {
+        console_output <- capture.output({
+          result <- PowerTOST::sampleN.TOST(
+            alpha = alpha,
+            targetpower = target_power,
+            logscale = TRUE,
+            theta0 = theta0,
+            theta1 = theta1,
+            theta2 = theta2,
+            CV = cv,
+            design = design,
+            print = TRUE,
+            details = FALSE
+          )
+        })
+      }
     }
     
     # Store result for power curve
@@ -432,11 +483,19 @@ output$ss_power_curve <- renderPlot({
           design = design
         )
       } else if (method == "NTID") {
-        p <- PowerTOST::power.NTID(
-          alpha = alpha, n = n,
-          theta0 = theta0, CV = cv,
-          design = design
-        )
+        if (design %in% c("2x2x3", "2x2x4", "2x3x3")) {
+          p <- PowerTOST::power.NTID(
+            alpha = alpha, n = n,
+            theta0 = theta0, CV = cv,
+            design = design
+          )
+        } else {
+          p <- PowerTOST::power.TOST(
+            alpha = alpha, n = n, logscale = TRUE,
+            theta0 = theta0, theta1 = theta1, theta2 = theta2,
+            CV = cv, design = design
+          )
+        }
       }
       return(p)
     }, error = function(e) NA_real_)

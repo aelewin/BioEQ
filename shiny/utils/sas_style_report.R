@@ -195,6 +195,53 @@
   paste(blocks, collapse = "\n")
 }
 
+# "Each Exposure" (T1/T2/R1/R2) grouping — replicate designs only. Ranks
+# each Period within (Sequence, Treatment) using every period observed
+# anywhere in that sequence (not just what one subject completed), so a
+# subject missing an early exposure is still bucketed by its PLANNED design
+# position — same design-map logic as the interactive Descriptive Statistics
+# tab's "Each Exposure" option (results_dashboard_server.R), so the report
+# matches it exactly.
+.section_descriptives_exposure <- function(sd, pk_cols) {
+  if (is.null(sd) || length(pk_cols) == 0) return("")
+  if (!all(c("Treatment", "Period") %in% names(sd))) return("")
+  counts_by_subj_tr <- table(sd$Subject, sd$Treatment)
+  if (!any(counts_by_subj_tr > 1)) return("")  # not a replicate design
+
+  has_seq <- "Sequence" %in% names(sd)
+  key_cols <- if (has_seq) c("Sequence", "Treatment", "Period") else c("Treatment", "Period")
+  design_map <- unique(sd[, key_cols, drop = FALSE])
+  ord <- if (has_seq) {
+    order(design_map$Sequence, design_map$Treatment, suppressWarnings(as.numeric(design_map$Period)))
+  } else {
+    order(design_map$Treatment, suppressWarnings(as.numeric(design_map$Period)))
+  }
+  design_map <- design_map[ord, , drop = FALSE]
+  group_key <- if (has_seq) interaction(design_map$Sequence, design_map$Treatment, drop = TRUE) else design_map$Treatment
+  design_map$.expo <- ave(seq_len(nrow(design_map)), group_key, FUN = seq_along)
+  sd2 <- merge(sd, design_map, by = key_cols, all.x = TRUE, sort = FALSE)
+
+  treatments <- sort(unique(as.character(sd2$Treatment)))
+  blocks <- character(0)
+  for (tr in treatments) {
+    tr_rows <- sd2[sd2$Treatment == tr, , drop = FALSE]
+    if (nrow(tr_rows) == 0) next
+    max_expo <- max(tr_rows$.expo, na.rm = TRUE)
+    tr_label <- substr(tr, 1, 1)
+    for (k in seq_len(max_expo)) {
+      sub <- tr_rows[!is.na(tr_rows$.expo) & tr_rows$.expo == k, , drop = FALSE]
+      if (nrow(sub) == 0) next
+      tab <- .describe_one_group(sub, pk_cols)
+      blocks <- c(blocks, paste0(
+        "<h4 class='sas-subhead'>", tr_label, k, " — ", .html_escape(tr),
+        " exposure ", k, " &mdash; N<sub>obs</sub> = ", .fmt_int(nrow(sub)), "</h4>",
+        .df_to_html(.format_descr(tab))
+      ))
+    }
+  }
+  paste(blocks, collapse = "\n")
+}
+
 # ---------------------------------------------------------------------------
 # Subject-level listings
 # ---------------------------------------------------------------------------
@@ -231,97 +278,17 @@
   .df_to_html(pretty)
 }
 
-# ---------------------------------------------------------------------------
-# ANOVA helpers (refitting on log scale)
-# ---------------------------------------------------------------------------
-# Build the modelling frame: y = log(value), Subject/Treatment/Period/Sequence
-.build_model_frame <- function(sd, pk_col) {
-  if (!pk_col %in% names(sd)) return(NULL)
-  v <- suppressWarnings(as.numeric(sd[[pk_col]]))
-  ok <- is.finite(v) & v > 0
-  d <- data.frame(
-    y = log(v[ok]),
-    Subject = if ("Subject" %in% names(sd)) sd$Subject[ok] else seq_along(v)[ok],
-    Treatment = if ("Treatment" %in% names(sd)) as.character(sd$Treatment)[ok] else NA,
-    Period = if ("Period" %in% names(sd)) as.character(sd$Period)[ok] else NA,
-    Sequence = if ("Sequence" %in% names(sd)) as.character(sd$Sequence)[ok] else NA,
-    stringsAsFactors = FALSE
-  )
-  d <- d[is.finite(d$y), , drop = FALSE]
-  if (nrow(d) == 0) return(NULL)
-  d$Subject <- factor(d$Subject)
-  d$Treatment <- factor(d$Treatment)
-  if (any(!is.na(d$Period))) d$Period <- factor(d$Period)
-  if (any(!is.na(d$Sequence))) d$Sequence <- factor(d$Sequence)
-  d
-}
-
-.class_info_table <- function(d, include_form = TRUE) {
-  rows <- list()
-  add_row <- function(name, levs) {
-    rows[[length(rows) + 1]] <<- data.frame(
-      Class = name, Levels = length(levs),
-      Values = paste(levs, collapse = " "),
-      stringsAsFactors = FALSE
-    )
-  }
-  if (!is.null(d$Subject)) add_row("Subject", levels(d$Subject))
-  if (include_form && !is.null(d$Treatment)) add_row("Treatment", levels(d$Treatment))
-  if (!is.null(d$Period) && is.factor(d$Period)) add_row("Period", levels(d$Period))
-  if (!is.null(d$Sequence) && is.factor(d$Sequence)) add_row("Sequence", levels(d$Sequence))
-  if (length(rows) == 0) return(NULL)
-  do.call(rbind, rows)
-}
-
-# Render a model summary block: "Sum of Squares" + R-Square / Coeff Var lines
-.render_model_summary <- function(fit, dep_label) {
-  yhat <- fitted(fit); y <- model.response(model.frame(fit))
-  ss_total <- sum((y - mean(y))^2)
-  ss_resid <- sum(residuals(fit)^2)
-  ss_model <- ss_total - ss_resid
-  df_model <- fit$rank - 1
-  df_resid <- df.residual(fit)
-  ms_model <- ss_model / df_model
-  ms_resid <- ss_resid / df_resid
-  fval <- ms_model / ms_resid
-  pval <- pf(fval, df_model, df_resid, lower.tail = FALSE)
-  r2 <- 1 - ss_resid / ss_total
-  rmse <- sqrt(ms_resid)
-  ymean <- mean(y)
-  cv_pct <- if (ymean != 0) 100 * rmse / abs(ymean) else NA
-
-  top <- data.frame(
-    Source = c("Model", "Error", "Corrected Total"),
-    DF = c(.fmt_int(df_model), .fmt_int(df_resid),
-           .fmt_int(df_model + df_resid)),
-    `Sum of Squares` = c(.fmt_num(ss_model, 8),
-                         .fmt_num(ss_resid, 8),
-                         .fmt_num(ss_total, 8)),
-    `Mean Square` = c(.fmt_num(ms_model, 8),
-                      .fmt_num(ms_resid, 8), ""),
-    `F Value` = c(.fmt_num(fval, 2), "", ""),
-    `Pr > F` = c(.fmt_p(pval), "", ""),
-    check.names = FALSE, stringsAsFactors = FALSE
-  )
-  bottom <- data.frame(
-    `R-Square` = .fmt_num(r2, 6),
-    `Coeff Var` = .fmt_num(cv_pct, 6),
-    `Root MSE` = .fmt_num(rmse, 6),
-    `Mean` = .fmt_num(ymean, 6),
-    check.names = FALSE, stringsAsFactors = FALSE
-  )
-  names(bottom)[4] <- paste0(dep_label, " Mean")
-  paste0(.df_to_html(top), .df_to_html(bottom))
-}
-
-# Render a Type-I or Type-III SS table (4 columns: Source, DF, SS, MS, F, Pr>F).
+# Render a Source/DF/SS/MS/F/Pr>F table (accepts a data.frame with either a
+# "Source" column or rownames, and any of the common Df/Sum Sq/Mean Sq/F
+# value/Pr(>F) column-name variants — used for both Type III SS and the
+# Subject(Sequence) error-term test tables).
 .render_ss_table <- function(ss_df, n_obs = NULL) {
   if (is.null(ss_df) || nrow(ss_df) == 0) return("")
   cols <- names(ss_df)
   src_col <- if ("Source" %in% cols) "Source" else NULL
   if (is.null(src_col)) {
-    src <- rownames(ss_df); rn <- TRUE
-  } else { src <- ss_df[[src_col]]; rn <- FALSE }
+    src <- rownames(ss_df)
+  } else { src <- ss_df[[src_col]] }
   df_v   <- ss_df[[intersect(c("Df", "DF", "numDF"), cols)[1]]] %||% rep(NA, nrow(ss_df))
   ss_v   <- ss_df[["Sum Sq"]] %||% rep(NA, nrow(ss_df))
   ms_v   <- ss_df[["Mean Sq"]] %||%
@@ -340,170 +307,241 @@
   .df_to_html(out)
 }
 
-# Type III via drop1 (matches simple_anova.R).  For aliased Seq, returns
-# a row with df=0 / SS=0 (matching SAS output for nested designs).
-.compute_type3 <- function(fit, term_order) {
-  d1 <- tryCatch(suppressWarnings(drop1(fit, test = "F")),
-                 error = function(e) NULL)
-  if (is.null(d1)) return(NULL)
-  d1 <- as.data.frame(d1)
-  d1 <- d1[rownames(d1) != "<none>", , drop = FALSE]
-  rss_full <- sum(residuals(fit)^2)
-  d1$`Sum Sq` <- d1$RSS - rss_full
-  d1$`Mean Sq` <- d1$`Sum Sq` / d1$Df
-  d1$`F value` <- d1$`F value`
-  rn_map <- rownames(d1)
-  out_rows <- list()
-  for (tm in term_order) {
-    matched <- rn_map[grepl(paste0("^", gsub(":", ".*:", tm), "$"), rn_map) |
-                      tolower(rn_map) == tolower(tm) |
-                      grepl(paste0("\\b", tm, "\\b"), rn_map)]
-    matched <- matched[!is.na(matched)]
-    if (length(matched) == 0) {
-      out_rows[[length(out_rows) + 1]] <- data.frame(
-        Source = tm, Df = 0, `Sum Sq` = 0, `Mean Sq` = NA,
-        `F value` = NA, `Pr(>F)` = NA,
-        check.names = FALSE, stringsAsFactors = FALSE
-      )
-    } else {
-      r <- d1[matched[1], , drop = FALSE]
-      out_rows[[length(out_rows) + 1]] <- data.frame(
-        Source = tm,
-        Df = r$Df,
-        `Sum Sq` = r$`Sum Sq`,
-        `Mean Sq` = r$`Mean Sq`,
-        `F value` = r$`F value`,
-        `Pr(>F)` = r$`Pr(>F)`,
-        check.names = FALSE, stringsAsFactors = FALSE
-      )
+# ---------------------------------------------------------------------------
+# Real-engine ANOVA output (Sections 3+) — sourced from the SAME per-parameter
+# results the interactive ANOVA Results tab uses (results_dashboard_server.R:
+# render_type3_anova_card / render_seq_subj_test_card / render_lsmeans_cards /
+# render_parameter_estimates_card / render_model_summary_card), so the report
+# always shows the exact same numbers as what's on screen. This REPLACES the
+# report's previous approach of independently refitting lm()/drop1() models
+# from raw subject data, which duplicated (and could silently diverge from,
+# e.g. the Sequence Type III SS bug fixed in build_crossover_anova_tables())
+# the app's own validated computation.
+# ---------------------------------------------------------------------------
+
+# Resolve the real per-parameter ANOVA engine result for a PK parameter.
+# Mirrors output$anova_display's own resolution order (results_dashboard_
+# server.R): RSABE/ABEL's scaled-analysis engine first (be_results$scaled_
+# anova$anova_results), falling back to the plain ABE engine (be_results$
+# anova_results$anova_results); tries both the ln-prefixed and base name,
+# since the two engines key their results differently.
+.resolve_param_result <- function(be_results, param) {
+  base <- sub("^(ln|log)", "", param, ignore.case = TRUE)
+  atype <- be_results$analysis_type %||% "ABE"
+
+  try_engine <- function(eng) {
+    if (is.null(eng)) return(NULL)
+    for (key in c(param, base)) {
+      cand <- eng[[key]]
+      if (!is.null(cand) && is.null(cand$error)) return(cand)
+    }
+    NULL
+  }
+
+  if (atype %in% c("RSABE", "ABEL")) {
+    hit <- try_engine(be_results$scaled_anova$anova_results)
+    # Mirrors the interactive ANOVA Results tab's dispatch exactly (see
+    # output$anova_display, results_dashboard_server.R): a scaled_anova entry
+    # only represents a genuine RSABE/ABEL-scaled result when it carries
+    # replicatebe_output (ABEL) or s2_wR (RSABE). Parameters not selected for
+    # scaling (e.g. a secondary PK parameter under ABEL) get a fixed-ABE
+    # fallback entry there with model = NULL — the interactive tab falls
+    # through to the plain ABE engine's copy (which has the real fitted
+    # model) for those, so the report must too, or it silently drops their
+    # entire ANOVA section.
+    if (!is.null(hit) && (!is.null(hit$replicatebe_output) || !is.null(hit$s2_wR))) {
+      return(hit)
     }
   }
-  do.call(rbind, out_rows)
+  fallback <- try_engine(be_results$anova_results$anova_results)
+  if (!is.null(fallback)) return(fallback)
+  if (atype %in% c("RSABE", "ABEL")) try_engine(be_results$scaled_anova$anova_results) else NULL
 }
 
-# ---------------------------------------------------------------------------
-# Section 3: Per-product ANOVA (Reference, Test if estimable)
-# ---------------------------------------------------------------------------
-.section_per_product_anova <- function(sd, pk_cols, be_results) {
-  if (is.null(sd)) return("")
-  ref_lvl <- be_results$reference_treatment %||% "R"
-  test_lvl <- be_results$test_treatment %||% "T"
-  treat_levels <- if ("Treatment" %in% names(sd))
-                    sort(unique(as.character(sd$Treatment))) else character(0)
-  if (!ref_lvl %in% treat_levels) {
-    # Fall back: pick alphabetically first as Ref (matches SAS A=Test, B=Ref convention check)
-    ref_lvl <- if (length(treat_levels) >= 1) treat_levels[1] else "R"
-  }
-  if (!test_lvl %in% treat_levels && length(treat_levels) >= 2) {
-    test_lvl <- setdiff(treat_levels, ref_lvl)[1]
-  }
+# "Class Level Information" — from the fitted model's own model frame
+# (subj/drug/prd/seq columns), identical to the interactive tab's card.
+.render_class_info_real <- function(param_result) {
+  mdl <- param_result$model
+  if (is.null(mdl) || is.null(mdl$model)) return("")
+  mdf <- mdl$model
+  want <- intersect(c("subj", "drug", "prd", "seq", "grp"), names(mdf))
+  if (length(want) == 0) return("")
+  rows <- lapply(want, function(v) {
+    lvls <- unique(as.character(mdf[[v]]))
+    lvls <- lvls[!is.na(lvls)]
+    label <- switch(v, "subj" = "Subject", "drug" = "Treatment",
+                     "prd" = "Period", "seq" = "Sequence", "grp" = "Group", v)
+    data.frame(Class = label, Levels = length(lvls),
+               Values = paste(lvls, collapse = " "), stringsAsFactors = FALSE)
+  })
+  tab <- do.call(rbind, rows)
+  paste0(
+    .df_to_html(tab),
+    "<table class='sas-table sas-meta-tbl'>",
+    "<tr><th>Number of Observations Used</th><td>",
+    .fmt_int(param_result$n_observations), "</td></tr></table>"
+  )
+}
 
-  # Filter to log-PK columns of interest (Cmax, AUC0t)
-  primary_pk <- intersect(c("Cmax", "AUC0t", "AUClast", "AUC0inf"), pk_cols)
-  if (length(primary_pk) == 0) primary_pk <- pk_cols[1]
+# SAS PROC GLM's own first two output tables — overall Model/Error/Corrected
+# Total F-test, plus R-Square/Coeff Var/Root MSE/Mean — computed generically
+# from param_result$model/anova() (same as render_model_summary_card()).
+.render_model_summary_real <- function(param_result, dep_label) {
+  at <- tryCatch(as.data.frame(param_result$anova), error = function(e) NULL)
+  if (is.null(at) || !"Df" %in% names(at) || !"Sum Sq" %in% names(at)) return("")
 
-  fit_one_product <- function(d_product, dep_label) {
-    if (is.null(d_product) || nrow(d_product) < 4) return(NULL)
-    # Need within-subject replication for residual error
-    rc <- table(d_product$Subject)
-    if (!any(rc >= 2)) return(NULL)
-    has_seq <- !is.null(d_product$Sequence) && is.factor(d_product$Sequence) &&
-               nlevels(droplevels(d_product$Sequence)) >= 2
-    has_per <- !is.null(d_product$Period) && is.factor(d_product$Period) &&
-               nlevels(droplevels(d_product$Period)) >= 2
-    d_product$Subject <- droplevels(d_product$Subject)
-    if (has_seq) d_product$Sequence <- droplevels(d_product$Sequence)
-    if (has_per) d_product$Period <- droplevels(d_product$Period)
+  n_rows <- nrow(at)
+  err_df <- at$Df[n_rows]; err_ss <- at$`Sum Sq`[n_rows]
+  mdl_df <- sum(at$Df[-n_rows], na.rm = TRUE)
+  mdl_ss <- sum(at$`Sum Sq`[-n_rows], na.rm = TRUE)
+  tot_df <- mdl_df + err_df; tot_ss <- mdl_ss + err_ss
+  mdl_ms <- if (mdl_df > 0) mdl_ss / mdl_df else NA
+  err_ms <- if (err_df > 0) err_ss / err_df else NA
+  f_val  <- if (!is.na(mdl_ms) && !is.na(err_ms) && err_ms > 0) mdl_ms / err_ms else NA
+  p_val  <- if (!is.na(f_val) && mdl_df > 0 && err_df > 0) pf(f_val, mdl_df, err_df, lower.tail = FALSE) else NA
 
-    if (has_seq) {
-      fml <- y ~ Sequence + Subject:Sequence + Period
-      term_order <- c("Sequence", "Subject(Sequence)", "Period")
-    } else {
-      fml <- y ~ Subject + Period
-      term_order <- c("Subject", "Period")
-    }
-    if (!has_per) {
-      fml <- update(fml, . ~ . - Period)
-      term_order <- setdiff(term_order, "Period")
-    }
-    fit <- tryCatch(lm(fml, data = d_product), error = function(e) NULL)
-    if (is.null(fit) || df.residual(fit) <= 0) return(NULL)
+  r_squared  <- if (!is.na(tot_ss) && tot_ss > 0) mdl_ss / tot_ss else NA
+  root_mse   <- if (!is.na(err_ms) && err_ms >= 0) sqrt(err_ms) else NA
+  param_mean <- tryCatch(mean(fitted(param_result$model), na.rm = TRUE), error = function(e) NA_real_)
+  cv_pct     <- if (!is.na(root_mse) && !is.na(param_mean) && param_mean != 0) root_mse / param_mean * 100 else NA
 
-    cls_html <- .df_to_html(.class_info_table(d_product, include_form = FALSE))
-    n_obs_html <- paste0(
-      "<table class='sas-table sas-meta-tbl'>",
-      "<tr><th>Number of Observations Read</th><td>", nrow(d_product),
-      "</td></tr>",
-      "<tr><th>Number of Observations Used</th><td>", nrow(d_product),
-      "</td></tr></table>"
+  top <- data.frame(
+    Source = c("Model", "Error", "Corrected Total"),
+    DF = c(.fmt_int(mdl_df), .fmt_int(err_df), .fmt_int(tot_df)),
+    `Sum of Squares` = c(.fmt_num(mdl_ss, 8), .fmt_num(err_ss, 8), .fmt_num(tot_ss, 8)),
+    `Mean Square` = c(.fmt_num(mdl_ms, 8), .fmt_num(err_ms, 8), ""),
+    `F Value` = c(.fmt_num(f_val, 2), "", ""),
+    `Pr > F` = c(.fmt_p(p_val), "", ""),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  bottom <- data.frame(
+    `R-Square` = .fmt_num(r_squared, 6),
+    `Coeff Var` = .fmt_num(cv_pct, 6),
+    `Root MSE` = .fmt_num(root_mse, 6),
+    Mean = .fmt_num(param_mean, 6),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  names(bottom)[4] <- paste0(dep_label, " Mean")
+  paste0(.df_to_html(top), .df_to_html(bottom))
+}
+
+# Type III SS table — straight from param_result$anova_comprehensive (built
+# by build_crossover_anova_tables() via emmeans::joint_tests(), verified to
+# exactly reproduce SAS PROC GLM's Type III SS including the Sequence row).
+.render_type3_real <- function(param_result) {
+  comp_df <- param_result$anova_comprehensive
+  if (is.null(comp_df)) return("")
+  .render_ss_table(comp_df)
+}
+
+# "Tests of Hypotheses Using the Type III MS for Subject(Sequence) as an
+# Error Term" — the Sequence effect re-tested against the between-subject MS.
+.render_seq_subj_test_real <- function(param_result) {
+  seq_test <- tryCatch(param_result$subj_seq_analysis$hypothesis_tests$seq,
+                        error = function(e) NULL)
+  if (is.null(seq_test) || is.null(seq_test$f_value) || is.na(seq_test$f_value)) return("")
+  tab <- data.frame(
+    Source = "Sequence",
+    DF = .fmt_int(seq_test$df),
+    `Type III SS` = .fmt_num(seq_test$ss, 6),
+    `Mean Square` = .fmt_num(seq_test$ms, 6),
+    `F Value` = .fmt_num(seq_test$f_value, 2),
+    `Pr > F` = .fmt_p(seq_test$p_value),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  .df_to_html(tab)
+}
+
+# Least Squares Means — the same 3-table SAS layout as the interactive tab's
+# render_lsmeans_cards(): per-FORM LSMean + H0 p-value, per-FORM LSMean + CI,
+# and the FORM difference + CI. Sourced from param_result$lsmeans_result
+# (compute_lsmeans_ci(), via emmeans — includes proper per-arm CIs, not a
+# crude predict()-average).
+.render_lsmeans_real <- function(param_result, dep_label) {
+  lsm <- param_result$lsmeans_result
+  if (is.null(lsm)) return("")
+
+  tcoef <- param_result$treatment_coef %||% NA
+  tse   <- param_result$treatment_se   %||% NA
+  tdf   <- param_result$residual_df    %||% lsm$df_ref %||% NA
+  level <- lsm$level %||% 0.90
+  ci_pct <- sprintf("%.0f%%", level * 100)
+  has_diff <- !is.na(tcoef) && !is.na(tse) && !is.na(tdf) && tdf > 0
+
+  p_diff <- if (has_diff) 2 * pt(abs(tcoef / tse), tdf, lower.tail = FALSE) else NA
+
+  tab1 <- data.frame(
+    FORM = c(lsm$test_level, lsm$ref_level),
+    LSMEAN = c(.fmt_num(lsm$lsmean_test_log, 6), .fmt_num(lsm$lsmean_ref_log, 6)),
+    x = c(if (has_diff) .fmt_p(p_diff) else "", ""),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  names(tab1)[3] <- "H0:LSMean1=LSMean2 Pr > |t|"
+
+  tab2 <- data.frame(
+    FORM = c(lsm$test_level, lsm$ref_level),
+    LSMEAN = c(.fmt_num(lsm$lsmean_test_log, 6), .fmt_num(lsm$lsmean_ref_log, 6)),
+    Lo = c(.fmt_num(lsm$ci_lower_test_log, 6), .fmt_num(lsm$ci_lower_ref_log, 6)),
+    Hi = c(.fmt_num(lsm$ci_upper_test_log, 6), .fmt_num(lsm$ci_upper_ref_log, 6)),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  names(tab2)[3:4] <- paste0(ci_pct, c(" CL Lower", " CL Upper"))
+
+  diff_html <- if (has_diff) {
+    t_crit <- qt(1 - (1 - level) / 2, tdf)
+    diff_lo <- tcoef - t_crit * tse
+    diff_hi <- tcoef + t_crit * tse
+    tab3 <- data.frame(
+      i = "1", j = "2",
+      Diff = .fmt_num(tcoef, 6),
+      Lo = .fmt_num(diff_lo, 6), Hi = .fmt_num(diff_hi, 6),
+      check.names = FALSE, stringsAsFactors = FALSE
     )
-
-    # Type I SS via anova()
-    type1_df <- as.data.frame(anova(fit))
-    type1_df$Source <- rownames(type1_df)
-    # Rename "Sequence:Subject" -> "Subject(Sequence)" for SAS-style display
-    type1_df$Source[grepl("Sequence:Subject|Subject:Sequence",
-                          type1_df$Source)] <- "Subject(Sequence)"
-
-    # Type III via drop1 trick (Sequence aliased -> 0 rows)
-    type3_raw <- .compute_type3(fit, term_order)
-
+    names(tab3)[3:5] <- c("Difference Between Means",
+                           paste0(ci_pct, " CL Lower"), paste0(ci_pct, " CL Upper"))
     paste0(
-      "<h3 class='sas-subhead'>The GLM Procedure &mdash; Dependent Variable: ",
-      .html_escape(dep_label), "</h3>",
-      cls_html, n_obs_html,
-      "<h4 class='sas-subhead'>Model summary</h4>",
-      .render_model_summary(fit, dep_label),
-      "<h4 class='sas-subhead'>Type I (sequential) Sums of Squares</h4>",
-      .render_ss_table(type1_df),
-      if (!is.null(type3_raw)) paste0(
-        "<h4 class='sas-subhead'>Type III (marginal) Sums of Squares</h4>",
-        .render_ss_table(type3_raw)
-      ) else ""
+      "<h4 class='sas-subhead'>Least Squares Means for Effect FORM</h4>",
+      .df_to_html(tab3),
+      "<p class='sas-note'>i = ", .html_escape(lsm$test_level),
+      ", j = ", .html_escape(lsm$ref_level), ".</p>"
     )
-  }
+  } else ""
 
-  blocks <- character(0)
-  for (p in primary_pk) {
-    d <- .build_model_frame(sd, p)
-    if (is.null(d)) next
-    log_label <- paste0("ln", p)
+  paste0(
+    "<h4 class='sas-subhead'>", .html_escape(dep_label), " LSMEAN</h4>",
+    .df_to_html(tab1),
+    .df_to_html(tab2),
+    diff_html
+  )
+}
 
-    # Reference subset
-    d_ref <- d[as.character(d$Treatment) == ref_lvl, , drop = FALSE]
-    ref_block <- fit_one_product(d_ref, log_label)
-    if (!is.null(ref_block)) {
-      blocks <- c(blocks, paste0(
-        "<h3 class='sas-subhead'>ANOVA of log-transformed ",
-        .html_escape(p),
-        " for calculation of Intra CV% &mdash; Reference (",
-        .html_escape(ref_lvl), ")</h3>",
-        ref_block,
-        "<hr class='sas-rule'>"
-      ))
-    }
-
-    # Test subset (only if estimable, i.e. replicate design)
-    if (test_lvl %in% as.character(d$Treatment)) {
-      d_test <- d[as.character(d$Treatment) == test_lvl, , drop = FALSE]
-      test_block <- fit_one_product(d_test, log_label)
-      if (!is.null(test_block)) {
-        blocks <- c(blocks, paste0(
-          "<h3 class='sas-subhead'>ANOVA of log-transformed ",
-          .html_escape(p),
-          " for calculation of Intra CV% &mdash; Test (",
-          .html_escape(test_lvl), ")</h3>",
-          test_block,
-          "<hr class='sas-rule'>"
-        ))
-      }
-    }
-  }
-  paste(blocks, collapse = "\n")
+# "Parameter Estimates" — SAS PROC GLM's own 4-column layout (Estimate/SE/t/
+# Pr>|t|); the difference's CI is shown in the LSMeans card above (matching
+# how SAS itself splits this across two tables).
+.render_parameter_estimates_real <- function(param_result, ref_lvl, test_lvl) {
+  tcoef <- param_result$treatment_coef %||% NA
+  tse   <- param_result$treatment_se   %||% NA
+  tdf   <- param_result$residual_df    %||% NA
+  if (is.na(tcoef) || is.na(tse)) return("")
+  tval <- tcoef / tse
+  tp <- if (!is.na(tdf) && tdf > 0) 2 * pt(abs(tval), tdf, lower.tail = FALSE) else NA
+  tab <- data.frame(
+    Parameter = paste0(test_lvl, " - ", ref_lvl),
+    Estimate = .fmt_num(tcoef, 6),
+    `Standard Error` = .fmt_num(tse, 6),
+    `t Value` = .fmt_num(tval, 2),
+    `Pr > |t|` = .fmt_p(tp),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  .df_to_html(tab)
 }
 
 # ---------------------------------------------------------------------------
-# Section 4: Full ANOVA on log-transformed data with Treatment effect
+# Section 3: Full ANOVA on log-transformed data (Class Level Info, Model/
+# Error/Corrected Total, Type III SS, Subject(Sequence) test, LS Means,
+# Parameter Estimates) — one block per PK parameter, built entirely from the
+# real analysis engine's own per-parameter results (see .resolve_param_result
+# above), not an independent refit.
 # ---------------------------------------------------------------------------
 .section_full_anova <- function(sd, pk_cols, be_results) {
   primary_pk <- intersect(c("Cmax", "AUC0t", "AUClast", "AUC0inf"), pk_cols)
@@ -511,114 +549,45 @@
 
   blocks <- character(0)
   for (p in primary_pk) {
-    d <- .build_model_frame(sd, p)
-    if (is.null(d) || !is.factor(d$Treatment) ||
-        nlevels(droplevels(d$Treatment)) < 2) next
-    d$Treatment <- droplevels(d$Treatment)
-    has_seq <- is.factor(d$Sequence) && nlevels(droplevels(d$Sequence)) >= 2
-    has_per <- is.factor(d$Period) && nlevels(droplevels(d$Period)) >= 2
-    if (has_seq) d$Sequence <- droplevels(d$Sequence)
-    if (has_per) d$Period <- droplevels(d$Period)
-    d$Subject <- droplevels(d$Subject)
+    ln_param <- paste0("ln", p)
+    pr <- .resolve_param_result(be_results, ln_param)
+    if (is.null(pr)) pr <- .resolve_param_result(be_results, p)
+    if (is.null(pr) || is.null(pr$model)) next
 
-    if (has_seq) {
-      fml <- y ~ Sequence + Subject:Sequence + Period + Treatment
-      term_order <- c("Sequence", "Subject(Sequence)", "Period", "Treatment")
-    } else {
-      fml <- y ~ Subject + Period + Treatment
-      term_order <- c("Subject", "Period", "Treatment")
-    }
-    if (!has_per) {
-      fml <- update(fml, . ~ . - Period)
-      term_order <- setdiff(term_order, "Period")
-    }
-    fit <- tryCatch(lm(fml, data = d), error = function(e) NULL)
-    if (is.null(fit) || df.residual(fit) <= 0) next
+    log_label <- ln_param
+    ref_lvl <- pr$lsmeans_result$ref_level %||% "R"
+    test_lvl <- pr$lsmeans_result$test_level %||% "T"
 
-    log_label <- paste0("ln", p)
+    class_html   <- .render_class_info_real(pr)
+    summary_html <- .render_model_summary_real(pr, log_label)
+    type3_html   <- .render_type3_real(pr)
+    seqsub_html  <- .render_seq_subj_test_real(pr)
+    lsmeans_html <- .render_lsmeans_real(pr, log_label)
+    param_html   <- .render_parameter_estimates_real(pr, ref_lvl, test_lvl)
 
-    # Class info & N
-    cls_html <- .df_to_html(.class_info_table(d, include_form = TRUE))
-    n_obs_html <- paste0(
-      "<table class='sas-table sas-meta-tbl'>",
-      "<tr><th>Number of Observations Read</th><td>", nrow(d), "</td></tr>",
-      "<tr><th>Number of Observations Used</th><td>", nrow(d), "</td></tr>",
-      "</table>"
-    )
-
-    # Type I SS
-    type1_df <- as.data.frame(anova(fit))
-    type1_df$Source <- rownames(type1_df)
-    type1_df$Source[grepl("Sequence:Subject|Subject:Sequence",
-                          type1_df$Source)] <- "Subject(Sequence)"
-
-    # Type III SS
-    type3_raw <- .compute_type3(fit, term_order)
-
-    # LS Means and treatment difference (Treatment levels sorted alphabetically)
-    treat_levels <- levels(d$Treatment)
-    n_levels <- length(treat_levels)
-    ls_means <- numeric(n_levels); names(ls_means) <- treat_levels
-    for (lv in treat_levels) {
-      d_pred <- d; d_pred$Treatment <- factor(lv, levels = treat_levels)
-      ls_means[lv] <- mean(predict(fit, newdata = d_pred))
-    }
-    diff_estimate <- ls_means[1] - ls_means[2]   # "Level1 - Level2"
-    coef_idx <- grep("^Treatment", names(coef(fit)))
-    se_diff <- if (length(coef_idx) >= 1) {
-      summary(fit)$coefficients[coef_idx[1], "Std. Error"]
-    } else NA_real_
-    rdf <- df.residual(fit)
-    t_crit <- qt(0.95, df = rdf)  # one-sided 95% -> 90% CI
-    diff_lo <- diff_estimate - t_crit * se_diff
-    diff_hi <- diff_estimate + t_crit * se_diff
-    t_value <- diff_estimate / se_diff
-    p_value <- 2 * pt(-abs(t_value), df = rdf)
-
-    ls_tab <- data.frame(
-      Treatment = treat_levels,
-      `LS Mean` = vapply(ls_means, .fmt_num, "", digits = 6),
-      `90% CI Lower` = vapply(ls_means - t_crit * se_diff / sqrt(2),
-                              .fmt_num, "", digits = 6),
-      `90% CI Upper` = vapply(ls_means + t_crit * se_diff / sqrt(2),
-                              .fmt_num, "", digits = 6),
-      check.names = FALSE, stringsAsFactors = FALSE
-    )
-    diff_tab <- data.frame(
-      Comparison = paste0(treat_levels[1], " \u2212 ", treat_levels[2]),
-      Estimate = .fmt_num(diff_estimate, 6),
-      `Std Error` = .fmt_num(se_diff, 6),
-      DF = .fmt_int(rdf),
-      `t Value` = .fmt_num(t_value, 2),
-      `Pr > |t|` = .fmt_p(p_value),
-      `90% CI Lower` = .fmt_num(diff_lo, 6),
-      `90% CI Upper` = .fmt_num(diff_hi, 6),
-      check.names = FALSE, stringsAsFactors = FALSE
-    )
+    if (!nzchar(class_html) && !nzchar(summary_html) && !nzchar(type3_html)) next
 
     blocks <- c(blocks, paste0(
-      "<h3 class='sas-subhead'>ANOVA for log-transformed ",
-      .html_escape(p), "</h3>",
-      "<h4 class='sas-subhead'>Class Level Information</h4>",
-      cls_html, n_obs_html,
-      "<h4 class='sas-subhead'>Model summary &mdash; Dependent Variable: ",
-      .html_escape(log_label), "</h4>",
-      .render_model_summary(fit, log_label),
-      "<h4 class='sas-subhead'>Type I (sequential) Sums of Squares</h4>",
-      .render_ss_table(type1_df),
-      if (!is.null(type3_raw)) paste0(
-        "<h4 class='sas-subhead'>Type III (marginal) Sums of Squares</h4>",
-        .render_ss_table(type3_raw)
-      ) else "",
-      "<h4 class='sas-subhead'>Least Squares Means &mdash; Treatment</h4>",
-      .df_to_html(ls_tab),
-      "<h4 class='sas-subhead'>Treatment Difference (log scale)</h4>",
-      .df_to_html(diff_tab),
+      "<h3 class='sas-subhead'>ANOVA for log-transformed ", .html_escape(p), "</h3>",
+      if (nzchar(class_html)) paste0(
+        "<h4 class='sas-subhead'>Class Level Information</h4>", class_html) else "",
+      if (nzchar(summary_html)) paste0(
+        "<h4 class='sas-subhead'>Model Summary &mdash; Dependent Variable: ",
+        .html_escape(log_label), "</h4>", summary_html) else "",
+      if (nzchar(type3_html)) paste0(
+        "<h4 class='sas-subhead'>Analysis of Variance (Type III SS)</h4>", type3_html) else "",
+      if (nzchar(seqsub_html)) paste0(
+        "<h4 class='sas-subhead'>Tests of Hypotheses Using the Type III MS ",
+        "for Subject(Sequence) as an Error Term</h4>", seqsub_html) else "",
+      lsmeans_html,
+      if (nzchar(param_html)) paste0(
+        "<h4 class='sas-subhead'>Parameter Estimates</h4>", param_html) else "",
       "<hr class='sas-rule'>"
     ))
   }
   paste(blocks, collapse = "\n")
 }
+
 
 # ---------------------------------------------------------------------------
 # Section 5: Intra-subject variability summary
@@ -646,7 +615,7 @@
       s2T <- as.numeric(pr$s2_wT %||% NA)
       cvR <- as.numeric(pr$cv_wr_percent %||% NA)
       cvT <- as.numeric(pr$cv_wt_percent %||% NA)
-      src <- "RSABE (ISC)"
+      src <- "RSABE (Reference-only ANOVA)"
     } else if (!is.null(pr$residual_mse)) {
       mse <- as.numeric(pr$residual_mse)
       if (!is.na(mse) && mse >= 0 && mse < 5) {
@@ -655,11 +624,15 @@
       }
     }
     if (is.na(cvR) && is.na(s2R)) next
+    n_wR <- pr$n_wR %||% NA
+    n_wT <- pr$n_wT %||% NA
     rows[[length(rows) + 1]] <- data.frame(
       Parameter = disp,
+      n_R       = .fmt_int(n_wR),
       CVwR_pct  = .fmt_pct(cvR),
       swR_      = if (!is.na(s2R) && s2R >= 0) .fmt_num(sqrt(s2R), 4) else "\u2014",
       s2wR      = .fmt_num(s2R, 6),
+      n_T       = .fmt_int(n_wT),
       CVwT_pct  = .fmt_pct(cvT),
       swT_      = if (!is.na(s2T) && s2T >= 0) .fmt_num(sqrt(s2T), 4) else "\u2014",
       s2wT      = .fmt_num(s2T, 6),
@@ -669,12 +642,9 @@
   }
   if (length(rows) == 0) return("")
   tab <- do.call(rbind, rows)
-  colnames(tab) <- c("Parameter", "CVwR (%)", "swR", "s\u00b2wR",
-                     "CVwT (%)", "swT", "s\u00b2wT", "Source")
-  paste0(
-    .df_to_html(tab),
-    "<p class='sas-note'>CV<sub>w</sub>% = 100 \u00d7 \u221a(e<sup>s\u00b2</sup> &minus; 1) on the log scale.</p>"
-  )
+  colnames(tab) <- c("Parameter", "n (Ref)", "CVwR (%)", "swR", "s\u00b2wR",
+                     "n (Test)", "CVwT (%)", "swT", "s\u00b2wT", "Source")
+  .df_to_html(tab)
 }
 
 # ---------------------------------------------------------------------------
@@ -855,12 +825,6 @@
   has_powertost <- requireNamespace("PowerTOST", quietly = TRUE)
   design_code <- be_results$design %||% ""
 
-  # Recompute LSM Test / LSM Ref by refitting per primary param when possible.
-  pk_to_param <- function(p) {
-    base <- if (startsWith(p, "ln")) substring(p, 3) else p
-    if (base %in% names(sd)) base else NULL
-  }
-
   rows <- list()
   for (p in params) {
     ci <- ci_results[[p]]
@@ -883,62 +847,17 @@
     be_lo <- ci$limits_used$lower %||% 80
     be_hi <- ci$limits_used$upper %||% 125
 
-    # LS Means: refit if subject_data available
+    # LS Means: from the real analysis engine (param_result$lsmeans_result,
+    # via emmeans — same numbers shown in the interactive ANOVA Results tab
+    # and in Section 3 above), not an independent refit.
     ls_test <- NA_real_; ls_ref <- NA_real_
     geo_test <- NA_real_; geo_ref <- NA_real_
-    pk_col <- pk_to_param(p)
-    if (!is.null(pk_col) && !is.null(sd) && "Treatment" %in% names(sd)) {
-      d <- .build_model_frame(sd, pk_col)
-      if (!is.null(d) && is.factor(d$Treatment) &&
-          nlevels(droplevels(d$Treatment)) >= 2) {
-        d$Treatment <- droplevels(d$Treatment)
-        d$Subject <- droplevels(d$Subject)
-        has_seq <- is.factor(d$Sequence) &&
-                   nlevels(droplevels(d$Sequence)) >= 2
-        has_per <- is.factor(d$Period) &&
-                   nlevels(droplevels(d$Period)) >= 2
-        treat_lvls <- levels(d$Treatment)
-        # NOTE: be_results$reference_treatment / $test_treatment are never
-        # actually set anywhere in the analysis engine (R/be_analysis.R), so
-        # relying on them (as this block previously did, falling back to
-        # treat_lvls[length(treat_lvls)]/treat_lvls[1]) silently swapped
-        # Test and Reference for the standard "R"/"T" labeling convention
-        # used throughout the app. Use the literal R/T convention directly.
-        ref_lvl <- be_results$reference_treatment %||%
-                   (if ("R" %in% treat_lvls) "R" else treat_lvls[length(treat_lvls)])
-        test_lvl <- be_results$test_treatment %||%
-                    (if ("T" %in% treat_lvls) "T" else treat_lvls[1])
-        if (!ref_lvl %in% treat_lvls) ref_lvl <- setdiff(treat_lvls, test_lvl)[1]
-        if (!test_lvl %in% treat_lvls) test_lvl <- setdiff(treat_lvls, ref_lvl)[1]
-
-        if (!has_seq && !has_per) {
-          # No crossover structure (parallel, or any one-observation-per-
-          # subject design): Subject and Treatment are perfectly confounded,
-          # so a Subject+Treatment lm() refit cannot estimate a Treatment
-          # effect. LS means reduce to simple per-treatment-group means.
-          ls_test <- mean(d$y[d$Treatment == test_lvl], na.rm = TRUE)
-          ls_ref  <- mean(d$y[d$Treatment == ref_lvl], na.rm = TRUE)
-          geo_test <- exp(ls_test); geo_ref <- exp(ls_ref)
-          if (is.na(df_val)) df_val <- ci$df %||% NA
-        } else {
-          if (has_seq) d$Sequence <- droplevels(d$Sequence)
-          if (has_per) d$Period <- droplevels(d$Period)
-          fml <- if (has_seq) y ~ Sequence + Subject:Sequence + Period + Treatment
-                 else y ~ Subject + Period + Treatment
-          if (!has_per) fml <- update(fml, . ~ . - Period)
-          fit <- tryCatch(lm(fml, data = d), error = function(e) NULL)
-          if (!is.null(fit)) {
-            predict_at <- function(lv) {
-              d_pred <- d; d_pred$Treatment <- factor(lv, levels = treat_lvls)
-              mean(predict(fit, newdata = d_pred))
-            }
-            ls_test <- predict_at(test_lvl)
-            ls_ref  <- predict_at(ref_lvl)
-            geo_test <- exp(ls_test); geo_ref <- exp(ls_ref)
-            if (is.na(df_val)) df_val <- df.residual(fit)
-          }
-        }
-      }
+    pr_eng <- .resolve_param_result(be_results, p)
+    lsm <- pr_eng$lsmeans_result
+    if (!is.null(lsm)) {
+      ls_test <- lsm$lsmean_test_log; ls_ref <- lsm$lsmean_ref_log
+      geo_test <- lsm$lsmean_test_geo; geo_ref <- lsm$lsmean_ref_geo
+      if (is.na(df_val)) df_val <- pr_eng$residual_df %||% lsm$df_ref %||% NA
     }
 
     # Power calc via PowerTOST (post-hoc, given observed CV and ratio)
@@ -1017,11 +936,12 @@ generate_sas_style_html_report <- function(be_results,
   listing_untrans <- .section_subject_listing(sd, pk_cols, log_only = FALSE)
   listing_log     <- .section_subject_listing(sd, pk_cols, log_only = TRUE)
 
-  # ── Section 2: Descriptive statistics ─────────────────────────────────────
-  desc_treat_per <- if (!is.null(sd) && all(c("Treatment", "Period") %in% names(sd)))
-    .section_descriptives_grouped(sd, pk_cols,
-                                  c("Treatment", "Period"),
-                                  "Treatment x Period") else ""
+  # ── Section 2: Descriptive statistics — same four groupings as the
+  # interactive Descriptive Statistics tab (results_dashboard_server.R):
+  # Each Exposure (T1/T2/R1/R2, replicate designs only), Each Sequence,
+  # Each Period, Each Treatment — plus a bonus Treatment x Period cross not
+  # offered interactively. ──────────────────────────────────────────────────
+  desc_expo <- .section_descriptives_exposure(sd, pk_cols)
   desc_seq <- if (!is.null(sd) && "Sequence" %in% names(sd) &&
                   length(unique(stats::na.omit(sd$Sequence))) >= 2)
     .section_descriptives_grouped(sd, pk_cols, "Sequence", "Sequence") else ""
@@ -1031,22 +951,28 @@ generate_sas_style_html_report <- function(be_results,
   desc_treat <- if (!is.null(sd) && "Treatment" %in% names(sd))
     .section_descriptives_grouped(sd, pk_cols, "Treatment",
                                   "Treatment (pooled)") else ""
+  desc_treat_per <- if (!is.null(sd) && all(c("Treatment", "Period") %in% names(sd)))
+    .section_descriptives_grouped(sd, pk_cols,
+                                  c("Treatment", "Period"),
+                                  "Treatment x Period") else ""
 
   # ── Section 3 (parallel only): Statistical Method — two-sample t-test ─────
   parallel_block <- if (is_parallel_run) .section_parallel_ttest(be_results) else ""
 
-  # ── Sections 3 & 4 (crossover/replicate only): ANOVA ───────────────────────
-  per_prod_block <- .section_per_product_anova(sd, pk_cols, be_results)
+  # ── Section 3 (crossover/replicate only): Full ANOVA ───────────────────────
+  # Sourced entirely from the real analysis engine's own per-parameter
+  # results (same as the interactive ANOVA Results tab) — see
+  # .resolve_param_result() / .section_full_anova() above.
   full_anova_block <- .section_full_anova(sd, pk_cols, be_results)
 
-  # ── Section 5: Intra-subject variability ──────────────────────────────────
+  # ── Section 4: Intra-subject variability ──────────────────────────────────
   # Not applicable to parallel designs: there is no within-subject repeated
   # dosing at all (each subject receives a single treatment), so no
   # intra-subject variance is estimable, unlike a crossover/replicate design.
   intra_block <- if (is_parallel_run) "" else
-    .section_intra_cv(be_results$anova_results$anova_results)
+    .section_intra_cv(be_results$scaled_anova$anova_results %||% be_results$anova_results$anova_results)
 
-  # ── Section 6: Final BE summary ───────────────────────────────────────────
+  # ── Section 5: Final BE summary ───────────────────────────────────────────
   be_block <- .section_be_summary(be_results, sd, alpha)
 
   # ── Reproducible Analysis Summary ─────────────────────────────────────────
@@ -1086,13 +1012,13 @@ generate_sas_style_html_report <- function(be_results,
       "<h3 class='sas-subhead'>1.2 Log-transformed Pharmacokinetic Parameters (lnCmax, lnAUC0-t)</h3>",
       listing_log) else "",
 
-    if (nzchar(desc_treat_per) || nzchar(desc_seq) ||
-        nzchar(desc_per) || nzchar(desc_treat))
+    if (nzchar(desc_expo) || nzchar(desc_seq) ||
+        nzchar(desc_per) || nzchar(desc_treat) || nzchar(desc_treat_per))
       "<h2 class='sas-section'>2. Descriptive Statistics &mdash; Untransformed Pharmacokinetic Parameters</h2>"
     else "",
-    if (nzchar(desc_treat_per)) paste0(
-      "<h3 class='sas-subhead'>2.1 Summary statistics &mdash; for each Treatment x Period</h3>",
-      desc_treat_per) else "",
+    if (nzchar(desc_expo)) paste0(
+      "<h3 class='sas-subhead'>2.1 Summary statistics &mdash; for each Exposure (T1/T2/R1/R2)</h3>",
+      desc_expo) else "",
     if (nzchar(desc_seq)) paste0(
       "<h3 class='sas-subhead'>2.2 Summary statistics &mdash; for each Sequence</h3>",
       desc_seq) else "",
@@ -1100,37 +1026,34 @@ generate_sas_style_html_report <- function(be_results,
       "<h3 class='sas-subhead'>2.3 Summary statistics &mdash; for each Period</h3>",
       desc_per) else "",
     if (nzchar(desc_treat)) paste0(
-      "<h3 class='sas-subhead'>2.4 Pooled summary statistics &mdash; by Treatment</h3>",
+      "<h3 class='sas-subhead'>2.4 Summary statistics &mdash; for each Treatment</h3>",
       desc_treat) else "",
+    if (nzchar(desc_treat_per)) paste0(
+      "<h3 class='sas-subhead'>2.5 Summary statistics &mdash; for each Treatment x Period</h3>",
+      desc_treat_per) else "",
 
     if (nzchar(parallel_block)) paste0(
       "<h2 class='sas-section'>3. Statistical Method &mdash; Two-Sample t-test</h2>",
       parallel_block) else "",
 
-    if (nzchar(per_prod_block)) paste0(
-      "<h2 class='sas-section'>3. Per-product ANOVA &mdash; Log-transformed Data (Intra CV%)</h2>",
-      "<p class='sas-note'>Reference (and Test, when estimable) subset only. ",
-      "Model: ln(PK) = Sequence + Subject(Sequence) + Period.</p>",
-      per_prod_block) else "",
-
     if (nzchar(full_anova_block)) paste0(
-      "<h2 class='sas-section'>4. Full ANOVA &mdash; Log-transformed Data</h2>",
+      "<h2 class='sas-section'>3. Full ANOVA &mdash; Log-transformed Data</h2>",
       "<p class='sas-note'>Model: ln(PK) = Sequence + Subject(Sequence) + ",
-      "Period + Treatment. Type III SS uses marginal contributions; ",
-      "the Sequence row is aliased with Subject(Sequence) (DF = 0) under ",
-      "this nesting (matches SAS PROC GLM).</p>",
+      "Period + Treatment. Same Type III SS engine as the interactive ",
+      "ANOVA Results tab (emmeans-based; matches SAS PROC GLM exactly, ",
+      "including the Sequence row under Subject(Sequence) nesting).</p>",
       full_anova_block) else "",
 
     if (nzchar(intra_block)) paste0(
-      "<h2 class='sas-section'>5. Intra-subject Variability Summary</h2>",
+      "<h2 class='sas-section'>4. Intra-subject Variability Summary</h2>",
       intra_block) else "",
 
     if (nzchar(be_block)) paste0(
-      "<h2 class='sas-section'>6. Bioequivalence Conclusion &mdash; Normal-scale Results of Log-transformed Data</h2>",
+      "<h2 class='sas-section'>5. Bioequivalence Conclusion &mdash; Normal-scale Results of Log-transformed Data</h2>",
       be_block) else "",
 
     if (nzchar(code_block)) paste0(
-      "<h2 class='sas-section'>7. Reproducible Analysis Summary</h2>",
+      "<h2 class='sas-section'>6. Reproducible Analysis Summary</h2>",
       code_block) else "",
 
     "<hr class='sas-rule'>",

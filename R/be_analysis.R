@@ -804,7 +804,13 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha, anova_df),  # Back-calculate SE; one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
         residual_mse = sw_r^2,
         residual_df = anova_df,
-        n_observations = n_total * design_info$n_periods,
+        # Actual rows used by the fitted treatment-effect model (fit_rsabe_model()
+        # already excludes NA-parameter rows before fitting), not the naive
+        # n_subjects * n_periods product, which overcounts whenever any subject is
+        # missing an observation for this parameter (e.g. a BLQ/unquantifiable
+        # sample) — that product no longer matches the model's own Corrected
+        # Total DF once that happens.
+        n_observations = if (!is.null(real_anova)) real_anova$n_observations else n_total * design_info$n_periods,
         anova_method = if(use_method_a) "lm" else switch(as.character(df_method), "1"="lmerTest", "3"="lmerTest", "nlme"),
         df_method = if(use_method_a) NA else df_method,
         df_method_label = if(use_method_a) NA else switch(as.character(df_method), "1"="Satterthwaite", "2"="nlme/SAS CONTAIN", "3"="Kenward-Roger"),
