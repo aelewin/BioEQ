@@ -96,88 +96,43 @@ format_be_data <- function(data) {
   return(data)
 }
 
-#' Summarize Data
+#' Validate PK Parameter Data
 #'
-#' @param data Data frame
-#' @param measurevar Column name to summarize
-#' @param groupvars Grouping variables
-#' @param na.rm Remove NA values
-#' @param conf.interval Confidence interval
-#' @return Summary statistics
+#' Used by the console/demo API's test suite (tests/test_bioeq.R) — not
+#' called from the Shiny app, which validates uploaded data through its own
+#' column-mapping flow instead. Restored after the 2026-08 dead code audit
+#' mistakenly flagged it as unreferenced (missed this consumer outside R/
+#' and shiny/) — see bioeq-dead-code-audit-2026-08 memory.
+#'
+#' @param data Data frame containing PK parameters
+#' @return Validated and formatted data frame
 #' @export
-summarySE <- function(data = NULL, measurevar, groupvars = NULL, na.rm = FALSE,
-                      conf.interval = .95, .drop = TRUE) {
-  
-  # Length function that handles NA
-  length2 <- function(x, na.rm = FALSE) {
-    if (na.rm) sum(!is.na(x))
-    else length(x)
+validate_pk_data <- function(data) {
+  if (nrow(data) == 0) {
+    stop("Data frame is empty")
   }
-  
-  # Calculate summary statistics
-  datac <- data %>%
-    group_by(across(all_of(groupvars))) %>%
-    summarise(
-      N = length2(.data[[measurevar]], na.rm = na.rm),
-      mean = mean(.data[[measurevar]], na.rm = na.rm),
-      sd = sd(.data[[measurevar]], na.rm = na.rm),
-      .groups = "drop"
-    )
-  
-  # Rename mean column
-  names(datac)[names(datac) == "mean"] <- measurevar
-  
-  # Calculate standard error and confidence intervals
-  datac$se <- datac$sd / sqrt(datac$N)
-  
-  # T-statistic for confidence interval
-  ciMult <- qt(conf.interval/2 + .5, datac$N - 1)
-  datac$ci <- datac$se * ciMult
-  
-  return(as.data.frame(datac))
-}
 
-#' Check for Data Errors
-#'
-#' @param data BE study data
-#' @return List of potential data issues
-#' @export
-check_data_errors <- function(data) {
-  errors <- list()
-  warnings <- list()
-  
-  # Check for duplicate time points within subject/period/treatment
-  duplicates <- data %>%
-    group_by(subj, prd, tmt, time) %>%
-    filter(n() > 1) %>%
-    ungroup()
-  
-  if (nrow(duplicates) > 0) {
-    errors$duplicates <- "Duplicate time points found for same subject/period/treatment"
+  # Required columns for PK data depend on design
+  basic_required <- c("Subject")
+
+  # Check for basic required columns
+  missing_cols <- setdiff(basic_required, names(data))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
   }
-  
-  # Check for missing baseline (time = 0) measurements
-  baseline_missing <- data %>%
-    group_by(subj, prd, tmt) %>%
-    summarise(has_baseline = any(time == 0), .groups = "drop") %>%
-    filter(!has_baseline)
-  
-  if (nrow(baseline_missing) > 0) {
-    warnings$baseline <- "Some profiles missing time = 0 measurements"
+
+  # Convert factors to appropriate types
+  if ("Subject" %in% names(data)) {
+    data$Subject <- as.factor(data$Subject)
   }
-  
-  # Check for non-zero baseline concentrations
-  nonzero_baseline <- data %>%
-    filter(time == 0, conc > 0, !is.na(conc))
-  
-  if (nrow(nonzero_baseline) > 0) {
-    warnings$nonzero_baseline <- "Non-zero baseline concentrations detected"
+  if ("Period" %in% names(data)) {
+    data$Period <- as.factor(data$Period)
   }
-  
-  # Check for monotonically decreasing concentrations after Cmax
-  # (simplified check - could be enhanced)
-  
-  return(list(errors = errors, warnings = warnings))
+  if ("Treatment" %in% names(data)) {
+    data$Treatment <- as.factor(data$Treatment)
+  }
+
+  return(data)
 }
 
 #' Load Example Dataset
@@ -329,80 +284,4 @@ print.bioeq <- function(x, ...) {
   invisible(x)
 }
 
-#' Validate PK Parameter Data
-#'
-#' @param data Data frame containing PK parameters
-#' @return Validated and formatted data frame
-#' @export
-validate_pk_data <- function(data) {
-  if (nrow(data) == 0) {
-    stop("Data frame is empty")
-  }
-  
-  # Required columns for PK data depend on design
-  basic_required <- c("Subject")
-  
-  # Check for basic required columns
-  missing_cols <- setdiff(basic_required, names(data))
-  if (length(missing_cols) > 0) {
-    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
-  }
-  
-  # Convert factors to appropriate types
-  if ("Subject" %in% names(data)) {
-    data$Subject <- as.factor(data$Subject)
-  }
-  if ("Period" %in% names(data)) {
-    data$Period <- as.factor(data$Period)
-  }
-  if ("Treatment" %in% names(data)) {
-    data$Treatment <- as.factor(data$Treatment)
-  }
-  
-  return(data)
-}
 
-#' Validate Concentration-Time Data
-#'
-#' @param data Data frame containing concentration-time data
-#' @return Validated and formatted data frame
-#' @export
-validate_conc_time_data <- function(data) {
-  if (nrow(data) == 0) {
-    stop("Data frame is empty")
-  }
-  
-  # Required columns for concentration data
-  required_cols <- c("Subject", "Time", "Concentration")
-  
-  # Check for required columns
-  missing_cols <- setdiff(required_cols, names(data))
-  if (length(missing_cols) > 0) {
-    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
-  }
-  
-  # Check for missing values in key columns
-  key_cols <- c("Subject", "Time")
-  for (col in key_cols) {
-    if (any(is.na(data[[col]]))) {
-      stop("Missing values found in column: ", col)
-    }
-  }
-  
-  # Validate time values (should be non-negative)
-  if (any(data$Time < 0, na.rm = TRUE)) {
-    stop("Time values should be non-negative")
-  }
-  
-  # Validate concentration values (should be non-negative, allow NA)
-  if (any(data$Concentration < 0, na.rm = TRUE)) {
-    stop("Concentration values should be non-negative")
-  }
-  
-  # Convert factors to appropriate types
-  data$Subject <- as.factor(data$Subject)
-  data$Time <- as.numeric(data$Time)
-  data$Concentration <- as.numeric(data$Concentration)
-  
-  return(data)
-}

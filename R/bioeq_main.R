@@ -137,11 +137,14 @@ create_progress_bar <- function(total, title = "Progress") {
 #' Load Required Packages with Progress Indicator
 #' @keywords internal
 load_bioeq_dependencies <- function() {
-  required_packages <- c(
-    "nlme", "ggplot2", "dplyr", "reshape2", 
-    "plotrix", "ICSNP", "coin", "gdata", "png"
-  )
-  
+  # Trimmed to what R/ and shiny/ actually call (verified via repo-wide grep,
+  # 2026-08 dead code audit — see bioeq-dead-code-audit-2026-08 memory).
+  # plotrix/ICSNP/coin/gdata/reshape2/png were a stale hard requirement from
+  # an earlier version of the analysis code and are unused today; keeping
+  # them here made init_bioeq() fail outright on a machine that only has the
+  # Shiny app's own dependencies installed.
+  required_packages <- c("nlme", "ggplot2", "dplyr")
+
   optional_packages <- c("progress", "plotly")
   
   bioeq_log("Loading required packages...", "INFO")

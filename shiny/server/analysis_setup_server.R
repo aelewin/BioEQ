@@ -13,12 +13,6 @@ source(file.path(.BIOEQ_R_DIR, "rsabe_analysis.R"), local = TRUE)
 # Helper function for null coalescing
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-# Data type for conditional display
-output$data_type <- reactive({
-  values$data_type %||% "concentration"
-})
-outputOptions(output, "data_type", suspendWhenHidden = FALSE)
-
 # Upload status for conditional display
 output$upload_status <- reactive({
   !is.null(values$uploaded_data)
@@ -263,38 +257,6 @@ output$alpha_display_text <- renderText({
   sprintf("%.0f%% CI (\u03b1 = %.2f one-sided for TOST)", ci, alpha)
 })
 
-# Available PK parameters UI for pk_parameters data type
-output$available_pk_parameters_ui <- renderUI({
-  req(values$uploaded_data, values$data_type == "pk_parameters")
-  
-  data <- values$uploaded_data
-  # Get numeric columns that could be PK parameters - use capitalized column names
-  numeric_cols <- sapply(data, is.numeric)
-  pk_cols <- names(data)[numeric_cols & !names(data) %in% c("Subject", "Sequence", "Period", "dose", "weight", "age")]
-  
-  if (length(pk_cols) > 0) {
-    div(
-      p(strong("Detected PK parameters in your dataset:"), style = "margin-bottom: 10px;"),
-      div(style = "background-color: #f8f9fa; padding: 10px; border-radius: 5px;",
-        paste(pk_cols, collapse = ", ")
-      ),
-      br(),
-      # Update the choices for BE analysis
-      updateCheckboxGroupInput(
-        session, "pk_parameters_for_be",
-        choices = setNames(pk_cols, pk_cols),
-        selected = pk_cols[pk_cols %in% c("AUC", "Cmax", "AUCinf", "AUCt", "CMAX")]
-      )
-    )
-  } else {
-    div(
-      p("No numeric columns detected that could be PK parameters.", 
-        style = "color: #dc3545; font-weight: bold;"),
-      p("Please ensure your data contains numeric PK parameter columns.")
-    )
-  }
-})
-
 # Help modal handlers
 create_help_modal(session, input, "study_design", help_texts$study_design$title, help_texts$study_design$content)
 create_help_modal(session, input, "auc_method", help_texts$auc_method$title, help_texts$auc_method$content)
@@ -535,16 +497,6 @@ output$debug_info <- renderUI({
     }
   )
 })
-
-# Add input validation for the AUC method
-validate_auc_method <- function(method) {
-  valid_methods <- c("linear", "log", "mixed", "linear_log")
-  if (!method %in% valid_methods) {
-    stop(paste("Invalid AUC calculation method. Must be one of:", 
-               paste(valid_methods, collapse = ", ")))
-  }
-  return(TRUE)
-}
 
 # Analysis execution
 observeEvent(input$run_analysis, {

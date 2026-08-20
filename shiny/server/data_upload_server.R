@@ -654,12 +654,6 @@ observe({
 # REACTIVE OUTPUTS FOR UI DISPLAY
 # =============================================================================
 
-# Upload status indicator
-output$upload_status <- reactive({
-  !is.null(values$uploaded_data) && isTRUE(values$columns_mapped)
-})
-outputOptions(output, "upload_status", suspendWhenHidden = FALSE)
-
 # Step 4 visibility - only show after columns are mapped and confirmed
 output$step4_ready <- reactive({
   # Check that data is uploaded, columns are mapped, and validation result exists
@@ -1275,20 +1269,6 @@ validate_pk_data_enhanced <- function(data) {
     summary = if(length(errors) == 0) create_data_summary_enhanced(processed_data) else NULL,
     data_type = "pk_parameters"
   ))
-}
-
-# Helper function to find columns by pattern (for PK parameter processing)
-find_column_by_pattern <- function(data, possible_names) {
-  data_names_lower <- tolower(names(data))
-  possible_names_lower <- tolower(possible_names)
-  
-  for (name in possible_names_lower) {
-    matches <- which(data_names_lower == name)
-    if (length(matches) > 0) {
-      return(names(data)[matches[1]])
-    }
-  }
-  return(NULL)
 }
 
 # Store unit specifications in reactive values for use in analysis

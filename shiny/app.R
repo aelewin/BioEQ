@@ -966,21 +966,44 @@ ui <- dashboardPage(
             )
           ),
           box(
-            title = "Quick Links", 
-            status = "warning", 
+            title = "Quick Links",
+            status = "warning",
             solidHeader = TRUE,
             width = 4,
-            tags$a(href = "#", class = "btn btn-primary btn-block", 
-                   icon("download"), " Download Example Data"),
-            br(),
-            tags$a(href = "#", class = "btn btn-info btn-block", 
+            downloadButton("download_example_data", "Download Example Data",
+                            class = "btn btn-primary btn-block", icon = icon("download")),
+            br(), br(),
+            tags$a(href = "#", class = "btn btn-info btn-block",
                    icon("book"), " User Manual"),
             br(),
-            tags$a(href = "#", class = "btn btn-success btn-block", 
+            tags$a(href = "#", class = "btn btn-success btn-block",
                    icon("video"), " Video Tutorials"),
             br(),
-            tags$a(href = "mailto:support@bioeq.com", class = "btn btn-warning btn-block", 
+            tags$a(href = "mailto:support@bioeq.com", class = "btn btn-warning btn-block",
                    icon("envelope"), " Contact Support")
+          )
+        ),
+        fluidRow(
+          box(
+            title = "Data Templates",
+            status = "primary",
+            solidHeader = TRUE,
+            width = 12,
+            p("Starter files matching the column layout BioEQ expects — fill in your own data and upload."),
+            div(class = "row",
+              div(class = "col-sm-4",
+                downloadButton("download_template", "CSV Template (Concentration-Time)",
+                                class = "btn btn-outline-primary btn-block")
+              ),
+              div(class = "col-sm-4",
+                downloadButton("download_excel_template", "Excel Template (Concentration-Time)",
+                                class = "btn btn-outline-primary btn-block")
+              ),
+              div(class = "col-sm-4",
+                downloadButton("download_pk_template", "CSV Template (PK Parameters)",
+                                class = "btn btn-outline-primary btn-block")
+              )
+            )
           )
         )
       )

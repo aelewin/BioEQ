@@ -225,141 +225,6 @@ compute_K_constant <- function(design_info, refvar_result) {
 }
 
 
-# =============================================================================
-# SECTION 1: VARIANCE ESTIMATION (Intra-Subject Contrasts)
-# =============================================================================
-
-#' Compute Intra-Subject Contrasts (ISC) for Variance Estimation
-#' 
-#' ISC avoids convergence issues with mixed models by computing 
-#' within-subject differences directly. FDA-preferred approach.
-#' 
-#' For full replicate (2x2x4, e.g., TRTR/RTRT):
-#'   d_Ri = (R_period1 - R_period2) for each subject i
-#'   d_Ti = (T_period1 - T_period2) for each subject i
-#'   s²_wR = (1/(2*n_R)) * Σ d²_Ri
-#'   s²_wT = (1/(2*n_T)) * Σ d²_Ti
-#'   df_wR = n_R, df_wT = n_T
-#'
-#' For partial replicate (2x2x3, e.g., TRR/RTR):
-#'   Only reference is replicated:
-#'   d_Ri = R_1 - R_2 for each subject with two R periods
-#'   s²_wR = (1/(2*n_R)) * Σ d²_Ri
-#'   df_wR = n_R
-#'   s²_wT cannot be estimated from partial replicate
-#'
-#' @param data Data frame with Subject, Treatment, Period, Sequence columns
-#'        and the PK parameter column (log-transformed)
-#' @param param_col Name of the log-transformed parameter column
-#' @return List with s2_wR, s2_wT, df_wR, df_wT, individual contrasts
-#' @export
-compute_isc_variance <- function(data, param_col) {
-  
-  cat("  📊 Computing Intra-Subject Contrasts (ISC)...\n")
-  
-  # Ensure proper types
-  data$Subject <- as.character(data$Subject)
-  data$Treatment <- as.character(data$Treatment)
-  data$Period <- as.character(data$Period)
-  
-  # Separate Reference and Test observations
-  ref_data <- data[data$Treatment == "R", ]
-  test_data <- data[data$Treatment == "T", ]
-  
-  # ---- Reference within-subject variance ----
-  # Group by subject, compute contrasts for subjects with >= 2 reference periods
-  ref_by_subject <- split(ref_data, ref_data$Subject)
-  
-  ref_contrasts <- c()
-  ref_subjects_used <- c()
-  
-  for (subj in names(ref_by_subject)) {
-    subj_ref <- ref_by_subject[[subj]]
-    if (nrow(subj_ref) >= 2) {
-      # Sort by period to ensure consistent ordering
-      subj_ref <- subj_ref[order(subj_ref$Period), ]
-      vals <- subj_ref[[param_col]]
-      
-      if (all(!is.na(vals))) {
-        # Contrast: difference between replicate administrations
-        d_R <- vals[1] - vals[2]
-        ref_contrasts <- c(ref_contrasts, d_R)
-        ref_subjects_used <- c(ref_subjects_used, subj)
-      }
-    }
-  }
-  
-  n_R <- length(ref_contrasts)
-  
-  if (n_R < 2) {
-    stop("Insufficient Reference replicates for ISC variance estimation. ",
-         "Need at least 2 subjects with replicated Reference periods. Found: ", n_R)
-  }
-  
-  # s²_wR = (mean-centred) sample variance of the reference contrasts / 2.
-  # Var(R1-R2) = 2·σ²_wR, so σ²_wR = var(d_R)/2. The mean-centred, df-corrected
-  # form (÷(n_R-1)) is the unbiased estimator and matches replicateBE / SAS
-  # PROC MIXED; the previous Σd²/(2·n_R) underestimated it by a factor
-  # (n_R-1)/n_R and also carried the wrong df into the Howe χ² term.
-  s2_wR <- stats::var(ref_contrasts) / 2
-  df_wR <- n_R - 1  # degrees of freedom
-  
-  # CV_wR from variance: CV = sqrt(exp(s²_w) - 1) * 100
-  cv_wR <- sqrt(exp(s2_wR) - 1) * 100
-  
-  cat(sprintf("    Reference: n_R=%d, s²_wR=%.6f, CV_wR=%.2f%%\n", n_R, s2_wR, cv_wR))
-  
-  # ---- Test within-subject variance ----
-  test_by_subject <- split(test_data, test_data$Subject)
-  
-  test_contrasts <- c()
-  test_subjects_used <- c()
-  
-  for (subj in names(test_by_subject)) {
-    subj_test <- test_by_subject[[subj]]
-    if (nrow(subj_test) >= 2) {
-      subj_test <- subj_test[order(subj_test$Period), ]
-      vals <- subj_test[[param_col]]
-      
-      if (all(!is.na(vals))) {
-        d_T <- vals[1] - vals[2]
-        test_contrasts <- c(test_contrasts, d_T)
-        test_subjects_used <- c(test_subjects_used, subj)
-      }
-    }
-  }
-  
-  n_T <- length(test_contrasts)
-  s2_wT <- NA
-  df_wT <- NA
-  cv_wT <- NA
-  is_partial <- (n_T < 2)
-  
-  if (n_T >= 2) {
-    s2_wT <- stats::var(test_contrasts) / 2
-    df_wT <- n_T - 1
-    cv_wT <- sqrt(exp(s2_wT) - 1) * 100
-    cat(sprintf("    Test: n_T=%d, s²_wT=%.6f, CV_wT=%.2f%%\n", n_T, s2_wT, cv_wT))
-  } else {
-    cat(sprintf("    Test: n_T=%d (partial replicate — s²_wT not estimable)\n", n_T))
-  }
-  
-  return(list(
-    s2_wR = s2_wR,
-    s2_wT = s2_wT,
-    cv_wR = cv_wR,
-    cv_wT = cv_wT,
-    df_wR = df_wR,
-    df_wT = df_wT,
-    n_R = n_R,
-    n_T = n_T,
-    ref_contrasts = ref_contrasts,
-    test_contrasts = test_contrasts,
-    ref_subjects = ref_subjects_used,
-    test_subjects = test_subjects_used,
-    is_partial_replicate = is_partial
-  ))
-}
 
 
 # =============================================================================
@@ -1055,10 +920,10 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
       # this is the same intra-subject-variance step ABEL uses (via
       # replicateBE internally), applied directly here since RSABE doesn't
       # route through replicateBE for its Howe UCB/ncTOST scaling decision.
-      # This REPLACES the previous ISC (individual-subject-contrast) method:
-      # ISC is still available as compute_isc_variance() but is no longer the
-      # primary source — the ANOVA-based estimate is the one FDA/SAS-style
-      # analyses report and the one now used for the switching decision.
+      # This REPLACES the previous ISC (individual-subject-contrast) method
+      # (that function has since been removed) — the ANOVA-based estimate is
+      # the one FDA/SAS-style analyses report and the one now used for the
+      # switching decision.
       refvar_result <- compute_reference_anova_variance(analysis_data, log_col_name)
 
       # Step 3: Check switching condition — FDA applies reference scaling only

@@ -1502,17 +1502,8 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
   ))
 }
 
-#' Simplified analyze_crossover_parameter that uses ANOVA module results
-#' This function is now just a placeholder for backward compatibility
-#' The actual analysis is done by extract_be_from_anova
-analyze_crossover_parameter <- function(data, parameter, alpha, be_limits, anova_model = "fixed") {
-  # This function is now deprecated in favor of using ANOVA module results
-  # It's kept for backward compatibility but should not be used directly
-  stop("analyze_crossover_parameter is deprecated. Use extract_be_from_anova with ANOVA module results instead.")
-}
-
 # =============================================================================
-# SECTION 3: ANALYSIS FUNCTIONS FOR SPECIFIC DESIGNS  
+# SECTION 3: ANALYSIS FUNCTIONS FOR SPECIFIC DESIGNS
 # =============================================================================
 
 #' Analyze Single Parameter for Parallel Design (Geometric Mean Ratio Method)
@@ -1651,36 +1642,7 @@ analyze_replicate_parameter <- function(data, parameter, alpha, scaling) {
 # SECTION 3: STATISTICAL COMPUTATION FUNCTIONS
 # =============================================================================
 
-#' Perform ANOVA for Crossover Design
-#'
-#' Calculate Confidence Interval for Crossover Design
-#'
-#' @param anova_result ANOVA results
-#' @param alpha Significance level
-#' @return Confidence interval
-calculate_crossover_ci <- function(anova_result, alpha) {
-  
-  # Calculate t-value
-  t_value <- qt(0.95, anova_result$df)
-  
-  # Calculate confidence interval on log scale
-  ci_lower_log <- anova_result$formulation_effect - t_value * anova_result$standard_error
-  ci_upper_log <- anova_result$formulation_effect + t_value * anova_result$standard_error
-  
-  # Convert to ratio scale (percentage)
-  point_estimate <- exp(anova_result$formulation_effect) * 100
-  ci_lower <- exp(ci_lower_log) * 100
-  ci_upper <- exp(ci_upper_log) * 100
-  
-  return(list(
-    point_estimate = point_estimate,
-    ci_lower = ci_lower,
-    ci_upper = ci_upper,
-    confidence_level = (1 - alpha) * 100
-  ))
-}
-
-#' Perform Mixed-Effects Analysis for Replicate Design  
+#' Perform Mixed-Effects Analysis for Replicate Design
 #'
 #' @param param_data Parameter data
 #' @param parameter Parameter name
@@ -1983,38 +1945,6 @@ prepare_parameter_data <- function(data, parameter) {
   return(param_data)
 }
 
-#' Prepare Log Parameter Data for Analysis (No Additional Transformation)
-#'
-#' @param data Study data
-#' @param parameter Log parameter name (e.g., lnCmax, lnAUC0t)
-#' @return Prepared parameter data
-prepare_log_parameter_data <- function(data, parameter) {
-  
-  # Ensure parameter exists
-  if (!parameter %in% names(data)) {
-    stop("Log parameter '", parameter, "' not found in data")
-  }
-  
-  # Filter data for the parameter (remove NA values)
-  param_values <- data[[parameter]]
-  param_data <- data[!is.na(param_values), ]
-  
-  if (nrow(param_data) == 0) {
-    stop("No valid data for log parameter '", parameter, "' (all values are NA)")
-  }
-  
-  # Ensure proper factor levels
-  param_data$Subject <- as.factor(param_data$Subject)
-  param_data$Treatment <- as.factor(param_data$Treatment)
-  
-  if ("Period" %in% names(param_data)) {
-    param_data$Period <- as.factor(param_data$Period)
-  }
-  
-  cat(sprintf("  Prepared %d observations for log parameter %s\n", nrow(param_data), parameter))
-  return(param_data)
-}
-
 # =============================================================================
 # SECTION 5: UTILITY AND HELPER FUNCTIONS
 # =============================================================================
@@ -2260,194 +2190,8 @@ create_be_results <- function(design, data, ...) {
 }
 
 # =============================================================================
-# SECTION 8: ORIGINAL LEGACY AND PLACEHOLDER FUNCTIONS
-# =============================================================================
-
-#' Prepare NCA Data for Statistical Analysis
-#'
-#' @param nca_results NCA results data frame
-#' @param parameters Parameters to include
-#' @return Prepared data for statistical analysis
-#' @export
-prepare_nca_data <- function(nca_results, parameters) {
-  # Select relevant columns
-  id_cols <- c("subj", "tmt")
-  param_cols <- intersect(parameters, names(nca_results))
-  
-  stats_data <- nca_results[, c(id_cols, param_cols), drop = FALSE]
-  
-  # Add log-transformed parameters for multiplicative model
-  for (param in param_cols) {
-    if (is.numeric(stats_data[[param]])) {
-      log_param_name <- paste0("ln_", param)
-      stats_data[[log_param_name]] <- ifelse(stats_data[[param]] > 0, 
-                                            log(stats_data[[param]]), NA)
-    }
-  }
-  
-  # Add sequence and period information (reconstruct from crossover design)
-  # In 2x2x2: subjects 1-n/2 get TR sequence, n/2+1-n get RT sequence
-  n_subjects <- length(unique(stats_data$subj))
-  
-  # Create sequence assignment
-  stats_data$seq <- NA
-  for (subj in unique(stats_data$subj)) {
-    subj_data <- stats_data[stats_data$subj == subj, ]
-    treatments <- sort(unique(subj_data$tmt))
-    
-    if (length(treatments) == 2 && all(treatments == c(1, 2))) {
-      # Determine sequence based on subject ID (simplified)
-      # In practice, this should come from the original data
-      if (as.numeric(subj) <= n_subjects/2) {
-        stats_data[stats_data$subj == subj & stats_data$tmt == 2, "period"] <- 1
-        stats_data[stats_data$subj == subj & stats_data$tmt == 1, "period"] <- 2
-        stats_data[stats_data$subj == subj, "seq"] <- 1  # TR sequence
-      } else {
-        stats_data[stats_data$subj == subj & stats_data$tmt == 1, "period"] <- 1
-        stats_data[stats_data$subj == subj & stats_data$tmt == 2, "period"] <- 2
-        stats_data[stats_data$subj == subj, "seq"] <- 2  # RT sequence
-      }
-    }
-  }
-  
-  # Convert to factors
-  stats_data$subj <- as.factor(stats_data$subj)
-  stats_data$tmt <- as.factor(stats_data$tmt)
-  stats_data$seq <- as.factor(stats_data$seq)
-  stats_data$period <- as.factor(stats_data$period)
-  
-  return(stats_data)
-}
-
-#' Analyze Crossover Parameter (Legacy Implementation)
-#'
-#' @param data Study data
-#' @param parameter Parameter name
-#' @param alpha Significance level
-#' @param be_limits Bioequivalence limits
-#' @return Parameter analysis results
-analyze_crossover_parameter_legacy <- function(data, parameter, alpha, be_limits) {
-  
-  # Create analysis-ready data
-  param_data <- data[!is.na(data[[parameter]]) & data[[parameter]] > 0, ]
-  
-  if (nrow(param_data) >= 4) {
-    # Ensure parameter is numeric before log transformation
-    if (!is.numeric(param_data[[parameter]])) {
-      cat("  Converting", parameter, "to numeric in legacy function...\n")
-      param_data[[parameter]] <- as.numeric(as.character(param_data[[parameter]]))
-      # Re-filter after conversion
-      param_data <- param_data[!is.na(param_data[[parameter]]) & param_data[[parameter]] > 0, ]
-    }
-    
-    if (nrow(param_data) == 0) {
-      warning("No valid numeric data for parameter: ", parameter)
-      return(NULL)
-    }
-    
-    # Log-transform for multiplicative model (now safe)
-    param_data$log_param <- log(param_data[[parameter]])
-    
-    # Simple ANOVA model (crossover design)
-    formula_str <- "log_param ~ Treatment + Subject + Period"
-    
-    # Check if we have required variables
-    if (all(c("Treatment", "Subject", "Period") %in% names(param_data))) {
-      
-      # Convert to factors
-      param_data$Treatment <- as.factor(param_data$Treatment)
-      param_data$Subject <- as.factor(param_data$Subject)
-      param_data$Period <- as.factor(param_data$Period)
-      
-      # Fit model
-      model <- lm(log_param ~ Treatment + Subject + Period, data = param_data)
-      
-      # Extract treatment effect (Test vs Reference)
-      formulation_coef <- coef(model)["TreatmentTest"]
-      if (is.na(formulation_coef)) {
-        # Try the other way around
-        formulation_coef <- -coef(model)["TreatmentReference"]
-      }
-      
-      if (!is.na(formulation_coef)) {
-        # Get standard error
-        model_summary <- summary(model)
-        se <- model_summary$coefficients["TreatmentTest", "Std. Error"]
-        if (is.na(se)) {
-          se <- model_summary$coefficients["TreatmentReference", "Std. Error"]
-        }
-        
-        # Calculate confidence interval
-        df <- model$df.residual
-        t_value <- qt(0.95, df)
-        
-        ci_lower_log <- formulation_coef - t_value * se
-        ci_upper_log <- formulation_coef + t_value * se
-        
-        # Convert to ratio scale (percentage)
-        point_estimate <- exp(formulation_coef) * 100
-        ci_lower <- exp(ci_lower_log) * 100
-        ci_upper <- exp(ci_upper_log) * 100
-        
-        # Store results
-        return(list(
-          point_estimate = point_estimate,
-          ci_lower = ci_lower,
-          ci_upper = ci_upper,
-          confidence_level = (1 - alpha) * 100,
-          anova_model = model,
-          formulation_effect = formulation_coef,
-          standard_error = se,
-          df = df,
-          n_subjects = length(unique(param_data$Subject))
-        ))
-      }
-    }
-  }
-  
-  return(NULL)
-}
-
-# =============================================================================
 # SECTION 7: HELPER FUNCTIONS FOR STATISTICAL COMPUTATIONS
 # =============================================================================
-
-#' Extract Treatment Effect from Model
-#'
-#' @param model Linear model object
-#' @return List with formulation effect value and name
-extract_formulation_effect <- function(model) {
-  coefs <- coef(model)
-  
-  # Try different formulation coefficient names
-  formulation_names <- c("TreatmentTest", "TreatmentT", "TreatmentReference", "TreatmentR")
-  
-  for (name in formulation_names) {
-    if (name %in% names(coefs) && !is.na(coefs[name])) {
-      value <- coefs[name]
-      # Adjust sign if needed (we want Test - Reference)
-      if (grepl("Reference|R$", name)) {
-        value <- -value
-      }
-      return(list(value = value, name = name))
-    }
-  }
-  
-  stop("Could not find formulation effect in model coefficients")
-}
-
-#' Get Standard Error from Model Summary
-#'
-#' @param model_summary Model summary object
-#' @param coef_name Coefficient name
-#' @return Standard error
-get_standard_error <- function(model_summary, coef_name) {
-  se <- model_summary$coefficients[coef_name, "Std. Error"]
-  if (is.na(se)) {
-    stop("Could not extract standard error for coefficient: ", coef_name)
-  }
-  return(se)
-}
 
 #' Validate Subject Consistency
 #'
@@ -2503,32 +2247,6 @@ get_required_columns <- function(design) {
     "replicate" = c("Subject", "Period", "Treatment"),
     "auto" = c("Subject", "Treatment")  # Minimum for auto-detection
   )
-}
-
-#' Standardize Column Names
-#' 
-#' Handles common variations in column naming
-standardize_column_names <- function(data) {
-  
-  # Column name mappings
-  name_mappings <- list(
-    Subject = c("SUBJECT", "ID", "USUBJID", "subj"),
-    Period = c("PERIOD", "PER", "period"),
-    Treatment = c("FORMULATION", "TRT", "TREATMENT", "tmt", "Treatment"),
-    Sequence = c("SEQUENCE", "SEQ", "seq")
-  )
-  
-  # Apply mappings
-  for (std_name in names(name_mappings)) {
-    for (alt_name in name_mappings[[std_name]]) {
-      if (alt_name %in% names(data) && !std_name %in% names(data)) {
-        names(data)[names(data) == alt_name] <- std_name
-        break
-      }
-    }
-  }
-  
-  return(data)
 }
 
 #' Validate Numeric Parameters

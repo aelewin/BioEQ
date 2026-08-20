@@ -649,36 +649,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
       )
     }
     
-    # Create simple plot card
-    create_simple_plot_card <- function(plot_data, title, icon_name) {
-      output_id <- paste0(gsub("[^a-zA-Z0-9]", "_", tolower(title)), "_plot")
-      
-      div(class = "plot-card",
-        div(class = "plot-card-body",
-          div(class = "mb-3",
-            p(get_plot_description(title),
-              style = "color: var(--neutral-600); font-size: 14px; margin-bottom: 15px;")
-          ),
-          
-          if (!is.null(plot_data$plot) && is.null(plot_data$error)) {
-            plotlyOutput(ns(output_id), height = "500px")
-          } else {
-            div(class = "alert alert-warning", 
-                paste(title, "not available"))
-          }
-        )
-      )
-    }
-    
-    # Get plot description for info display
-    get_plot_description <- function(title) {
-      switch(title,
-        "PK Parameter Boxplots" = "Distribution of pharmacokinetic parameters by treatment group.",
-        "Individual T/R Ratio" = "90% confidence intervals for bioequivalence ratios.",
-        "Interactive visualization of analysis results."
-      )
-    }
-    
     # Create individual subjects card with selection controls
     # Replicate designs get per-period selectors (T1/T2/R1/R2);
     # 2x2x2 keeps the original Test/Reference selectors.
@@ -956,25 +926,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         }
       }
       
-      # PK boxplots
-      pk_data <- plot_values$plot_objects$pk_boxplots
-      if (!is.null(pk_data)) {
-        if (!is.null(pk_data$plot) && is.null(pk_data$error)) {
-          output$pk_parameter_boxplots_plot <- renderPlotly({
-            pk_data$plot
-          })
-        }
-      }
-      
-      # BE confidence intervals
-      be_data <- plot_values$plot_objects$be_ci
-      if (!is.null(be_data)) {
-        if (!is.null(be_data$plot) && is.null(be_data$error)) {
-          output$bioequivalence_assessment_plot <- renderPlotly({
-            be_data$plot
-          })
-        }
-      }
     })
     
     # Auto-generate individual T/R ratio plot when data becomes available

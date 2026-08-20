@@ -1,3 +1,17 @@
+# USER MANUAL SOURCE CONTENT — NOT LIVE APP CODE
+# ==================================================================
+# This was originally a shiny/utils/ module, written to render "how to
+# interpret this" panels in the Results dashboard, but never wired to any
+# UI element (found in the 2026-08 dead code audit — see
+# bioeq-dead-code-audit-2026-08 memory / the "Dead Code Ledger" artifact).
+#
+# Kept here as drafted source material for a future docs/user_guide.md
+# "Interpreting Your Results" chapter — see the placeholder in that file.
+# The functions below still work as htmltools tagList generators if you
+# want to preview them (they need `library(shiny)` or `library(htmltools)`
+# loaded), but nothing in the running app calls them.
+# ==================================================================
+
 # Interpretation Guides Module
 # Provides detailed interpretation guidelines for bioequivalence results
 

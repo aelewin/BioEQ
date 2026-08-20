@@ -222,6 +222,15 @@ PK Parameters: Subject, Treatment, Period, AUC0t, AUCinf, Cmax, Tmax
 - Export individual tables to CSV/Excel
 - Statistical summaries with proper formatting
 
+### Interpreting Your Results
+
+> **TODO:** This chapter is not yet written. Draft source content (per-PK-parameter meaning,
+> what the ANOVA Treatment/Subject/Period/Sequence effects indicate, FDA/EMA/ICH acceptance
+> criteria, plain-language BE conclusion summaries, and study-design tradeoffs) already exists
+> in [`docs/user_manual_content/interpretation_guide_content.R`](user_manual_content/interpretation_guide_content.R) —
+> written as R/htmltools fragments for an earlier, never-shipped in-app help panel. Turn that
+> into prose for this section rather than starting from scratch.
+
 ### Exports & Reports Tab
 
 **Report Generation:**

@@ -331,55 +331,6 @@ calculate_confidence_intervals <- function(test_values, ref_values, alpha = 0.05
   return(result)
 }
 
-#' Perform Two One-Sided Tests (TOST) for Bioequivalence
-#'
-#' @param test_values Test treatment values
-#' @param ref_values Reference treatment values
-#' @param be_limits Bioequivalence limits
-#' @param alpha Significance level
-#' @param design Study design
-#' @return TOST results
-#' @export
-perform_tost <- function(test_values, ref_values, be_limits = c(0.8, 1.25),
-                        alpha = 0.05, design = "2x2x2") {
-  
-  # Calculate confidence interval
-  ci_result <- calculate_confidence_intervals(test_values, ref_values, alpha, design)
-  
-  # Log-scale limits
-  log_lower <- log(be_limits[1])
-  log_upper <- log(be_limits[2])
-  
-  # Two one-sided tests
-  t1 <- (ci_result$log_difference - log_lower) / ci_result$standard_error
-  t2 <- (log_upper - ci_result$log_difference) / ci_result$standard_error
-  
-  p1 <- pt(t1, ci_result$degrees_freedom, lower.tail = FALSE)
-  p2 <- pt(t2, ci_result$degrees_freedom, lower.tail = FALSE)
-  
-  tost_p_value <- max(p1, p2)
-  
-  # Bioequivalence conclusion
-  ci_within_limits <- ci_result$ci_lower >= be_limits[1] && ci_result$ci_upper <= be_limits[2]
-  p_significant <- tost_p_value < alpha
-  bioequivalent <- ci_within_limits && p_significant
-  
-  result <- list(
-    ratio_estimate = ci_result$ratio_estimate,
-    ci_lower = ci_result$ci_lower,
-    ci_upper = ci_result$ci_upper,
-    be_limits = be_limits,
-    tost_p_value = tost_p_value,
-    p1 = p1,
-    p2 = p2,
-    bioequivalent = bioequivalent,
-    alpha = alpha,
-    confidence_level = ci_result$confidence_level
-  )
-  
-  return(result)
-}
-
 #' Print Sample Size Results
 #'
 #' @param x Sample size calculation result
@@ -425,18 +376,4 @@ print.power_calculation <- function(x, ...) {
   cat("Alpha:", x$alpha, "\n")
   
   invisible(x)
-}
-
-# Enhanced BioEQ with scaling capability
-perform_be_analysis_enhanced <- function(data, design, regulatory_standard, 
-                                       scaling = "none", cv_threshold = 0.3) {
-  
-  if (scaling == "reference" && cv_within_ref > cv_threshold) {
-    # Use reference-scaled limits (similar to replicateBE)
-    scaled_limits <- calculate_scaled_limits(cv_within_ref, regulatory_standard)
-    return(perform_scaled_be_analysis(data, scaled_limits))
-  } else {
-    # Use standard fixed limits
-    return(perform_standard_be_analysis(data, c(0.8, 1.25)))
-  }
 }

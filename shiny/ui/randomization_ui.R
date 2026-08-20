@@ -83,11 +83,28 @@ randomization_ui <- function(id) {
                          style = "margin-top: 6px;")
           ),
           box(
-            title = "Schedule (per subject)", status = "warning", solidHeader = TRUE,
+            title = "Schedule", status = "warning", solidHeader = TRUE,
             width = 8,
             uiOutput(ns("schedule_summary")),
-            div(class = "no-top-pad",
-                DT::dataTableOutput(ns("schedule_table"))),
+            tabsetPanel(
+              tabPanel(
+                "Per Subject",
+                div(class = "no-top-pad",
+                    DT::dataTableOutput(ns("schedule_table")))
+              ),
+              tabPanel(
+                "Per Period (Long)",
+                div(class = "no-top-pad",
+                    DT::dataTableOutput(ns("schedule_long_table")))
+              ),
+              tabPanel(
+                "Balance Check",
+                p(class = "text-muted", style = "margin-top: 8px; font-size: 12px;",
+                  "Subject counts by Stratum × Sequence — confirms the randomization landed balanced."),
+                div(class = "no-top-pad",
+                    DT::dataTableOutput(ns("balance_table")))
+              )
+            ),
             br(),
             downloadButton(ns("dl_csv"),  "Download CSV",
                            icon = icon("file-csv"),

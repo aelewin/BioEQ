@@ -59,36 +59,6 @@
 }
 
 # ---------------------------------------------------------------------------
-# Path resolution (kept for backwards compatibility; not used at runtime)
-# ---------------------------------------------------------------------------
-
-#' Locate the validation directory (only needed by developer build scripts)
-#' @export
-get_validation_dir <- function() {
-  candidates <- c(
-    "validation",
-    "../validation",
-    file.path(getwd(), "validation"),
-    normalizePath("validation", mustWork = FALSE)
-  )
-  for (p in candidates) {
-    if (dir.exists(p) && file.exists(file.path(p, "manifest.csv"))) {
-      return(normalizePath(p))
-    }
-  }
-  cur <- getwd()
-  for (i in 1:3) {
-    cand <- file.path(cur, "validation")
-    if (dir.exists(cand) && file.exists(file.path(cand, "manifest.csv"))) {
-      return(normalizePath(cand))
-    }
-    cur <- dirname(cur)
-  }
-  # Return a non-existent path gracefully — embedded store is used instead
-  file.path(getwd(), "validation")
-}
-
-# ---------------------------------------------------------------------------
 # Manifest + dataset loading  (all backed by embedded store)
 # ---------------------------------------------------------------------------
 
@@ -113,12 +83,6 @@ load_validation_groups <- function(validation_dir = NULL) {
   }
   g$is_bioeq_generated <- as.logical(g$is_bioeq_generated)
   g
-}
-
-#' @keywords internal
-.resolve_validation_path <- function(rel, validation_dir) {
-  if (is.na(rel) || rel == "") return(NA_character_)
-  if (!is.null(validation_dir)) file.path(validation_dir, rel) else NA_character_
 }
 
 #' Check whether a dataset is available in the embedded store
