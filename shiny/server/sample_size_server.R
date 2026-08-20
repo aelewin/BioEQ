@@ -1,6 +1,51 @@
 # Sample Size Estimation Server
 # PowerTOST-based sample size calculator for bioequivalence studies
 
+# Number of sequence/treatment groups a design's balanced PowerTOST sample
+# size is split across (used to keep the dropout-adjusted N evenly divisible
+# so every group stays the same size after the dropout buffer is added).
+.ss_design_num_groups <- function(design) {
+  switch(design,
+    "2x2x2"    = 2,
+    "parallel" = 2,
+    "2x2x3"    = 2,
+    "2x2x4"    = 2,
+    "2x3x3"    = 3,
+    "paired"   = 1,
+    2  # default: most designs are 2-sequence
+  )
+}
+
+# Given a PowerTOST-balanced base N and an anticipated dropout rate, compute
+# how many additional subjects are needed so that, after dropout, the
+# completer count still meets the target — rounded UP to the next multiple
+# of the number of groups so every sequence/arm can be enlarged by the same
+# integer amount. E.g. base N = 59 (2 groups), dropout = 10%: raw additional
+# need = 59 * 0.10/0.90 = 6.56 -> rounded up to the next EVEN number = 8,
+# giving an adjusted total of 67 (not the naive ceiling(65.56) = 66, which
+# would leave the two sequence groups unequal in size).
+.ss_dropout_adjust <- function(n_base, dropout_pct, design) {
+  if (is.null(dropout_pct) || is.na(dropout_pct) || dropout_pct <= 0) return(NULL)
+  p <- dropout_pct / 100
+  if (p >= 1) return(NULL)
+
+  n_groups   <- .ss_design_num_groups(design)
+  extra_raw  <- n_base * p / (1 - p)
+  extra_used <- n_groups * ceiling(extra_raw / n_groups)
+  n_adjusted <- n_base + extra_used
+
+  list(
+    dropout_pct        = dropout_pct,
+    n_groups           = n_groups,
+    n_base              = n_base,
+    extra_raw           = extra_raw,
+    extra_used          = extra_used,
+    n_adjusted          = n_adjusted,
+    per_group_base      = n_base / n_groups,
+    per_group_adjusted  = n_adjusted / n_groups
+  )
+}
+
 # ── Update design choices based on selected BE method ──
 observeEvent(input$ss_method, {
   method <- input$ss_method
@@ -99,7 +144,12 @@ observeEvent(input$calculate_ss, {
     showNotification("Lower BE limit must be less than upper BE limit", type = "error")
     return()
   }
-  
+  dropout_pct <- input$ss_dropout_pct %||% 0
+  if (!is.na(dropout_pct) && (dropout_pct < 0 || dropout_pct >= 100)) {
+    showNotification("Anticipated dropout rate must be between 0 and 99%", type = "error")
+    return()
+  }
+
   tryCatch({
     result <- NULL
     console_output <- NULL
@@ -171,7 +221,8 @@ observeEvent(input$calculate_ss, {
       theta2 = theta2,
       alpha = alpha,
       target_power = target_power,
-      regulator = if (method == "ABEL") input$ss_regulator else NULL
+      regulator = if (method == "ABEL") input$ss_regulator else NULL,
+      dropout_info = .ss_dropout_adjust(result[["Sample size"]], dropout_pct, design)
     ))
     
     showNotification("Sample size calculated successfully!", type = "message", duration = 3)
@@ -216,10 +267,42 @@ output$ss_result_display <- renderUI({
   )
   
   tagList(
-    # Summary card
+    # Details
+    div(
+      style = "background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px;",
+      h5(icon("info-circle"), " Calculation Details", style = "color: #2d3748; margin-top: 0;"),
+      fluidRow(
+        column(6,
+          tags$table(
+            style = "width: 100%; font-size: 14px;",
+            tags$tr(tags$td("Method:", style = "color: #6c757d; padding: 3px 0;"), 
+                    tags$td(tags$strong(method_labels[res$method]), style = "padding: 3px 0;")),
+            tags$tr(tags$td("Design:", style = "color: #6c757d; padding: 3px 0;"), 
+                    tags$td(tags$strong(res$design), style = "padding: 3px 0;")),
+            tags$tr(tags$td("T/R Ratio (Δ):", style = "color: #6c757d; padding: 3px 0;"),
+                    tags$td(tags$strong(sprintf("%.4f", res$theta0)), style = "padding: 3px 0;"))
+          )
+        ),
+        column(6,
+          tags$table(
+            style = "width: 100%; font-size: 14px;",
+            tags$tr(tags$td("BE Limits:", style = "color: #6c757d; padding: 3px 0;"), 
+                    tags$td(tags$strong(sprintf("%.2f – %.2f", res$theta1, res$theta2)), style = "padding: 3px 0;")),
+            tags$tr(tags$td("Alpha:", style = "color: #6c757d; padding: 3px 0;"), 
+                    tags$td(tags$strong(sprintf("%.2f", res$alpha)), style = "padding: 3px 0;")),
+            if (!is.null(res$regulator)) 
+              tags$tr(tags$td("Regulator:", style = "color: #6c757d; padding: 3px 0;"), 
+                      tags$td(tags$strong(res$regulator), style = "padding: 3px 0;"))
+          )
+        )
+      )
+    ),
+
+    # PowerTOST summary card
     div(
       style = "background: linear-gradient(135deg, #d5f4e6, #e8f8f0); border-radius: 12px; 
                padding: 20px; margin-bottom: 20px; border: 1px solid #27ae60;",
+      h5(icon("calculator"), " PowerTost Calculation", style = "color: #1e5631; margin-top: 0;"),
       fluidRow(
         column(4,
           div(style = "text-align: center;",
@@ -243,38 +326,40 @@ output$ss_result_display <- renderUI({
         )
       )
     ),
-    
-    # Details
-    div(
-      style = "background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px;",
-      h5(icon("info-circle"), " Calculation Details", style = "color: #2d3748; margin-top: 0;"),
-      fluidRow(
-        column(6,
-          tags$table(
-            style = "width: 100%; font-size: 14px;",
-            tags$tr(tags$td("Method:", style = "color: #6c757d; padding: 3px 0;"), 
-                    tags$td(tags$strong(method_labels[res$method]), style = "padding: 3px 0;")),
-            tags$tr(tags$td("Design:", style = "color: #6c757d; padding: 3px 0;"), 
-                    tags$td(tags$strong(res$design), style = "padding: 3px 0;")),
-            tags$tr(tags$td("T/R Ratio (\u03b80):", style = "color: #6c757d; padding: 3px 0;"), 
-                    tags$td(tags$strong(sprintf("%.4f", res$theta0)), style = "padding: 3px 0;"))
-          )
-        ),
-        column(6,
-          tags$table(
-            style = "width: 100%; font-size: 14px;",
-            tags$tr(tags$td("BE Limits:", style = "color: #6c757d; padding: 3px 0;"), 
-                    tags$td(tags$strong(sprintf("%.2f \u2013 %.2f", res$theta1, res$theta2)), style = "padding: 3px 0;")),
-            tags$tr(tags$td("Alpha:", style = "color: #6c757d; padding: 3px 0;"), 
-                    tags$td(tags$strong(sprintf("%.2f", res$alpha)), style = "padding: 3px 0;")),
-            if (!is.null(res$regulator)) 
-              tags$tr(tags$td("Regulator:", style = "color: #6c757d; padding: 3px 0;"), 
-                      tags$td(tags$strong(res$regulator), style = "padding: 3px 0;"))
+
+    # Dropout-adjusted enrollment (optional — only when a dropout rate was entered)
+    if (!is.null(res$dropout_info)) {
+      di <- res$dropout_info
+      div(
+        style = "background: linear-gradient(135deg, #fff4e5, #fffaf0); border-radius: 12px;
+                 padding: 20px; margin-bottom: 15px; border: 1px solid #dd8b00;",
+        h5(icon("user-clock"), " Dropout-Adjusted Enrollment", style = "color: #7a4a00; margin-top: 0;"),
+        fluidRow(
+          column(4,
+            div(style = "text-align: center;",
+              h2(di$n_base, style = "color: #6c757d; margin: 0; font-size: 34px; font-weight: 700;"),
+              p("PowerTOST N", style = "color: #6c757d; font-weight: 600; margin: 0; font-size: 12px;")
+            )
+          ),
+          column(4,
+            div(style = "text-align: center;",
+              h2(sprintf("+%d", di$extra_used), style = "color: #dd8b00; margin: 0; font-size: 34px; font-weight: 700;"),
+              p(sprintf("Added for %.0f%% Dropout", di$dropout_pct),
+                style = "color: #7a4a00; font-weight: 600; margin: 0; font-size: 12px;"),
+              p(sprintf("(raw need: %.2f)", di$extra_raw),
+                style = "color: #a0855c; font-size: 11px; margin: 2px 0 0 0;")
+            )
+          ),
+          column(4,
+            div(style = "text-align: center;",
+              h2(di$n_adjusted, style = "color: #dd8b00; margin: 0; font-size: 34px; font-weight: 700;"),
+              p("Enroll (Adjusted Total)", style = "color: #7a4a00; font-weight: 600; margin: 0; font-size: 12px;")
+            )
           )
         )
       )
-    ),
-    
+    },
+
     # Console output (collapsible)
     tags$details(
       style = "margin-top: 10px;",

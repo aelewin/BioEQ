@@ -15,15 +15,23 @@
 #
 # Regulatory constants:
 #   - θ_s = ln(1.25)/σ_w0 = 0.2231/0.25 ≈ 0.8924 (FDA scaling proportionality constant)
-#   - σ_w0 = 0.25 (FDA regulatory cutoff SD, s²_w0 = 0.0625, CV_wR ≈ 25.4%)
+#   - σ_w0 = 0.25 — the criterion constant used INSIDE the scaled-limits
+#     formula only (s²_w0 = 0.0625, CV ≈ 25.4%). This is NOT the switching
+#     threshold that decides whether RSABE scaling applies to a drug — that
+#     decision uses a separate, higher threshold: s_wR ≥ 0.294 (CV_wR ≈ 30%,
+#     s²_wR ≈ 0.0864). See s_wR_switch / s2_wR_switch below, where that
+#     threshold is actually applied.
 #   - Point estimate constraint: 80-125% (FDA requirement)
 #
 # The linearized criterion: η = d² − θ²_s · σ²_wR
-#   At the switching boundary (σ_wR = σ_w0 = 0.25):
+#   Evaluated at σ_wR = σ_w0 = 0.25, the formula's scaled limits happen to
+#   collapse exactly to standard ABE limits — a mathematical property of the
+#   constant, not the switching decision itself:
 #     θ_s · σ_w0 = 0.8924 × 0.25 = 0.2231 = ln(1.25)
-#     → scaled limits collapse to standard ABE limits: exp(±0.2231) = [80%, 125%]
-#   When σ_wR > σ_w0 (HV drug):
-#     θ_s · σ_wR > ln(1.25) → limits expand beyond 80-125%
+#     → exp(±0.2231) = [80%, 125%]
+#   When σ_wR > σ_w0, θ_s · σ_wR > ln(1.25) → the formula's limits mathematically
+#   expand beyond 80-125% — but RSABE scaling is only actually applied once
+#   σ_wR reaches the real switching threshold, σ_wR ≥ 0.294.
 #
 # =============================================================================
 
@@ -481,23 +489,11 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
   # LSMean(Test) - LSMean(Reference) equals d_hat exactly; this just makes the
   # two individual means visible (and their geometric-mean back-transforms),
   # matching how SAS PROC GLM/MIXED reports FORM LSMEANs alongside the estimate.
-  lsmeans_result <- tryCatch({
-    emm <- emmeans::emmeans(model, ~ drug)
-    emm_df <- as.data.frame(emm)
-    drug_levels <- levels(model_data$drug)
-    ref_level <- drug_levels[1]
-    test_level <- drug_levels[2]
-    lsm_ref  <- emm_df$emmean[emm_df$drug == ref_level]
-    lsm_test <- emm_df$emmean[emm_df$drug == test_level]
-    list(
-      ref_level = ref_level, test_level = test_level,
-      lsmean_ref_log = lsm_ref, lsmean_test_log = lsm_test,
-      lsmean_ref_geo = exp(lsm_ref), lsmean_test_geo = exp(lsm_test)
-    )
-  }, error = function(e) {
-    cat(sprintf("    ⚠️  Could not compute LSMeans via emmeans: %s\n", e$message))
-    NULL
-  })
+  drug_levels <- levels(model_data$drug)
+  lsmeans_result <- compute_lsmeans_ci(model, drug_levels[1], drug_levels[2], level = 0.90)
+  if (is.null(lsmeans_result)) {
+    cat("    ⚠️  Could not compute LSMeans via emmeans\n")
+  }
 
   return(list(
     d_hat = d_hat,

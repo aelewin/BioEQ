@@ -143,6 +143,25 @@ randomization_server <- function(id, ss_result = NULL) {
     }
 
     observeEvent(input$generate, {
+      if (is.null(input$design) || !nzchar(input$design)) {
+        showNotification("Select a study design before generating a schedule.",
+                         type = "error")
+        return()
+      }
+      if (is.null(input$n_total) || is.na(input$n_total) || input$n_total < 2) {
+        showNotification("Enter a total sample size (N).", type = "error")
+        return()
+      }
+      if (is.null(input$seed) || is.na(input$seed)) {
+        showNotification("Enter an RNG seed, or click 'Random seed'.", type = "error")
+        return()
+      }
+      if (isTRUE(input$use_blocks) &&
+          (is.null(input$block_size) || is.na(input$block_size) || input$block_size <= 0)) {
+        showNotification("Enter a group size, or turn off group randomization.",
+                         type = "error")
+        return()
+      }
       tryCatch({
         bs <- if (isTRUE(input$use_blocks) && !is.null(input$block_size) &&
                   !is.na(input$block_size) && input$block_size > 0) {
@@ -173,6 +192,23 @@ randomization_server <- function(id, ss_result = NULL) {
         showNotification(paste("Generation failed:", e$message), type = "error",
                          duration = 8)
       })
+    })
+
+    # ---- Reset (Generate tab) ----------------------------------------------
+    observeEvent(input$reset_generate, {
+      updateSelectInput(session, "design", selected = "")
+      updateNumericInput(session, "n_total", value = NA)
+      updateCheckboxInput(session, "use_blocks", value = FALSE)
+      updateNumericInput(session, "block_size", value = NA)
+      updateNumericInput(session, "seed", value = NA)
+      updateCheckboxInput(session, "use_strata", value = FALSE)
+      updateTextInput(session, "stratum1_name",   value = "")
+      updateTextInput(session, "stratum1_levels", value = "")
+      updateTextInput(session, "stratum2_name",   value = "")
+      updateTextInput(session, "stratum2_levels", value = "")
+      updateTextInput(session, "subject_prefix",  value = "")
+      rnd_result(NULL)
+      showNotification("Generate Schedule inputs reset.", type = "message", duration = 3)
     })
 
     .strip_unused <- function(df, r) {
@@ -429,6 +465,23 @@ randomization_server <- function(id, ss_result = NULL) {
     }
 
     observeEvent(input$verify, {
+      if (is.null(input$v_design) || !nzchar(input$v_design)) {
+        showNotification("Select a study design before verifying.", type = "error")
+        return()
+      }
+      if (is.null(input$v_n_total) || is.na(input$v_n_total) || input$v_n_total < 2) {
+        showNotification("Enter a total sample size (N).", type = "error")
+        return()
+      }
+      if (is.null(input$v_seed) || is.na(input$v_seed)) {
+        showNotification("Enter the RNG seed used to generate the schedule.", type = "error")
+        return()
+      }
+      if (isTRUE(input$v_use_blocks) &&
+          (is.null(input$v_block_size) || is.na(input$v_block_size) || input$v_block_size <= 0)) {
+        showNotification("Enter the group size that was used.", type = "error")
+        return()
+      }
       tryCatch({
         prov <- .read_provided(input$v_file)
         bs <- if (isTRUE(input$v_use_blocks)) as.integer(input$v_block_size) else NULL
@@ -452,6 +505,26 @@ randomization_server <- function(id, ss_result = NULL) {
         showNotification(paste("Verification failed:", e$message),
                          type = "error", duration = 8)
       })
+    })
+
+    # ---- Reset (Verify tab) ------------------------------------------------
+    observeEvent(input$reset_verify, {
+      updateSelectInput(session, "v_design", selected = "")
+      updateNumericInput(session, "v_n_total", value = NA)
+      updateCheckboxInput(session, "v_use_blocks", value = FALSE)
+      updateNumericInput(session, "v_block_size", value = NA)
+      updateNumericInput(session, "v_seed", value = NA)
+      updateCheckboxInput(session, "v_use_strata", value = FALSE)
+      updateTextInput(session, "v_stratum1_name",   value = "")
+      updateTextInput(session, "v_stratum1_levels", value = "")
+      updateTextInput(session, "v_stratum2_name",   value = "")
+      updateTextInput(session, "v_stratum2_levels", value = "")
+      updateTextInput(session, "v_subject_prefix",  value = "")
+      if (exists("shinyjs_available") && shinyjs_available) {
+        shinyjs::reset("v_file")
+      }
+      verify_state(NULL)
+      showNotification("Verify Schedule inputs reset.", type = "message", duration = 3)
     })
 
     output$verify_status <- renderUI({

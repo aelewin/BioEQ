@@ -395,14 +395,6 @@ tagList(
                   ),
                   selected = "fda_linearized",
                   inline = FALSE
-                ),
-                div(style = "padding: 10px; background-color: #e3f2fd; border-left: 3px solid #1976d2; border-radius: 4px; margin-top: 10px;",
-                  tags$small(style = "color: #1565c0;",
-                    icon("info-circle"), " ",
-                    "RSABE uses intra-subject contrasts (ISC) for variance estimation. ",
-                    "Requires replicate design (2\u00D72\u00D73 or 2\u00D72\u00D74). ",
-                    "Parameters with CV", tags$sub("wR"), " \u2264 ~25.4% use standard ABE limits."
-                  )
                 )
               ),
               
@@ -566,7 +558,8 @@ tagList(
                 ),
                 div(style = "font-size: 11px; color: #666; margin-top: 5px;",
                   "RSABE uses Fixed Effects or nlme for treatment effect estimation. ",
-                  "Within-reference variance (s\u00B2wR) is always computed via individual subject contrasts (ISC)."
+                  "Within-reference variance (s\u00B2wR) is always computed via a reference-only ANOVA, ",
+                  "independent of this Fixed/nlme choice."
                 )
               ),
               

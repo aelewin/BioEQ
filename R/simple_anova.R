@@ -61,124 +61,109 @@ detect_anova_design <- function(nca_data) {
 #' `perform_simple_anova()` callers is unchanged.
 #'
 #' @param model An `lm` object fit as `y ~ seq + subj:seq + prd + drug`
-#' @param type3_ss Optional pre-computed `drop1(model, test = "F")` result (avoids
-#'   recomputing it when the caller already has one); computed internally if omitted.
+#' @param type3_ss Unused; kept for backward compatibility with existing callers
+#'   that still pass a pre-computed `drop1()` result. Type III SS is always
+#'   computed via `emmeans::joint_tests()` now (see below), which is the only
+#'   approach that reproduces SAS PROC GLM's Type III SS exactly, including for
+#'   the Sequence term (see next paragraph).
 #' @return list(comprehensive_anova = data.frame, subj_seq_analysis = list), or NULL
-#'   if the model's ANOVA row names don't match the expected crossover shape (caller
-#'   should fall back to a generic Model/Error/Corrected-Total summary in that case).
+#'   if the model's terms don't match the expected crossover shape (caller should
+#'   fall back to a generic Model/Error/Corrected-Total summary in that case).
 #' @export
 build_crossover_anova_tables <- function(model, type3_ss = NULL) {
   anova_table <- tryCatch(anova(model), error = function(e) NULL)
   if (is.null(anova_table)) return(NULL)
-  if (is.null(type3_ss)) {
-    type3_ss <- tryCatch(drop1(model, test = "F"), error = function(e) NULL)
+
+  at_rows   <- rownames(anova_table)
+  resid_row <- at_rows[grepl("^Resid", at_rows)]
+  if (length(resid_row) != 1) return(NULL)
+  df_resid <- anova_table[resid_row, "Df"]
+  ss_resid <- anova_table[resid_row, "Sum Sq"]
+  ms_resid <- anova_table[resid_row, "Mean Sq"]
+
+  # ── Type III (marginal) SS for every other term, via emmeans' own estimable-
+  # contrast machinery ─────────────────────────────────────────────────────
+  # `drop1()` cannot test `seq` on its own here: with `subj:seq` (Subject nested
+  # in Sequence) also in the model, dropping `seq` alone while keeping `subj:seq`
+  # is not a valid marginality-respecting comparison, and naive fallbacks (e.g.
+  # F = t² from the raw coefficient, or plain Type I SS) do NOT reproduce SAS's
+  # actual Type III SS for Sequence once the design is even slightly unbalanced
+  # (verified against a real SAS PROC GLM run: those approaches gave 0.1280
+  # instead of SAS's 0.07860991 for a 44-subject, one-partial-subject dataset).
+  # `emmeans::joint_tests()` computes the correct estimable linear contrast for
+  # each term — including Sequence vs. the nested Subject(Sequence) term — via
+  # the same general "estimable functions" approach SAS uses internally. Its own
+  # printed F-ratio is pre-rounded to 3 decimals, so the Wald F-test is redone
+  # here at full precision using the contrast matrices it exposes via
+  # `attr(., "est.fcns")`, filtered to the model's non-aliased coefficients.
+  # Verified to reproduce SAS's Type III SS for Sequence, Subject(Sequence),
+  # Period, and Treatment to 6+ decimal places on real data.
+  jt <- tryCatch(emmeans::joint_tests(model), error = function(e) NULL)
+  if (is.null(jt)) return(NULL)
+  ef <- attr(jt, "est.fcns")
+  beta <- coef(model)
+  V <- tryCatch(vcov(model), error = function(e) NULL)
+  if (is.null(ef) || is.null(V)) return(NULL)
+  ok <- !is.na(beta)
+  beta_ok <- beta[ok]
+  V_ok <- V[ok, ok, drop = FALSE]
+
+  compute_term <- function(term_name) {
+    L <- ef[[term_name]]
+    if (is.null(L)) return(NULL)
+    L <- L[, ok, drop = FALSE]
+    Lb <- L %*% beta_ok
+    df1 <- nrow(L)
+    vv <- tryCatch(solve(L %*% V_ok %*% t(L)), error = function(e) NULL)
+    if (is.null(vv)) return(NULL)
+    f_stat <- as.numeric(t(Lb) %*% vv %*% Lb) / df1
+    ss <- f_stat * df1 * ms_resid
+    list(df = df1, ss = ss, ms = ss / df1, f = f_stat,
+         p = pf(f_stat, df1, df_resid, lower.tail = FALSE))
   }
-  if (is.null(type3_ss)) return(NULL)
-
-  at_rows      <- rownames(anova_table)
-  seq_row      <- at_rows[at_rows == "seq"]
-  subj_seq_row <- at_rows[grepl("subj.*seq|seq.*subj", at_rows) & at_rows != "seq"]
-  prd_row      <- at_rows[at_rows == "prd"]
-  drug_row     <- at_rows[grepl("^drug", at_rows)]
-  resid_row    <- at_rows[grepl("^Resid", at_rows)]
-
-  if (!(length(seq_row) == 1 && length(subj_seq_row) == 1 &&
-        length(prd_row) == 1 && length(drug_row) == 1 && length(resid_row) == 1)) {
-    return(NULL)
+  find_term <- function(pattern) {
+    hit <- names(ef)[grepl(pattern, names(ef))]
+    if (length(hit) != 1) return(NULL)
+    compute_term(hit)
   }
 
-  # ── Type III (partial/marginal) SS — matches SAS PROC GLM Type III output ──
-  # For subj:seq, prd, drug: extract from drop1() (marginal contribution of each
-  # term after adjusting for all others).
-  # For seq: seq cannot be dropped by drop1() because subj:seq depends on it;
-  # instead derive F from the full-model t-statistic (F = t^2 for 1-DF effect).
-  ss3_seq  <- NA_real_
-  ss3_subj <- NA_real_
-  ss3_prd  <- NA_real_
-  ss3_drug <- NA_real_
-
-  tryCatch({
-    drop1_df   <- as.data.frame(type3_ss)
-    drop1_rows <- rownames(drop1_df)
-
-    sub_r  <- drop1_rows[grepl("subj.*seq|seq.*subj", drop1_rows) & drop1_rows != "<none>"]
-    prd_r  <- drop1_rows[drop1_rows == "prd"]
-    drug_r <- drop1_rows[grepl("^drug", drop1_rows)]
-
-    if (length(sub_r)  == 1) ss3_subj <- drop1_df[sub_r,  "Sum of Sq"]
-    if (length(prd_r)  == 1) ss3_prd  <- drop1_df[prd_r,  "Sum of Sq"]
-    if (length(drug_r) == 1) ss3_drug <- drop1_df[drug_r, "Sum of Sq"]
-  }, error = function(e) NULL)
-
-  # Type III SS for seq via full-model t-statistic (F = t^2 for 1 DF)
-  tryCatch({
-    cs <- summary(model)$coefficients
-    seq_coef_rows <- grep("^seq[^:]", rownames(cs), value = TRUE)
-    if (length(seq_coef_rows) == 1) {
-      t_seq_val <- cs[seq_coef_rows, "t value"]
-      ms_resid_tmp <- anova_table[resid_row, "Mean Sq"]
-      ss3_seq <- t_seq_val^2 * ms_resid_tmp  # 1 DF
-    }
-  }, error = function(e) NULL)
-
-  # Fallback to Type I SS for any term where Type III could not be computed
-  if (is.na(ss3_seq))  ss3_seq  <- anova_table[seq_row,      "Sum Sq"]
-  if (is.na(ss3_subj)) ss3_subj <- anova_table[subj_seq_row, "Sum Sq"]
-  if (is.na(ss3_prd))  ss3_prd  <- anova_table[prd_row,      "Sum Sq"]
-  if (is.na(ss3_drug)) ss3_drug <- anova_table[drug_row,     "Sum Sq"]
-
-  # Degrees of freedom (same as Type I; only SS changes)
-  df_seq      <- anova_table[seq_row,      "Df"]
-  df_subj_seq <- anova_table[subj_seq_row, "Df"]
-  df_prd      <- anova_table[prd_row,      "Df"]
-  df_drug     <- anova_table[drug_row,     "Df"]
-  df_resid    <- anova_table[resid_row,    "Df"]
-  ss_resid    <- anova_table[resid_row,    "Sum Sq"]
-  ms_resid    <- anova_table[resid_row,    "Mean Sq"]
-
-  ms_seq      <- ss3_seq  / df_seq
-  ms_subj_seq <- ss3_subj / df_subj_seq
-  ms_prd      <- ss3_prd  / df_prd
-  ms_drug     <- ss3_drug / df_drug
-
-  # Main ANOVA table: ALL effects tested against Residual MS (SAS PROC GLM default)
-  f_seq_main  <- ms_seq      / ms_resid
-  f_subj_main <- ms_subj_seq / ms_resid
-  f_prd_main  <- ms_prd      / ms_resid
-  f_drug_main <- ms_drug     / ms_resid
-  p_seq_main  <- pf(f_seq_main,  df_seq,      df_resid, lower.tail = FALSE)
-  p_subj_main <- pf(f_subj_main, df_subj_seq, df_resid, lower.tail = FALSE)
-  p_prd_main  <- pf(f_prd_main,  df_prd,      df_resid, lower.tail = FALSE)
-  p_drug_main <- pf(f_drug_main, df_drug,     df_resid, lower.tail = FALSE)
+  seq_t  <- find_term("^seq$")
+  subj_t <- find_term("subj.*seq|seq.*subj")
+  prd_t  <- find_term("^prd$")
+  drug_t <- find_term("^drug$")
+  if (is.null(seq_t) || is.null(subj_t) || is.null(prd_t) || is.null(drug_t)) return(NULL)
 
   comprehensive_anova <- data.frame(
     Source = c("Sequence", "Subject(Sequence)", "Period", "Treatment", "Residual"),
-    Df = c(df_seq, df_subj_seq, df_prd, df_drug, df_resid),
-    `Sum Sq` = c(ss3_seq, ss3_subj, ss3_prd, ss3_drug, ss_resid),
-    `Mean Sq` = c(ms_seq, ms_subj_seq, ms_prd, ms_drug, ms_resid),
-    `F value` = c(f_seq_main, f_subj_main, f_prd_main, f_drug_main, NA),
-    `Pr(>F)`  = c(p_seq_main, p_subj_main, p_prd_main, p_drug_main, NA),
+    Df = c(seq_t$df, subj_t$df, prd_t$df, drug_t$df, df_resid),
+    `Sum Sq` = c(seq_t$ss, subj_t$ss, prd_t$ss, drug_t$ss, ss_resid),
+    `Mean Sq` = c(seq_t$ms, subj_t$ms, prd_t$ms, drug_t$ms, ms_resid),
+    `F value` = c(seq_t$f, subj_t$f, prd_t$f, drug_t$f, NA),
+    `Pr(>F)`  = c(seq_t$p, subj_t$p, prd_t$p, drug_t$p, NA),
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
   rownames(comprehensive_anova) <- comprehensive_anova$Source
 
   # Second table: "Tests of Hypotheses Using the Type III MS for Subject(Seq) as Error Term"
-  # Seq tested against Subject(Sequence) MS (between-subject error)
-  f_seq_vs_subj <- ms_seq / ms_subj_seq
-  p_seq_vs_subj <- pf(f_seq_vs_subj, df_seq, df_subj_seq, lower.tail = FALSE)
+  # The SAME Sequence SS/MS as above (a single fixed quantity, per SAS convention),
+  # but F-tested against Subject(Sequence) MS instead of Residual MS — the
+  # standard, correct significance test for the Sequence effect in a crossover
+  # design (matches SAS PROC GLM's second table exactly).
+  f_seq_vs_subj <- seq_t$ms / subj_t$ms
+  p_seq_vs_subj <- pf(f_seq_vs_subj, seq_t$df, subj_t$df, lower.tail = FALSE)
 
   subj_seq_analysis <- list(
     error_term = list(
-      df = df_subj_seq,
-      ss = ss3_subj,
-      ms = ms_subj_seq
+      df = subj_t$df,
+      ss = subj_t$ss,
+      ms = subj_t$ms
     ),
     hypothesis_tests = list(
       seq = list(
-        df      = df_seq,
-        ss      = ss3_seq,
-        ms      = ms_seq,
+        df      = seq_t$df,
+        ss      = seq_t$ss,
+        ms      = seq_t$ms,
         f_value = f_seq_vs_subj,
         p_value = p_seq_vs_subj
       )
@@ -186,6 +171,49 @@ build_crossover_anova_tables <- function(model, type3_ss = NULL) {
   )
 
   list(comprehensive_anova = comprehensive_anova, subj_seq_analysis = subj_seq_analysis)
+}
+
+#' Least-Squares Means (via emmeans) for the treatment factor, with CI
+#'
+#' Computes the population-average log-scale LSMean for each treatment level
+#' (Reference and Test) from a fitted crossover model, marginalized over the
+#' other model terms (sequence/period/subject nesting) — matching what SAS
+#' PROC GLM/MIXED reports as "Least Squares Means" for the treatment (FORM)
+#' effect. Works generically for lm, nlme::lme, and lmerTest::lmer fits since
+#' emmeans dispatches on model class.
+#'
+#' @param model Fitted model with a `drug` factor term (2 levels: Reference, Test)
+#' @param ref_level,test_level The factor level strings for Reference and Test
+#'   (e.g. "R"/"T" or "Reference"/"Test") — passed in explicitly rather than
+#'   re-derived from the fitted model object, since that differs by model class.
+#' @param level Confidence level for the LSMean CIs (default 0.90, matching the
+#'   90% CI convention used throughout BE analysis — NOT emmeans' 0.95 default).
+#' @return A list with per-level LSMean (log + back-transformed geometric scale),
+#'   SE, df, and CI, or NULL if emmeans fails (e.g. model too degenerate).
+compute_lsmeans_ci <- function(model, ref_level, test_level, level = 0.90) {
+  tryCatch({
+    emm <- emmeans::emmeans(model, ~ drug, level = level)
+    emm_df <- as.data.frame(emm)
+
+    row_ref  <- emm_df[as.character(emm_df$drug) == ref_level, , drop = FALSE]
+    row_test <- emm_df[as.character(emm_df$drug) == test_level, , drop = FALSE]
+    if (nrow(row_ref) != 1 || nrow(row_test) != 1) return(NULL)
+
+    get_col <- function(row, nm) if (nm %in% names(row)) row[[nm]] else NA_real_
+
+    list(
+      ref_level = ref_level, test_level = test_level,
+      lsmean_ref_log  = row_ref$emmean,  lsmean_test_log  = row_test$emmean,
+      lsmean_ref_geo  = exp(row_ref$emmean), lsmean_test_geo  = exp(row_test$emmean),
+      se_ref  = get_col(row_ref, "SE"),  se_test  = get_col(row_test, "SE"),
+      df_ref  = get_col(row_ref, "df"),  df_test  = get_col(row_test, "df"),
+      ci_lower_ref_log  = get_col(row_ref, "lower.CL"),  ci_upper_ref_log  = get_col(row_ref, "upper.CL"),
+      ci_lower_test_log = get_col(row_test, "lower.CL"), ci_upper_test_log = get_col(row_test, "upper.CL"),
+      ci_lower_ref_geo  = exp(get_col(row_ref, "lower.CL")),  ci_upper_ref_geo  = exp(get_col(row_ref, "upper.CL")),
+      ci_lower_test_geo = exp(get_col(row_test, "lower.CL")), ci_upper_test_geo = exp(get_col(row_test, "upper.CL")),
+      level = level
+    )
+  }, error = function(e) NULL)
 }
 
 #' Build a Sequence + Subject(Sequence) + Period ANOVA table for a single-arm
@@ -480,6 +508,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
   drug_levels <- levels(nca_data$drug)
   drug_coef_name <- paste0("drug", drug_levels[length(drug_levels)])  # Non-reference level
   cat(sprintf("  ✓ Drug coefficient name: %s\n", drug_coef_name))
+  lsmeans_result <- NULL  # populated after the model is fit, below
   
   # Check for group effects and prepare group factor
   has_groups <- FALSE
@@ -610,7 +639,8 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           
           # Fit model
           model <- lm(model_formula, data = complete_data, na.action = na.omit)
-          
+          lsmeans_result <- compute_lsmeans_ci(model, drug_levels[1], drug_levels[length(drug_levels)], level = ci_level)
+
           # Get ANOVA table and summaries
           anova_table <- anova(model)  # This gives Type I SS (sequential)
           type3_ss <- drop1(model, test = "F")  # This gives Type III SS (marginal)
@@ -798,7 +828,8 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             cat(sprintf("  [ERROR] nlme model fitting failed: %s\n", e$message))
             stop(sprintf("nlme model fitting failed for %s: %s", param, e$message))
           })
-          
+          lsmeans_result <- compute_lsmeans_ci(model, drug_levels[1], drug_levels[length(drug_levels)], level = ci_level)
+
           cat("  [DEBUG] Getting summaries...\n")
           
           # Get summaries
@@ -973,7 +1004,8 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           
           # Fit model
           model <- lmerTest::lmer(model_formula, data = complete_data, na.action = na.omit)
-          
+          lsmeans_result <- compute_lsmeans_ci(model, drug_levels[1], drug_levels[length(drug_levels)], level = ci_level)
+
           # Get summary with Satterthwaite DF
           model_summary <- summary(model, ddf = "Satterthwaite")
           model_aic <- AIC(model)
@@ -1060,7 +1092,8 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           
           # Fit model
           model <- lmerTest::lmer(model_formula, data = complete_data, na.action = na.omit)
-          
+          lsmeans_result <- compute_lsmeans_ci(model, drug_levels[1], drug_levels[length(drug_levels)], level = ci_level)
+
           # Get summary with Kenward-Roger DF
           model_summary <- summary(model, ddf = "Kenward-Roger")
           model_aic <- AIC(model)
@@ -1319,7 +1352,8 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         n_subjects = n_subjects,
         treatment_se = treatment_se,
         treatment_pval = treatment_pval,
-        subj_seq_analysis = subj_seq_analysis
+        subj_seq_analysis = subj_seq_analysis,
+        lsmeans_result = lsmeans_result
       )
       
     }, error = function(e) {

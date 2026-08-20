@@ -306,16 +306,14 @@ help_texts <- list(
     tooltip = "Select the regulatory approach for ABEL",
     title = "ABEL Regulatory Approaches",
     content = div(
-      p("Different regulatory agencies use different approaches for Average Bioequivalence with Expanding Limits. Only the following are currently supported by the replicateBE package:"),
-      
+      p("Different regulatory agencies use different approaches for Average Bioequivalence with Expanding Limits."),
+
       tags$h6(tags$strong("EMA (European Medicines Agency)"), style = "margin-top: 15px;"),
       tags$ul(
         tags$li(tags$strong("Scaling with 50% cap")),
         tags$li("Limits expand based on reference variability (CV", tags$sub("wR"), ")"),
         tags$li("Maximum expanded limits: 69.84% - 143.19%"),
-        tags$li("Cap reached when CV", tags$sub("wR"), " ≈ 50%"),
-        tags$li("Limits rounded to 2 decimal places"),
-        tags$li("Point estimate must remain within 80.00% - 125.00%")
+        tags$li("Cap reached when CV", tags$sub("wR"), " ≈ 50%")
       ),
       
       div(
@@ -331,14 +329,23 @@ help_texts <- list(
         tags$li(tags$strong("Fixed widened limits: 75.00% - 133.33%")),
         tags$li("Limits do NOT scale with CV", tags$sub("wR")),
         tags$li("Applied when CV", tags$sub("wR"), " > 30%"),
-        tags$li("If CV", tags$sub("wR"), " ≤ 30%, standard 80-125% limits apply"),
-        tags$li("Point estimate must remain within 80.00% - 125.00%")
+        tags$li("If CV", tags$sub("wR"), " ≤ 30%, standard 80-125% limits apply")
       ),
-      
+
+      tags$h6(tags$strong("Health Canada"), style = "margin-top: 15px;"),
+      tags$ul(
+        tags$li(tags$strong("Scaling with 57.4% cap")),
+        tags$li("Limits expand based on reference variability (CV", tags$sub("wR"), "), same formula as EMA"),
+        tags$li("Maximum expanded limits: 66.7% - 150.0%"),
+        tags$li("Cap reached when CV", tags$sub("wR"), " ≈ 57.4%")
+      ),
+
       div(
-        style = "margin-top: 15px; padding: 10px; background-color: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 4px;",
-        tags$strong(icon("info-circle"), " Health Canada:"), br(),
-        "Cap at CVwR = 57.4% (limits: 66.7%–150.0%). Applied automatically when the Health Canada scope is selected."
+        style = "margin-top: 10px; padding: 10px; background-color: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 4px;",
+        tags$strong(icon("calculator"), " Health Canada Scaling Formula:"), br(),
+        "Expanded limits = 100 × exp(±k × s", tags$sub("wR"), ")", br(),
+        "where s", tags$sub("wR"), " = √(ln(CV", tags$sub("wR"), tags$sup("2"), " + 1))", br(),
+        "and k = 0.76 (same regulatory constant as EMA, wider cap)"
       )
     )
   ),
@@ -444,6 +451,10 @@ help_texts <- list(
     tooltip = "Select the RSABE statistical method",
     title = "RSABE Statistical Methods",
     content = div(
+      tags$p(tags$em("U.S. Food and Drug Administration (FDA), Center for Drug Evaluation and Research (CDER). "),
+             tags$em("Statistical Approaches to Establishing Bioequivalence. Guidance for Industry."),
+             " December 2022.",
+             style = "font-size: 0.85em; color: #555;"),
       tags$h6(tags$strong("FDA Linearized Scaled Criterion (Howe UCB)"), style = "margin-top: 10px;"),
       tags$p("Linearizes the scaled BE criterion \u03B7 = d\u00B2 \u2212 \u03B8\u00B2\u209B\u00B7s\u00B2wR and tests whether its ",
              "95% upper confidence bound (UCB) \u2264 0, using Howe\u2019s method for combining ",
@@ -469,10 +480,9 @@ help_texts <- list(
         style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
         tags$strong("Common to both methods:"),
         tags$ul(style = "margin-bottom: 0; margin-top: 5px;",
-          tags$li("Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924"),
-          tags$li("Switching variability: s\u00B2", tags$sub("w0"), " = 0.0625 (CV", tags$sub("wR"), " \u2248 25.4%)"),
-          tags$li("FDA point estimate constraint: 80\u2013125%"),
-          tags$li("Variance estimated via Intra-Subject Contrasts (ISC)")
+          tags$li("Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924 (\u03C3\u2080 = 0.25, the regulatory criterion constant)"),
+          tags$li("Switching threshold: s", tags$sub("wR"), " \u2265 0.294 (CV", tags$sub("wR"), " \u2248 30%) triggers reference-scaling \u2014 distinct from \u03C3\u2080 above"),
+          tags$li("FDA point estimate constraint: 80\u2013125%")
         )
       )
     )

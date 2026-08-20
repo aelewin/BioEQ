@@ -791,6 +791,15 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       all_results[[base_param_name]] <- list(
         model = if (!is.null(real_anova)) real_anova$model else NULL,
         anova = if (!is.null(real_anova)) real_anova$anova_table else NULL,
+        # SAS-style comprehensive Type III SS table / Subject(Seq) error-term test /
+        # LSMeans — computed by fit_rsabe_model() on this same treatment-effect
+        # model (see build_crossover_anova_tables()/compute_lsmeans_ci() in
+        # R/simple_anova.R), so the ANOVA Results tab can show the same SAS PROC
+        # GLM-style output for ABEL that ABE and RSABE show.
+        anova_comprehensive = if (!is.null(real_anova)) real_anova$anova_comprehensive else NULL,
+        subj_seq_analysis   = if (!is.null(real_anova)) real_anova$subj_seq_analysis else NULL,
+        type3_ss             = if (!is.null(real_anova)) real_anova$type3_ss else NULL,
+        lsmeans_result       = if (!is.null(real_anova)) real_anova$lsmeans_result else NULL,
         treatment_coef = log(gmr),  # Log of GMR
         treatment_se = (log(ci_hi) - log(gmr)) / qt(1 - alpha, anova_df),  # Back-calculate SE; one-sided TOST alpha=0.05 -> qt(0.95,df) -> 90% CI
         residual_mse = sw_r^2,

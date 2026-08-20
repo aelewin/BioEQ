@@ -77,7 +77,7 @@ tagList(
         
         numericInput(
           "ss_theta0",
-          label = "Assumed T/R Ratio (\u03b80)",
+          label = "Assumed T/R Ratio (\u0394)",
           value = 0.95,
           min = 0.50,
           max = 1.50,
@@ -92,7 +92,16 @@ tagList(
           max = 0.99,
           step = 0.05
         ),
-        
+
+        numericInput(
+          "ss_dropout_pct",
+          label = "Anticipated Dropout Rate (%)",
+          value = 0,
+          min = 0,
+          max = 50,
+          step = 1
+        ),
+
         # Collapsible advanced options
         tags$details(
           tags$summary(
