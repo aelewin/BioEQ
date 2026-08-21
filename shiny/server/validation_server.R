@@ -545,16 +545,17 @@ validation_server <- function(input, output, session) {
     }
 
     panels <- list()
+    # Standalone (NCA, etc.) first, matching the Coverage Map's Table 1 (NCA)
+    # ordering ahead of Table 2/3 (Parallel/2x2/Replicate).
+    for (r in standalone) {
+      panels[[length(panels) + 1]] <- .validation_render_dataset_panel(r)
+    }
     # Combined per-group panels (in display order)
     for (gid in combine_gids) {
       if (is.null(by_gid[[gid]])) next
       panels[[length(panels) + 1]] <- .validation_render_group_panel(
         by_gid[[gid]], gname_of(gid)
       )
-    }
-    # Standalone (NCA, etc.) appended after
-    for (r in standalone) {
-      panels[[length(panels) + 1]] <- .validation_render_dataset_panel(r)
     }
     do.call(tagList, panels)
   })

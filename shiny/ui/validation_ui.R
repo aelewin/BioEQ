@@ -92,47 +92,12 @@ validation_ui <- function() {
     fluidRow(
       box(
         width = 12,
-        fluidRow(
-          column(width = 8,
-            p("BioEQ's NCA calculations are validated for equivalence to ", strong("Phoenix WinNonlin"),
-              ", and its ANOVA / bioequivalence calculations are validated for equivalence to ",
-              strong("SAS"), " (PROC GLM / PROC MIXED / PROC TTEST). Reference data sets below verify each ",
-              "engine independently."),
-            p(icon("exclamation-triangle"), " ",
-              strong("NCA-vs-WinNonlin validation is currently pending"),
-              " \u2014 dedicated WinNonlin reference datasets have not yet been published into this suite (0 datasets run). ",
-              strong("ANOVA/BE-vs-SAS validation is active"),
-              " (parallel, 2\u00d72 crossover, and replicate/ABEL groups, 49 datasets)."),
-            p("Re-run after installation, package updates, R upgrades, or BioEQ code changes.")
-          ),
-          column(width = 4,
-            div(style = "text-align: right; padding-top: 10px;",
-              actionButton("validation_run_all",
-                           label = tagList(icon("play-circle"), " Run Validation Data Sets"),
-                           class = "btn-success btn-lg",
-                           style = "width: 100%;")
-            )
-          )
+        div(style = "text-align: right;",
+          actionButton("validation_run_all",
+                       label = tagList(icon("play-circle"), " Run Validation Data Sets"),
+                       class = "btn-success btn-lg",
+                       style = "width: 100%;")
         )
-      )
-    ),
-
-    # ---- Groups table --------------------------------------------------
-    fluidRow(
-      box(
-        title = "Reference Data Sets",
-        status = "primary", solidHeader = TRUE, width = 12, collapsible = TRUE, collapsed = TRUE,
-        DT::DTOutput("validation_groups_table"),
-        br(),
-        helpText(
-          "Click a row to view group details and citation / download links. ",
-          tags$span(class = "validation-source-public", "PUBLIC"),
-          " sources link out to the original reference data; ",
-          tags$span(class = "validation-source-bioeq", "BioEQ"),
-          " reference sets are bundled with this application and downloadable below."
-        ),
-        # Selected-group detail panel
-        uiOutput("validation_group_detail")
       )
     ),
 
@@ -144,97 +109,76 @@ validation_ui <- function() {
         collapsible = TRUE, collapsed = TRUE,
 
         h4("What every BioEQ analysis is benchmarked against"),
-        p("Each validation group targets a specific module of BioEQ. The two tables below map the ",
-          "datasets to the BioEQ functions they exercise and the reference-software procedure each ",
-          "one is meant to reproduce — ", strong("Phoenix WinNonlin"), " for NCA, ", strong("SAS"),
-          " for ANOVA/BE."),
-        p(icon("info-circle"), " ",
-          strong("Table 1 (NCA):"),
-          " target reference is Phoenix WinNonlin. No WinNonlin-derived reference datasets are ",
-          "populated yet (see the status note above) — the function/package mapping below documents ",
-          "the intended comparison, not results from a completed run."),
-        p(icon("info-circle"), " ",
-          strong("Table 2 (BE/ANOVA):"),
-          " target reference is SAS (PROC GLM / PROC MIXED / PROC TTEST). The datasets currently run ",
-          "are not a live BioEQ-vs-SAS execution — they are peer-reviewed literature consensus tables ",
-          "(Fuglsang 2015 for parallel; Schütz et al. 2014 for 2×2 crossover, whose published ",
-          "values were themselves cross-checked by the authors against SAS, WinNonlin, EquivTest/PK, ",
-          "and R) and, for replicate/ABEL, the ", code("replicateBE"), " CRAN package's own validated ",
-          "Method A / Method B computations. All three represent the same statistical methodology as ",
-          "the SAS procedures listed below; none are a fresh SAS export run against BioEQ's current ",
-          "code. Two further methodology notes worth knowing: ABEL's CVwR/CVwT come from ",
-          code("replicateBE"), " using every subject with any data, including partial-replicate ",
-          "subjects (replicateBE handles unbalanced data internally) — a specific SAS submission that ",
-          "instead excludes incomplete subjects from its own reference-only CVwR calculation can ",
-          "legitimately produce a different CVwR; and RSABE's ISC-based CVwR/CVwT requires ≥2 ",
-          "periods of a treatment per subject to form a within-subject contrast, so its effective N ",
-          "can be smaller than the N used in the treatment-effect ANOVA."),
+        p("NCA is benchmarked against ", strong("Phoenix WinNonlin"), "; ANOVA/BE against ", strong("SAS"),
+          ". Tables below show the calculation, its SAS/WinNonlin equivalent, and which datasets ",
+          "have a published SAS/WinNonlin result to compare against."),
 
-        h4("Table 1 - NCA validation groups"),
+        h4("Table 1 - NCA"),
         p(class = "text-muted", style = "font-size: 12px;",
-          "As of 2026-08, NCA (AUC, Cmax/Tmax, lambda_z/half-life) is computed by the ",
-          code("PKNCA"), " CRAN package rather than hand-written code. TTT (Two-Times-Tmax) ",
-          "terminal-point selection has no PKNCA equivalent and is computed by BioEQ and handed ",
-          "to PKNCA's regression via its documented ", code("include_half.life"), " mechanism; ",
-          "the regression itself, and the ARS (adjusted R² best-fit) and Manual methods, are ",
-          "entirely PKNCA's own code."),
+          "Computed by the ", code("PKNCA"), " CRAN package. TTT point selection has no PKNCA ",
+          "equivalent — BioEQ selects the points, PKNCA fits the regression."),
         HTML(
           "<table class='bioeq-mapping'>",
-          "<thead><tr>",
-          "<th>BioEQ function</th>",
-          "<th>Embedded R package</th>",
-          "<th>SAS function equivalent</th>",
-          "<th>Phoenix WinNonlin equivalent</th>",
-          "</tr></thead><tbody>",
-
-          "<tr><td><code>perform_nca_analysis()</code><br>",
-          "<code>calculate_pk_parameters_pknca()</code> (extravascular only — no IV/C0 back-",
-          "extrapolation path exists in BioEQ)</td>",
-          "<td><code>PKNCA::pk.nca()</code></td>",
-          "<td><code>PROC NLMIXED</code> / NCA macros (e.g. %nca, %lambdaz)</td>",
-          "<td>NCA Model 200 (extravascular, plasma)</td></tr>",
-
+          "<thead><tr><th>Calculation</th><th>BioEQ package/call</th><th>WinNonlin equivalent</th><th>Validating dataset</th></tr></thead><tbody>",
+          "<tr><td>AUC0t — Linear trapezoidal</td><td><code>PKNCA::pk.nca()</code>, <code>auc.method=\"linear\"</code></td><td>Linear Trapezoidal</td><td><a href='https://www.pkpd168.com/_files/ugd/2cabb8_e9c279faac004d668927945a4921bb54.pdf' target='_blank' rel='noopener noreferrer'>Lee &amp; Lee (2009), bear/WinNonlin validation report</a><br><small class='text-muted'>Subject 1, Period 1 only</small></td></tr>",
+          "<tr><td>AUC0t — Linear-up/Log-down</td><td><code>PKNCA::pk.nca()</code>, <code>auc.method=\"lin up/log down\"</code></td><td>Linear Up/Log Down Trapezoidal</td><td>Planned</td></tr>",
+          "<tr><td>λz — TTT</td><td>BioEQ rule (t≥ 2·Tmax) flags points, PKNCA fits</td><td>No native equivalent</td><td>Planned</td></tr>",
+          "<tr><td>λz — ARS</td><td><code>PKNCA::pk.nca()</code> best-fit search (max adj. R²)</td><td>Best Fit</td><td>Planned</td></tr>",
+          "<tr><td>λz — Manual</td><td>BioEQ flags fixed points, PKNCA fits</td><td>Manual</td><td><a href='https://www.pkpd168.com/_files/ugd/2cabb8_e9c279faac004d668927945a4921bb54.pdf' target='_blank' rel='noopener noreferrer'>Lee &amp; Lee (2009), bear/WinNonlin validation report</a><br><small class='text-muted'>Subject 1, Period 1 only</small></td></tr>",
           "</tbody></table>"
         ),
 
-        h4("Table 2 - BE validation groups"),
+        h4("Table 2 - Parallel & 2×2 Crossover ANOVA"),
+        p(class = "text-muted", style = "font-size: 12px;", "Used for Average BE (ABE) on parallel and standard 2×2 crossover designs."),
         HTML(
           "<table class='bioeq-mapping'>",
-          "<thead><tr>",
-          "<th>BioEQ function</th>",
-          "<th>Embedded R package</th>",
-          "<th>SAS function equivalent</th>",
-          "<th>Phoenix WinNonlin equivalent</th>",
-          "</tr></thead><tbody>",
-
-          "<tr><td><code>perform_be_analysis()</code> Parallel branch<br>",
-          "<code>simple_anova.R</code> / <code>statistics.R</code></td>",
-          "<td><code>stats::t.test()</code> (Welch + classical), <code>stats::lm()</code></td>",
-          "<td><code>PROC TTEST</code> (Welch) / <code>PROC GLM</code></td>",
-          "<td>Bioequivalence Wizard - Parallel design</td></tr>",
-
-          "<tr><td><code>perform_be_analysis()</code> 2x2 branch<br>",
-          "<code>be_analysis.R</code>, <code>statistics.R</code>, <code>carryover_detection.R</code></td>",
-          "<td><code>stats::lm()</code>, <code>PowerTOST</code></td>",
-          "<td><code>PROC GLM</code> with <code>RANDOM subject(sequence)</code></td>",
-          "<td>Bioequivalence Wizard - 2x2 Crossover (Classical)</td></tr>",
-
-          "<tr><td><code>perform_be_analysis()</code> Replicate branch<br>",
-          "<code>rsabe_analysis.R</code>, <code>statistics.R</code></td>",
-          "<td><code>replicateBE::method.A()</code> / <code>method.B()</code>, <code>lme4</code>, <code>lmerTest</code>, <code>pbkrtest</code></td>",
-          "<td><code>PROC GLM</code> (Method A) + <code>PROC MIXED</code> with <code>DDFM=KENWARDROGER</code> (Method B)</td>",
-          "<td>Bioequivalence Wizard - Reference-scaled / Replicate</td></tr>",
-
+          "<thead><tr><th>BE Test</th><th>ANOVA option</th><th>BioEQ package/call</th><th>SAS equivalent</th><th>Validating dataset</th></tr></thead><tbody>",
+          "<tr><td>Parallel</td><td>N/A — two-sample t-test</td><td><code>stats::t.test()</code></td><td><code>PROC TTEST</code></td><td><a href='https://doi.org/10.1208/s12248-014-9704-6' target='_blank' rel='noopener noreferrer'>Fuglsang, Schütz &amp; Labes (2015), AAPS J 17(2):400-404</a></td></tr>",
+          "<tr><td>ABE (2×2)</td><td>Fixed</td><td><code>stats::lm()</code></td><td><code>PROC GLM</code></td><td><a href='https://doi.org/10.1208/s12248-014-9661-0' target='_blank' rel='noopener noreferrer'>Schütz, Labes &amp; Fuglsang (2014), AAPS J 16(6):1292-1297</a></td></tr>",
+          "<tr><td>ABE (2×2)</td><td>Mixed — nlme (REML)</td><td><code>nlme::lme()</code></td><td><code>PROC MIXED</code> (default <code>DDFM=CONTAIN</code>)</td><td>Planned</td></tr>",
+          "<tr><td>ABE (2×2)</td><td>Mixed — Satterthwaite DF</td><td><code>lme4::lmer()</code> + <code>lmerTest</code></td><td><code>PROC MIXED DDFM=SATTERTHWAITE</code></td><td>Planned</td></tr>",
+          "<tr><td>ABE (2×2)</td><td>Mixed — Kenward-Roger DF</td><td><code>lme4::lmer()</code> + <code>lmerTest</code> + <code>pbkrtest</code></td><td><code>PROC MIXED DDFM=KENWARDROGER</code></td><td>Planned</td></tr>",
           "</tbody></table>"
         ),
 
-        h4("Re-run frequency"),
-        p("Re-run at minimum after: (a) initial installation, (b) any update ",
-          "to the BioEQ source code, (c) any update to a key R package ",
-          "(especially ", code("nlme"), ", ", code("lme4"), ", ",
-          code("lmerTest"), ", ", code("replicateBE"), ", ", code("PowerTOST"),
-          "), and (d) any R or OS upgrade. A scheduled quarterly re-run is ",
-          "recommended for production deployments.")
+        h4("Table 3 - Replicate-Design ANOVA (replicateBE)"),
+        p(class = "text-muted", style = "font-size: 12px;",
+          "All ANOVAs on replicate designs are performed through ", code("replicateBE"),
+          ", regardless of BE evaluation method (ABEL or RSABE)."),
+        HTML(
+          "<table class='bioeq-mapping'>",
+          "<thead><tr><th>ANOVA option</th><th>BioEQ package/call</th><th>SAS equivalent</th><th>Used by</th><th>Validating dataset</th></tr></thead><tbody>",
+          "<tr><td>Fixed (Method A)</td><td><code>replicateBE::method.A()</code></td><td><code>PROC GLM</code></td><td>ABEL, RSABE (auto: partial-replicate)</td><td><a href='https://doi.org/10.1208/s12248-020-0427-6' target='_blank' rel='noopener noreferrer'>Schütz, Labes, Tomashevskiy, González-de la Parra, Shitova &amp; Fuglsang (2020), AAPS J 22(2):44</a></td></tr>",
+          "<tr><td>Mixed — nlme (Method B, option 2, default)</td><td><code>replicateBE::method.B(option=2)</code></td><td><code>PROC MIXED</code> (<code>DDFM=CONTAIN</code>)</td><td>ABEL, RSABE (auto: full-replicate)</td><td><a href='https://doi.org/10.1208/s12248-020-0427-6' target='_blank' rel='noopener noreferrer'>Schütz, Labes, Tomashevskiy, González-de la Parra, Shitova &amp; Fuglsang (2020), AAPS J 22(2):44</a></td></tr>",
+          "<tr><td>Mixed — Satterthwaite DF (Method B, option 1)</td><td><code>replicateBE::method.B(option=1)</code></td><td><code>PROC MIXED DDFM=SATTERTHWAITE</code></td><td>ABEL only</td><td>Planned</td></tr>",
+          "<tr><td>Mixed — Kenward-Roger DF (Method B, option 3)</td><td><code>replicateBE::method.B(option=3)</code></td><td><code>PROC MIXED DDFM=KENWARDROGER</code></td><td>ABEL only</td><td>Planned</td></tr>",
+          "</tbody></table>"
+        ),
+
+        h4("Table 4 - RSABE Scaling Decision (FDA guidance)"),
+        p(class = "text-muted", style = "font-size: 12px;",
+          "Independent of Table 3 — only invoked when a parameter's s²wR (Reference within-subject ",
+          "variance) meets the switching threshold (sₑᵣ ≥ 0.294); otherwise RSABE reports Table 3's ",
+          "result directly, unscaled."),
+        HTML(
+          "<table class='bioeq-mapping'>",
+          "<thead><tr><th>Calculation</th><th>BioEQ function</th><th>SAS equivalent</th><th>Validating dataset</th><th>Reference</th></tr></thead><tbody>",
+          "<tr><td>s²wR / switching decision</td><td><code>fit_rsabe_seq_variance()</code> — <code>lm(D_ij ~ Sequence)</code></td><td><code>PROC GLM</code> (partial) / <code>PROC MIXED</code> (full)</td><td>Planned</td><td><a href='https://www.fda.gov/media/163638/download' target='_blank' rel='noopener noreferrer'>FDA, Statistical Approaches to Establishing Bioequivalence (May 2026), Appendix G</a></td></tr>",
+          "<tr><td>FDA Linearized (Howe UCB)</td><td><code>rsabe_linearized_test()</code> — uses <code>fit_rsabe_seq_mean()</code>'s <code>lm(I_ij ~ Sequence)</code></td><td><code>PROC GLM</code> / <code>PROC MIXED</code> + Howe's Approximation I</td><td>Planned</td><td><a href='https://www.fda.gov/media/163638/download' target='_blank' rel='noopener noreferrer'>FDA, Statistical Approaches to Establishing Bioequivalence (May 2026), Appendix G</a></td></tr>",
+          "<tr><td>Non-Central TOST (exact)</td><td><code>rsabe_nctost_test()</code></td><td>none</td><td>Planned</td><td><a href='https://doi.org/10.1208/s12248-016-9873-6' target='_blank' rel='noopener noreferrer'>Tóthfalusi &amp; Endrényi (2016), AAPS J 18(2):476–489</a> — calculation not yet independently verified</td></tr>",
+          "</tbody></table>"
+        ),
+
+        h4("Table 5 - Data Handling (not part of NCA)"),
+        p(class = "text-muted", style = "font-size: 12px;",
+          "Missing data handling runs before NCA; carryover detection runs after NCA, on its output."),
+        HTML(
+          "<table class='bioeq-mapping'>",
+          "<thead><tr><th>Calculation</th><th>BioEQ function</th><th>Equivalence</th><th>Validating dataset</th></tr></thead><tbody>",
+          "<tr><td>Missing data handling (pre-NCA)</td><td><code>handle_missing_data()</code> (<code>R/missing_data_handling.R</code>) — position-aware: BLQ→0, middle/terminal complete-case, interpolation, or LOCF</td><td>Not a SAS/WinNonlin procedure — internal QC/pre-processing rule</td><td>Planned</td></tr>",
+          "<tr><td>Carryover detection (post-NCA)</td><td><code>detect_carryover()</code> (<code>R/carryover_detection.R</code>) — pre-dose concentration vs. same-period Cmax, 5% threshold</td><td>ICH M13A §2.2.3.3 guideline criterion — not a SAS/WinNonlin procedure</td><td>Planned</td></tr>",
+          "</tbody></table>"
+        )
       )
     ),
 

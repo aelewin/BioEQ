@@ -243,18 +243,26 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
   if (is.null(res) || nrow(res) == 0) {
     stop("NCA produced no results for this dataset.")
   }
-  # Standardize column names to match expected-results schema
+  # Standardize column names to match expected-results schema. Column names are
+  # BioEQ's own field names verbatim (not renamed aliases) - the only dataset
+  # exercising this layer (nca_pending) uses them directly, so no translation
+  # layer is needed.
   std <- data.frame(
     subject   = as.character(res$subj),
     treatment = as.character(res$tmt),
     Cmax      = res$Cmax,
     Tmax      = res$Tmax,
     AUC0t     = res$AUC0t,
+    Tlast     = res$Tlast,
+    Clast     = res$Clast,
     AUC0inf   = res$AUC0inf,
+    AUC_percent_extrap = res$AUC_percent_extrap,
     t_half    = res$t_half,
     lambda_z  = res$lambda_z,
-    lambda_z_r2 = res$lambda_z_r_squared,
-    lambda_z_n_points = res$lambda_z_points,
+    lambda_z_r_squared = res$lambda_z_r_squared,
+    lambda_z_adj_r_squared = res$lambda_z_adj_r_squared,
+    lambda_z_points = res$lambda_z_points,
+    lambda_z_terminal_times = as.character(res$lambda_z_terminal_times),
     stringsAsFactors = FALSE
   )
   list(subject_df = std, study = list())
