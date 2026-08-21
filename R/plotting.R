@@ -2,7 +2,10 @@
 # Modern plotting functions for bioequivalence analysis with dual-output support (static & interactive)
 
 # Required packages for plotting
-required_packages <- c("ggplot2", "plotly", "dplyr", "tidyr", "gridExtra", "htmlwidgets")
+# NOTE: gridExtra was removed from this list in the 2026-08 dependency audit —
+# it was attached at startup but no gridExtra function (grid.arrange/
+# arrangeGrob/tableGrob) is called anywhere in BioEQ.
+required_packages <- c("ggplot2", "plotly", "dplyr", "tidyr", "htmlwidgets")
 
 # Check and install missing packages
 for (pkg in required_packages) {

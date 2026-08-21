@@ -1,6 +1,6 @@
 # BioEQ: Bioequivalence Analysis Platform
 
-[![R Version](https://img.shields.io/badge/R-%3E%3D%204.0.0-blue.svg)](https://cran.r-project.org/)
+[![R Version](https://img.shields.io/badge/R-%3E%3D%204.4.0-blue.svg)](https://cran.r-project.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Beta-yellow.svg)]()
 
@@ -56,7 +56,7 @@ Interactive and static visualizations of study data.
 ### Exports & Reports
 Export results and generate regulatory-ready reports.
 - **Data exports**: CSV, Excel
-- **Reports**: PDF, HTML (Word requires optional `officer`/`flextable` packages)
+- **Reports**: PDF, HTML, Word (`.docx`)
 - **Plots**: High-resolution static graphics
 - **R script**: Reproducible analysis code
 
@@ -98,26 +98,18 @@ Step-by-step guidance on data format requirements, workflow, and analysis interp
 
 ### Install Dependencies
 
+**Requires R >= 4.4.0.**
+
 ```r
-# Option 1: Automatic install
+# From the BioEQ project root
 Rscript install_dependencies.R
-
-# Option 2: Manual install (core)
-install.packages(c(
-  "shiny", "shinydashboard", "DT", "readr", "dplyr",
-  "readxl", "bslib", "shinyjs", "shinycssloaders",
-  "ggplot2", "gridExtra", "plotly", "htmlwidgets",
-  "nlme", "lme4", "lmerTest", "replicateBE",
-  "PowerTOST", "reshape2", "scales", "writexl", "tidyr",
-  "rmarkdown", "knitr", "zip", "digest"
-))
-
-# Optional (Word report generation)
-install.packages(c("officer", "flextable"))
-
-# Optional (analysis enhancements: DTW similarity, Kenward-Roger DDF)
-install.packages(c("dtw", "pbkrtest"))
 ```
+
+This installs the 31 packages BioEQ loads directly; their ~103 supporting
+dependencies are pulled in automatically. See
+[docs/user_guide.md](docs/user_guide.md) section 2 for the complete
+categorized package inventory (Base R / Recommended / Intended for Use /
+Imports) with the tested version baseline.
 
 ### Launch the App
 
