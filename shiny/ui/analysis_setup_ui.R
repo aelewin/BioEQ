@@ -121,10 +121,8 @@ tagList(
                   "auc_method",
                   label = NULL,
                   choices = list(
-                    "Linear up/Log down (Mixed)" = "mixed",
-                    "Linear trapezoidal" = "linear",
-                    "Log trapezoidal" = "log",
-                    "Linear/Log trapezoidal" = "linear_log"
+                    "Linear-up/Log-down (Mixed)" = "mixed",
+                    "Linear trapezoidal" = "linear"
                   ),
                   selected = "mixed"
                 ),
@@ -139,7 +137,6 @@ tagList(
                   choices = list(
                     "Manual (Fixed points)" = "manual",
                     "ARS (Adjusted R-squared)" = "ars",
-                    "AIC (Akaike Information Criterion)" = "aic",
                     "TTT (Two-Times-Tmax)" = "ttt"
                   ),
                   selected = "ttt"
@@ -543,23 +540,14 @@ tagList(
               ),
               
               # ===============================================================
-              # RSABE: Fixed or nlme only (our own rsabe_analysis.R)
+              # RSABE: model auto-selected by replicate design (not user-
+              # editable). See R/rsabe_analysis.R::perform_rsabe().
               # ===============================================================
               conditionalPanel(
                 condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'RSABE'",
-                selectInput(
-                  "anova_model",
-                  label = NULL,
-                  choices = list(
-                    "Fixed Effects (lm)" = "fixed",
-                    "Mixed Effects - nlme (REML)" = "nlme"
-                  ),
-                  selected = "fixed"
-                ),
+                uiOutput("rsabe_anova_model_ui"),
                 div(style = "font-size: 11px; color: #666; margin-top: 5px;",
-                  "RSABE uses Fixed Effects or nlme for treatment effect estimation. ",
-                  "Within-reference variance (s\u00B2wR) is always computed via a reference-only ANOVA, ",
-                  "independent of this Fixed/nlme choice."
+                  "(Partial replicate requires Fixed Effects; full replicate requires Mixed Effects.)"
                 )
               ),
               

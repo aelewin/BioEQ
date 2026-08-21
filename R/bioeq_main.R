@@ -31,7 +31,7 @@ NULL
   bioeq_version = "1.0.0",
   
   # Module settings
-  required_modules = c("utils.R", "nca_functions.R", "be_analysis.R", "statistics.R", "plotting.R"),
+  required_modules = c("utils.R", "nca_functions.R", "nca_pknca.R", "be_analysis.R", "statistics.R", "plotting.R"),
   optional_modules = c()
 )
 
@@ -247,10 +247,8 @@ init_bioeq <- function() {
 #' @export
 help_bioeq <- function() {
   cat("🧬 BioEQ - Available Functions:\n\n")
-  cat("📊 NON-COMPARTMENTAL ANALYSIS:\n")
-  cat("  • calculate_nca()     - Perform NCA analysis\n")
-  cat("  • estimate_lambda_z() - Lambda_z estimation\n")
-  cat("  • calculate_auc()     - AUC calculations\n\n")
+  cat("📊 NON-COMPARTMENTAL ANALYSIS (via the PKNCA package):\n")
+  cat("  • perform_nca_analysis() - AUC, Cmax/Tmax, lambda_z/half-life per profile\n\n")
   
   cat("🔬 BIOEQUIVALENCE ANALYSIS:\n")
   cat("  • perform_be_analysis() - Main BE analysis function\n")

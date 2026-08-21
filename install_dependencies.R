@@ -39,6 +39,8 @@ required_packages <- c(
   "emmeans",
   "replicateBE",
   "PowerTOST",
+  # Non-compartmental analysis
+  "PKNCA",
   # Utilities
   "digest",
   "zip"

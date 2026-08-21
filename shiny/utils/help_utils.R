@@ -62,11 +62,11 @@ help_texts <- list(
     tooltip = "Method for calculating area under the concentration-time curve",
     title = "AUC Calculation Methods",
     content = div(
+      p("AUC is computed via the ", tags$a(href = "https://cran.r-project.org/package=PKNCA", target = "_blank", "PKNCA"),
+        " package."),
       tags$ul(
-        tags$li(strong("Linear up/Log down:"), " Uses linear trapezoidal rule when concentration is increasing (C₂ ≥ C₁) and log trapezoidal rule when concentration is decreasing (C₂ < C₁). FDA-preferred method."),
-        tags$li(strong("Linear:"), " Uses linear trapezoidal rule throughout, regardless of whether concentrations are increasing or decreasing. EMA-preferred for regulatory submissions."),
-        tags$li(strong("Log:"), " Uses log trapezoidal rule for all consecutive data points where both concentrations are positive. Cannot be used when C₁ or C₂ equals zero."),
-        tags$li(strong("Linear/Log:"), " Uses linear rule up to Cmax (absorption phase), then log rule after Cmax (elimination phase). Suitable for drugs with first-order kinetics.")
+        tags$li(strong("Linear-up/Log-down (Mixed):"), " Uses linear trapezoidal rule when concentration is increasing (C₂ ≥ C₁) and log trapezoidal rule when concentration is decreasing (C₂ < C₁). The standard, FDA-preferred method for most oral/extravascular profiles."),
+        tags$li(strong("Linear:"), " Uses linear trapezoidal rule throughout, regardless of whether concentrations are increasing or decreasing.")
       )
     )
   ),
@@ -75,7 +75,9 @@ help_texts <- list(
     tooltip = "Method for determining terminal elimination rate constant",
     title = "Lambda_z Estimation Methods",
     content = div(
-      p("Lambda_z (λz) is the terminal elimination rate constant, crucial for calculating AUC₀-∞ and half-life. Different methods exist for selecting which data points to use in the log-linear regression:"),
+      p("Lambda_z (λz) is the terminal elimination rate constant, crucial for calculating AUC₀-∞ and half-life. It is estimated via the ",
+        tags$a(href = "https://cran.r-project.org/package=PKNCA", target = "_blank", "PKNCA"),
+        " package's log-linear regression; the methods below control which points enter that regression:"),
       tags$ul(
         tags$li(
           tags$strong("Manual (Fixed points):"), 
@@ -83,11 +85,7 @@ help_texts <- list(
         ),
         tags$li(
           tags$strong("ARS (Adjusted R-squared):"), 
-          " Automatically selects points by maximizing the adjusted R² of the log-linear regression. Starting from the last 3 non-zero concentrations, it iteratively adds earlier points as long as the adjusted R² improves. Balances goodness-of-fit with the number of points included."
-        ),
-        tags$li(
-          tags$strong("AIC (Akaike Information Criterion):"), 
-          " Uses information theory to select the optimal number of points. Minimizes AIC = n × ln(RSS/n) + 2k, where RSS is residual sum of squares, n is number of points, and k is number of parameters. Can be useful but may not always select the most pharmacologically relevant points."
+          " PKNCA's own best-fit curve-stripping algorithm: evaluates candidate terminal windows and selects the one maximizing adjusted R². Cmax and the absorption phase are excluded from consideration by default."
         ),
         tags$li(
           tags$strong("TTT (Two-Times-Tmax):"), 
@@ -98,7 +96,7 @@ help_texts <- list(
         style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
         tags$strong("Important Considerations:"), 
         tags$ul(style = "margin-bottom: 0; margin-top: 5px;",
-          tags$li("Cmax/Tmax points should be excluded from terminal phase selection"),
+          tags$li("Cmax/Tmax is excluded from terminal phase selection by ARS automatically; TTT and Manual exclude it by construction of the rule/point count you choose"),
           tags$li("Selection should be done blinded to treatment assignment"),
           tags$li("Apply the same method consistently across all subjects"),
           tags$li("Minimum of 3 points required for reliable estimation"),

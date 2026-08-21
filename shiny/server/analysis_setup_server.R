@@ -250,6 +250,32 @@ output$detected_design_type <- reactive({
 })
 outputOptions(output, "detected_design_type", suspendWhenHidden = FALSE)
 
+# RSABE's ANOVA model is auto-selected by replicate design (partial -> Fixed,
+# full -> Mixed), per FDA guidance — see R/rsabe_analysis.R::perform_rsabe().
+# Single-choice selectInput (same style as the other analysis types) so the
+# value is displayed but not user-editable. IMPORTANT: the value must be one
+# perform_simple_anova() recognizes ("fixed"/"nlme"/"satterthwaite"/
+# "kenward-roger") — this same analysis_config$anova_model feeds the
+# ANOVA Results tab's primary perform_simple_anova() call, not just
+# perform_rsabe() (which does its own separate, internal auto-selection and
+# ignores this value). Using an unrecognized value here silently breaks that
+# ANOVA table instead of erroring.
+output$rsabe_anova_model_ui <- renderUI({
+  rtype <- tryCatch({
+    req(values$uploaded_data)
+    rr <- detect_replicate_design(values$uploaded_data)
+    if (isTRUE(rr$is_partial_replicate)) "partial" else "full"
+  }, error = function(e) "partial")
+
+  choice <- if (rtype == "full") {
+    list("Mixed Effects - nlme (REML)" = "nlme")
+  } else {
+    list("Fixed Effects (PROC GLM)" = "fixed")
+  }
+  selectInput("anova_model", label = NULL, choices = choice, selected = choice[[1]])
+})
+outputOptions(output, "rsabe_anova_model_ui", suspendWhenHidden = FALSE)
+
 # Dynamic alpha display text based on BE analysis type
 output$alpha_display_text <- renderText({
   alpha <- input$alpha_level %||% 0.05
@@ -334,7 +360,7 @@ output$settings_summary <- renderUI({
   
   if (data_type == "concentration") {
     auc_method <- if (!is.null(input$auc_method)) input$auc_method else "mixed"
-    lambda_method <- if (!is.null(input$lambda_z_method)) input$lambda_z_method else "aic"
+    lambda_method <- if (!is.null(input$lambda_z_method)) input$lambda_z_method else "ttt"
     
     # Set standard PK parameters (calculated automatically)
     # Use log-transformed parameters for BE analysis as per regulatory requirements
@@ -534,7 +560,7 @@ observeEvent(input$run_analysis, {
     study_design = input$study_design %||% "auto",
     be_analysis_type = input$be_analysis_type %||% "ABE",  # NEW: BE analysis type
     auc_method = input$auc_method %||% "mixed",
-    lambda_z_method = input$lambda_z_method %||% "aic",
+    lambda_z_method = input$lambda_z_method %||% "ttt",
     lambda_z_points = input$lambda_z_points %||% 3,
     confidence_level = 90,  # Standard 90% CI for BE (alpha=0.05 two one-sided)
     alpha_level = {

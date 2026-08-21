@@ -14,6 +14,7 @@ Depends:
 Imports:
     dplyr,
     ggplot2,
+    PKNCA,
     nlme,
     replicateBE,
     stats,

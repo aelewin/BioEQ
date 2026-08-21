@@ -171,6 +171,13 @@ validation_ui <- function() {
           "can be smaller than the N used in the treatment-effect ANOVA."),
 
         h4("Table 1 - NCA validation groups"),
+        p(class = "text-muted", style = "font-size: 12px;",
+          "As of 2026-08, NCA (AUC, Cmax/Tmax, lambda_z/half-life) is computed by the ",
+          code("PKNCA"), " CRAN package rather than hand-written code. TTT (Two-Times-Tmax) ",
+          "terminal-point selection has no PKNCA equivalent and is computed by BioEQ and handed ",
+          "to PKNCA's regression via its documented ", code("include_half.life"), " mechanism; ",
+          "the regression itself, and the ARS (adjusted R² best-fit) and Manual methods, are ",
+          "entirely PKNCA's own code."),
         HTML(
           "<table class='bioeq-mapping'>",
           "<thead><tr>",
@@ -180,17 +187,12 @@ validation_ui <- function() {
           "<th>Phoenix WinNonlin equivalent</th>",
           "</tr></thead><tbody>",
 
-          "<tr><td><code>perform_enhanced_nca_analysis()</code><br>",
-          "<code>calculate_pk_parameters()</code> (oral / extravascular branch)</td>",
-          "<td><code>PKNCA::pk.nca()</code>, <code>NonCompart::tblNCA()</code></td>",
+          "<tr><td><code>perform_nca_analysis()</code><br>",
+          "<code>calculate_pk_parameters_pknca()</code> (extravascular only — no IV/C0 back-",
+          "extrapolation path exists in BioEQ)</td>",
+          "<td><code>PKNCA::pk.nca()</code></td>",
           "<td><code>PROC NLMIXED</code> / NCA macros (e.g. %nca, %lambdaz)</td>",
           "<td>NCA Model 200 (extravascular, plasma)</td></tr>",
-
-          "<tr><td><code>perform_enhanced_nca_analysis()</code> IV branch<br>",
-          "<code>calculate_pk_parameters()</code> with IV-specific C0 logic</td>",
-          "<td><code>PKNCA::pk.nca()</code> with <code>route='intravascular'</code></td>",
-          "<td><code>PROC NLMIXED</code> / IV NCA macros</td>",
-          "<td>NCA Model 201 (IV bolus, plasma)</td></tr>",
 
           "</tbody></table>"
         ),

@@ -1367,7 +1367,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     lambda_z_method_names <- c(
       "manual" = "Manual (Fixed Points)",
       "ars" = "ARS (Adjusted R-Squared)",
-      "aic" = "AIC (Akaike Information Criterion)",
       "ttt" = "TTT (Two-Times-Tmax)"
     )
     

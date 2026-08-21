@@ -160,6 +160,7 @@ tryCatch({
 .source_R <- function(fname) sys.source(file.path(.BIOEQ_R_DIR, fname), envir = globalenv())
 .source_R("bioeq_main.R")
 .source_R("nca_functions.R")
+.source_R("nca_pknca.R")            # PKNCA-backed NCA engine
 .source_R("be_analysis.R")
 .source_R("rsabe_analysis.R")            # RSABE analysis (FDA linearized + ncTOST)
 .source_R("simple_anova.R")              # Simple ANOVA using lm()

@@ -370,6 +370,32 @@ render_type3_anova_card <- function(param_result) {
   }, error = function(e) NULL)
 }
 
+# Card: "Type 3 Tests of Fixed Effects" — the mixed-model (PROC MIXED)
+# equivalent of the Type III SS card above. render_type3_anova_card() only
+# fires for the fixed-effects fit (anova_comprehensive is built from an lm()
+# model's SS decomposition, which a mixed model doesn't have); this is the
+# card that was missing for Method B / mixed-effects results, leaving Method
+# B's display short of Method A's. Requires `param_result$type3_ss`, an
+# `anova(lme_model, type = "marginal")` object — numDF/denDF/F-value/p-value
+# per fixed effect (Intercept, Sequence, Period, Treatment).
+render_type3_marginal_card <- function(param_result) {
+  t3 <- param_result$type3_ss
+  if (is.null(t3)) return(NULL)
+  tryCatch({
+    df <- as.data.frame(t3)
+    div(class = "card mb-3",
+      div(class = "card-header",
+        h6(class = "card-title mb-0", icon("table"), " Type 3 Tests of Fixed Effects")
+      ),
+      div(class = "card-body",
+        p(style = "font-size: 0.85em; color: #6c757d; margin-bottom: 10px;",
+          "Marginal (Type III) F-tests for each fixed effect from the mixed-effects model — the PROC MIXED equivalent of the Type III SS table shown for Fixed Effects (Method A)."),
+        div(class = "table-responsive", .render_anova_source_table(df))
+      )
+    )
+  }, error = function(e) NULL)
+}
+
 # Card: "Tests of Hypotheses Using the Type III MS for Subject(Sequence) as an
 # Error Term" — the Sequence effect re-tested against the between-subject MS
 # instead of Residual MS (the standard, correct significance test for
@@ -602,7 +628,7 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
     div(class = "card-header bg-primary text-white",
       h5(class = "card-title mb-0", 
         icon("flask"), 
-        sprintf(" ABEL / replicateBE Results for %s", param_name)
+        "ANOVA output from replicateBE"
       )
     ),
     div(class = "card-body",
@@ -656,7 +682,8 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
   # internally: y ~ seq + subj:seq + prd + drug for Method A; y ~ seq + prd +
   # drug, random=~1|subj for Method B). Same structure ABE and RSABE show.
   model_summary_card <- render_model_summary_card(param_result, param_name)
-  type3_card    <- render_type3_anova_card(param_result)
+  type3_card     <- render_type3_anova_card(param_result)      # Fixed (Method A) only
+  type3_mixed_card <- render_type3_marginal_card(param_result) # Mixed (Method B) only
   seq_subj_card <- render_seq_subj_test_card(param_result)
   lsmeans_cards <- render_lsmeans_cards(param_result, param_name)
   param_est_card <- render_parameter_estimates_card(
@@ -669,6 +696,7 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
     summary_card,
     model_summary_card,
     type3_card,
+    type3_mixed_card,
     seq_subj_card,
     lsmeans_cards,
     param_est_card
@@ -677,15 +705,13 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
 
 # Format RSABE ANOVA results for display
 format_rsabe_anova_results <- function(param_result, param_name, be_res) {
-  
+
   rsabe_details <- be_res$rsabe_details[[param_name]]
-  isc <- if (!is.null(rsabe_details)) rsabe_details$isc_result else NULL
   rsabe_test <- if (!is.null(rsabe_details)) rsabe_details$rsabe_test else NULL
-  model_result <- if (!is.null(rsabe_details)) rsabe_details$model_result else NULL
   is_hv <- if (!is.null(rsabe_details)) rsabe_details$is_hv else FALSE
   rsabe_method <- be_res$rsabe_method %||% "fda_linearized"
-  
-  # Detect whether test is estimable (full vs partial replicate)
+
+  # Detect whether the Test-side variance is estimable (full-replicate only)
   s2wT_val <- suppressWarnings(as.numeric(param_result$s2_wT %||% NA))
   cvwT_val <- suppressWarnings(as.numeric(param_result$cv_wt_percent %||% NA))
   has_test <- !is.na(s2wT_val) && !is.na(cvwT_val)
@@ -693,35 +719,27 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
   cvwR_val <- suppressWarnings(as.numeric(param_result$cv_wr_percent))
   col_class <- if (has_test) "col-md-4" else "col-md-6"
 
-  # ── Summary card: per-product intra-subject variability (Reference + Test) ──
+  method_label <- if (identical(param_result$anova_method, "fixed")) "Fixed Effects (PROC GLM)" else "Mixed Effects (PROC MIXED)"
+
+  # \u2500\u2500 Summary card: per-product intra-subject variability (Reference + Test) \u2500\u2500
+  # Same layout as ABEL's summary card (format_replicatebe_anova_results()).
   summary_card <- div(class = "card mb-3",
     div(class = "card-header bg-primary text-white",
       h5(class = "card-title mb-0",
         icon("flask"),
-        sprintf(" RSABE ANOVA Results for %s", param_name)
+        sprintf(" RSABE Results for %s", param_name)
       )
     ),
     div(class = "card-body",
       div(class = "row",
-        # Column 1: Model Summary
+        # Column 1: Study Design
         div(class = col_class,
           h6(icon("flask"), " Model Summary:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
-              tags$tr(tags$td(strong("ANOVA Method:")),
-                tags$td(if (param_result$anova_method == "fixed") "Fixed Effects" else "Mixed Effects (nlme)")),
-              tags$tr(tags$td(strong("Observations:")), tags$td(sprintf("%g", param_result$n_observations))),
-              tags$tr(tags$td(strong("Treatment Diff (d̂):")), tags$td(sprintf("%.6f", param_result$treatment_coef))),
-              tags$tr(tags$td(strong("SE(d̂):")), tags$td(sprintf("%.6f", param_result$treatment_se))),
-              if (!is.null(param_result$lsmeans_result)) {
-                lsm <- param_result$lsmeans_result
-                tagList(
-                  tags$tr(tags$td(strong(sprintf("LSMean (%s):", lsm$ref_level))),
-                    tags$td(sprintf("%.4f (log %.4f)", lsm$lsmean_ref_geo, lsm$lsmean_ref_log))),
-                  tags$tr(tags$td(strong(sprintf("LSMean (%s):", lsm$test_level))),
-                    tags$td(sprintf("%.4f (log %.4f)", lsm$lsmean_test_geo, lsm$lsmean_test_log)))
-                )
-              }
+              tags$tr(tags$td(strong("Design:")), tags$td(be_res$design_type %||% "\u2014")),
+              tags$tr(tags$td(strong("Method:")), tags$td(method_label)),
+              tags$tr(tags$td(strong("Total Subjects:")), tags$td(sprintf("%g", param_result$n_observations)))
             )
           )
         ),
@@ -730,13 +748,13 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
           h6(icon("user"), " Intra-subject Reference:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
-              tags$tr(tags$td(strong("n:")), tags$td(sprintf("%s", param_result$n_wR %||% "—"))),
+              tags$tr(tags$td(strong("n:")), tags$td(sprintf("%s", param_result$n_wR %||% "\u2014"))),
               tags$tr(tags$td(strong("s", tags$sub("wR"), ":")),
-                tags$td(if (!is.na(s2wR_val) && s2wR_val >= 0) sprintf("%.4f", sqrt(s2wR_val)) else "—")),
-              tags$tr(tags$td(strong("MSE (s²", tags$sub("wR"), "):")),
-                tags$td(if (!is.na(s2wR_val)) sprintf("%.6f", s2wR_val) else "—")),
+                tags$td(if (!is.na(s2wR_val) && s2wR_val >= 0) sprintf("%.4f", sqrt(s2wR_val)) else "\u2014")),
+              tags$tr(tags$td(strong("MSE (s\u00b2", tags$sub("wR"), "):")),
+                tags$td(if (!is.na(s2wR_val)) sprintf("%.6f", s2wR_val) else "\u2014")),
               tags$tr(tags$td(strong("CV%:")),
-                tags$td(if (!is.na(cvwR_val)) sprintf("%.2f%%", cvwR_val) else "—"))
+                tags$td(if (!is.na(cvwR_val)) sprintf("%.2f%%", cvwR_val) else "\u2014"))
             )
           )
         ),
@@ -745,10 +763,10 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
           h6(icon("user"), " Intra-subject Test:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
-              tags$tr(tags$td(strong("n:")), tags$td(sprintf("%s", param_result$n_wT %||% "—"))),
+              tags$tr(tags$td(strong("n:")), tags$td(sprintf("%s", param_result$n_wT %||% "\u2014"))),
               tags$tr(tags$td(strong("s", tags$sub("wT"), ":")),
-                tags$td(if (s2wT_val >= 0) sprintf("%.4f", sqrt(s2wT_val)) else "—")),
-              tags$tr(tags$td(strong("MSE (s²", tags$sub("wT"), "):")), tags$td(sprintf("%.6f", s2wT_val))),
+                tags$td(if (s2wT_val >= 0) sprintf("%.4f", sqrt(s2wT_val)) else "\u2014")),
+              tags$tr(tags$td(strong("MSE (s\u00b2", tags$sub("wT"), "):")), tags$td(sprintf("%.6f", s2wT_val))),
               tags$tr(tags$td(strong("CV%:")), tags$td(sprintf("%.2f%%", cvwT_val)))
             )
           )
@@ -756,91 +774,23 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
       )
     )
   )
-  
-  # ── ANOVA Table: parallel/accompanying comprehensive breakdown ──
-  # This is a full SAS-style ANOVA table built from the SAME lm()/nlme::lme() model
-  # RSABE fits for its treatment effect (see build_crossover_anova_tables() in
-  # R/simple_anova.R and fit_rsabe_model()/perform_rsabe() in R/rsabe_analysis.R) —
-  # shown alongside, not in place of, RSABE's own Howe UCB/ncTOST scaling decision
-  # above. This is NOT the same engine as CVwR/CVwT — those always come from a
-  # separate Reference-only/Test-only ANOVA (shown further below), unaffected by
-  # the fixed/mixed choice below.
-  is_rsabe_fixed <- identical(param_result$anova_method, "fixed")
-  render_anova_df <- function(df) {
-    tags$table(class = "table table-striped table-hover table-sm",
-      tags$thead(class = "table-primary",
-        tags$tr(
-          tags$th("Source"),
-          lapply(names(df), function(col) tags$th(col))
-        )
-      ),
-      tags$tbody(
-        lapply(1:nrow(df), function(i) {
-          tags$tr(
-            tags$td(style = "font-weight: bold;", rownames(df)[i]),
-            lapply(1:ncol(df), function(j) {
-              val <- df[i, j]
-              col_name <- names(df)[j]
-              formatted <- if (is.numeric(val) && !is.na(val)) {
-                if (col_name %in% c("Pr(>F)", "p-value", "Pr(>|t|)")) format.pval(val, digits = 4)
-                else if (col_name %in% c("Df", "NumDF", "DenDF", "numDF", "denDF", "npar")) as.character(round(val))
-                else if (col_name %in% c("Sum Sq", "Mean Sq")) sprintf("%.4f", val)
-                else if (col_name %in% c("F value", "F-value")) sprintf("%.2f", val)
-                else sprintf("%.4f", val)
-              } else as.character(val)
-              tags$td(formatted)
-            })
-          )
-        })
-      )
-    )
-  }
 
-  model_summary_card <- if (is_rsabe_fixed) render_model_summary_card(param_result, param_name) else NULL
+  # \u2500\u2500 SAS-style ANOVA output \u2500\u2500 same card set ABE/ABEL use; the
+  # Type III / Subject(Seq) / LSMeans cards simply render nothing when the
+  # underlying fields aren't populated (this model has no Period/Treatment/
+  # Subject(Sequence) terms), same as ABE/ABEL do for any table they can't build.
+  model_summary_card <- render_model_summary_card(param_result, param_name)
+  type3_card       <- render_type3_anova_card(param_result)
+  type3_mixed_card <- render_type3_marginal_card(param_result)
+  seq_subj_card  <- render_seq_subj_test_card(param_result)
+  lsmeans_cards  <- render_lsmeans_cards(param_result, param_name)
+  param_est_card <- render_parameter_estimates_card(param_result, ref_level = "R", test_level = "T")
 
-  anova_table_div <- NULL
-  if (is_rsabe_fixed && !is.null(param_result$anova_comprehensive)) {
-    anova_table_div <- render_type3_anova_card(param_result)
-  } else if (!is_rsabe_fixed && !is.null(param_result$type3_ss)) {
-    tryCatch({
-      type3_df <- as.data.frame(param_result$type3_ss)
-      anova_table_div <- div(class = "card mb-3",
-        div(class = "card-header",
-          h6(class = "card-title mb-0", icon("table"), " Type 3 Tests of Fixed Effects (Mixed Model, nlme::lme())")
-        ),
-        div(class = "card-body",
-          p(style = "font-size: 0.85em; color: #6c757d; margin-bottom: 10px;",
-            "Marginal (Type III) F-tests for each fixed effect from the same mixed-effects treatment-effect model RSABE fits, computed on the complete dataset. Not the CVwR/CVwT source — those come from a separate Reference-only/Test-only ANOVA, shown further below."),
-          div(class = "table-responsive", render_anova_df(type3_df))
-        )
-      )
-    }, error = function(e) NULL)
-  } else if (!is.null(param_result$anova)) {
-    # Fallback: plain Type I anova() table, if the comprehensive breakdown above
-    # couldn't be built for some reason (e.g. unexpected model row names).
-    tryCatch({
-      anova_df <- as.data.frame(param_result$anova)
-      anova_table_div <- div(class = "card mb-3",
-        div(class = "card-header",
-          h6(class = "card-title mb-0", icon("table"), " ANOVA Table (from RSABE model)")
-        ),
-        div(class = "card-body",
-          p(style = "font-size: 0.85em; color: #6c757d; margin-bottom: 10px;",
-            "Analysis of Variance table from the treatment effect model used for RSABE."),
-          div(class = "table-responsive", render_anova_df(anova_df))
-        )
-      )
-    }, error = function(e) NULL)
-  }
-
-  # ── Second table (fixed only): Tests of Hypotheses Using Type III MS for Subject(Seq) ──
-  seq_subj_test_div <- render_seq_subj_test_card(param_result)
-
-  # ── Collapsible Intermediate Values ──
+  # \u2500\u2500 Collapsible Intermediate Values \u2500\u2500
   intermediate_panel <- NULL
   if (is_hv && !is.null(rsabe_test)) {
     safe_id <- gsub("[^a-zA-Z0-9]", "", param_name)
-    
+
     if (rsabe_method == "fda_linearized") {
       # Howe UCB intermediate components
       intermediate_panel <- div(class = "card mb-3",
@@ -894,15 +844,8 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
       )
     }
   }
-  
-  lsmeans_cards  <- render_lsmeans_cards(param_result, param_name)
-  param_est_card <- render_parameter_estimates_card(
-    param_result,
-    ref_level  = param_result$lsmeans_result$ref_level  %||% "R",
-    test_level = param_result$lsmeans_result$test_level %||% "T"
-  )
 
-  return(tagList(summary_card, model_summary_card, anova_table_div, seq_subj_test_div, lsmeans_cards, param_est_card, intermediate_panel))
+  return(tagList(summary_card, model_summary_card, type3_card, type3_mixed_card, seq_subj_card, lsmeans_cards, param_est_card, intermediate_panel))
 }
 
 # Format parallel group statistical results for display
@@ -1951,22 +1894,65 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         status_color <- if (all_be) "#28a745" else "#dc3545"
         status_bg <- if (all_be) "#d4edda" else "#f8d7da"
         
+        is_rsabe <- identical(analysis_type, "RSABE")
+
         # Create results table with display names and per-parameter limits
         results_list <- mapply(function(param, is_be) {
           ci <- primary_ci[[param]]
-          
+
           # Handle NA values in BE conclusions
           be_status <- if (is.na(is_be)) {
-            "❓ UNKNOWN"
+            "\u2753 UNKNOWN"
           } else if (is_be) {
-            "✅ PASS"
+            "\u2705 PASS"
           } else {
-            "❌ FAIL"
+            "\u274c FAIL"
           }
-          
+
           # Convert log parameter name to display name
           display_param <- log_param_to_display_name(param)
-          
+          n_val <- ci$n_subjects %||% be_res$n_subjects %||% NA
+
+          if (is_rsabe) {
+            # RSABE's conclusion is NOT a 90% CI check \u2014 per FDA guidance Step 3
+            # it's the Howe UCB (or ncTOST) scaling criterion plus the point-
+            # estimate constraint. A standard 90% CI applies only for parameters
+            # where s_wR < 0.294 (not high variability) \u2014 FDA's own Step 1a
+            # specifies the two-one-sided-tests/CI procedure there instead, so
+            # those rows fall back to the CI display.
+            rsabe_det  <- be_res$rsabe_details[[param]]
+            is_hv      <- if (!is.null(rsabe_det)) isTRUE(rsabe_det$is_hv) else FALSE
+            rsabe_test <- if (!is.null(rsabe_det)) rsabe_det$rsabe_test else NULL
+
+            if (is_hv && !is.null(rsabe_test)) {
+              ucb_val <- rsabe_test$ucb %||% NA_real_
+              criterion_str <- if (!is.na(ucb_val)) {
+                sprintf("UCB = %.4f (\u2264 0? %s)", ucb_val, ifelse(ucb_val <= 0, "Yes", "No"))
+              } else {
+                sprintf("Overall p = %.4f", rsabe_test$overall_p %||% NA_real_)
+              }
+              pe_pass <- if (!is.null(rsabe_det)) rsabe_det$pe_constraint_pass else NA
+              constraint_str <- if (!is.na(pe_pass)) {
+                sprintf("PE in [80,125]%%? %s", ifelse(pe_pass, "Yes", "No"))
+              } else {
+                "\u2014"
+              }
+            } else {
+              criterion_str  <- sprintf("90%% CI: [%.2f%%, %.2f%%]", ci$ci_lower, ci$ci_upper)
+              constraint_str <- "80\u2013125% (standard ABE, s_wR < 0.294)"
+            }
+
+            return(data.frame(
+              Parameter = display_param,
+              N = if (!is.na(n_val)) as.character(round(n_val)) else "\u2014",
+              `Point Estimate` = sprintf("%.2f%%", ci$point_estimate),
+              Criterion = criterion_str,
+              `PE Constraint` = constraint_str,
+              `BE Status` = be_status,
+              stringsAsFactors = FALSE
+            ))
+          }
+
           # Per-parameter limits: use limits_used if available, else fall back to global
           param_lower <- be_lower
           param_upper <- be_upper
@@ -1977,7 +1963,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             param_lower <- ci$scaled_lower_limit
             param_upper <- ci$scaled_upper_limit
           }
-          
+
           # Determine limit type label
           limit_type <- ""
           if (!is.null(ci$limits_used$type) && ci$limits_used$type == "expanded") {
@@ -1987,9 +1973,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           } else {
             limit_type <- " (fixed)"
           }
-          
-          n_val <- ci$n_subjects %||% be_res$n_subjects %||% NA
-          
+
           data.frame(
             Parameter = display_param,
             N = if (!is.na(n_val)) as.character(round(n_val)) else "\u2014",
@@ -2069,16 +2053,18 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
 
             if (is.na(cvR) && is.na(s2R)) next
             disp_param <- log_param_to_display_name(p)
-            # Classification (moved here from the ANOVA Results tab, where it
-            # duplicated this same CVwR/BE-status information): CVwR > 30% is
-            # the shared EMA ABEL / FDA RSABE switching threshold.
-            is_hv_p <- !is.na(cvR) && cvR > 30
+            swR_val <- if (!is.na(s2R) && s2R >= 0) sqrt(s2R) else NA_real_
+            # Classification: s_wR >= 0.294 is the actual FDA RSABE / EMA ABEL
+            # switching criterion (not a CV%-based proxy, which is only an
+            # approximate conversion and can disagree with s_wR at the margin).
+            is_hv_p <- !is.na(swR_val) && swR_val >= 0.294
             rows[[length(rows) + 1]] <- tags$li(
               tags$strong(disp_param), ": ",
-              "CV% = ",
+              "s", tags$sub("wR"), " = ",
+              if (!is.na(swR_val)) sprintf("%.4f", swR_val) else "\u2014",
+              " (CV% = ",
               if (!is.na(cvR)) sprintf("%.2f%%", cvR) else "\u2014",
-              ", s", tags$sub("wR"), " = ",
-              if (!is.na(s2R) && s2R >= 0) sprintf("%.4f", sqrt(s2R)) else "\u2014",
+              ")",
               " \u2014 ",
               tags$span(style = if (is_hv_p) "color: #e65100; font-weight: bold;" else "color: #2e7d32; font-weight: bold;",
                 if (is_hv_p) "HIGH VARIABILITY" else "Low variability")
@@ -2099,35 +2085,46 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           # Intra-subject Reference summary (above BE results table)
           intra_ref_block,
 
-          # Results table
-          DT::datatable(
-            results_rows,
-            options = list(
-              dom = 't',
-              pageLength = 10,
-              columnDefs = list(
-                list(className = 'dt-center', targets = 1:6),
-                list(
-                  targets = 6,
-                  createdCell = JS("
-                    function(td, cellData, rowData, row, col) {
-                      if (cellData.includes('PASS')) {
-                        $(td).css('color', '#28a745');
-                        $(td).css('font-weight', 'bold');
-                      } else {
-                        $(td).css('color', '#dc3545');
-                        $(td).css('font-weight', 'bold');
+          # Results table — RSABE has one fewer column (Criterion + PE
+          # Constraint instead of CI Lower/CI Upper); the "BE Status" column
+          # is always last, so its 0-indexed target is ncol - 1 either way.
+          {
+            status_target <- ncol(results_rows) - 1
+            table_colnames <- if (is_rsabe) {
+              c("Parameter", "N", "Point Estimate", "Criterion", "PE Constraint", "BE Status")
+            } else {
+              c("Parameter", "N", "Point Estimate", paste(ci_label, "Lower"), paste(ci_label, "Upper"), "BE Criteria", "BE Status")
+            }
+
+            DT::datatable(
+              results_rows,
+              options = list(
+                dom = 't',
+                pageLength = 10,
+                columnDefs = list(
+                  list(className = 'dt-center', targets = 1:status_target),
+                  list(
+                    targets = status_target,
+                    createdCell = JS("
+                      function(td, cellData, rowData, row, col) {
+                        if (cellData.includes('PASS')) {
+                          $(td).css('color', '#28a745');
+                          $(td).css('font-weight', 'bold');
+                        } else {
+                          $(td).css('color', '#dc3545');
+                          $(td).css('font-weight', 'bold');
+                        }
                       }
-                    }
-                  ")
+                    ")
+                  )
                 )
-              )
-            ),
-            rownames = FALSE,
-            colnames = c("Parameter", "N", "Point Estimate", paste(ci_label, "Lower"), paste(ci_label, "Upper"), "BE Criteria", "BE Status"),
-            escape = FALSE
-          ) %>% 
-            DT::formatStyle(columns = 1:7, fontSize = '14px'),
+              ),
+              rownames = FALSE,
+              colnames = table_colnames,
+              escape = FALSE
+            ) %>%
+              DT::formatStyle(columns = seq_len(ncol(results_rows)), fontSize = '14px')
+          },
           
           # AUC0-t / AUC0-inf coverage ratio (Test, Reference, Overall)
           {

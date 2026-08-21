@@ -761,13 +761,13 @@
   params_str <- paste0("c(", paste(sprintf("\"%s\"", params), collapse = ", "), ")")
 
   nca_block <- if (isTRUE(ran_nca)) paste0(
-    "# Non-Compartmental Analysis (per subject)\n",
-    "nca_results <- perform_enhanced_nca_analysis(\n",
+    "# Non-Compartmental Analysis (per subject), computed via the PKNCA package\n",
+    "nca_results <- perform_nca_analysis(\n",
     "  data,\n",
-    "  lambda_points = ", ac$lambda_z_points %||% 3, "\n",
-    ")\n",
-    "# AUC method: ", ac$auc_method %||% "mixed", "\n",
-    "# Lambda_z method: ", ac$lambda_z_method %||% "aic", "\n\n"
+    "  lambda_z_method = \"", ac$lambda_z_method %||% "ttt", "\",\n",
+    "  auc_method      = \"", ac$auc_method %||% "mixed", "\",\n",
+    "  lambda_z_points = ", ac$lambda_z_points %||% 3, "\n",
+    ")\n\n"
   ) else ""
 
   extra_params <- character(0)

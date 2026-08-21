@@ -1037,7 +1037,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           y_values <- complete_data[[param]]
           total_ss <- sum((y_values - mean(y_values))^2)
           model_ss <- total_ss - residual_ss
-          model_df <- length(fixef(model)) - 1  # Excluding intercept
+          model_df <- length(lme4::fixef(model)) - 1  # Excluding intercept
           model_ms <- model_ss / model_df
           
           comprehensive_anova <- data.frame(
@@ -1125,7 +1125,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           y_values <- complete_data[[param]]
           total_ss <- sum((y_values - mean(y_values))^2)
           model_ss <- total_ss - residual_ss
-          model_df <- length(fixef(model)) - 1  # Excluding intercept
+          model_df <- length(lme4::fixef(model)) - 1  # Excluding intercept
           model_ms <- model_ss / model_df
           
           comprehensive_anova <- data.frame(

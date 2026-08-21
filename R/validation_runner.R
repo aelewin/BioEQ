@@ -224,10 +224,22 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
 
 #' Run BioEQ NCA layer on a validation dataset, return computed values in
 #' a normalized form for comparison.
+#'
+#' Runs through perform_nca_analysis() - the SAME PKNCA-backed engine the
+#' Shiny app uses (R/nca_pknca.R) - rather than a separate validation-only
+#' implementation, so this suite actually exercises the code path the app
+#' runs. lambda_z_method="manual"/lambda_z_points=lambda_points and
+#' auc_method="linear" reproduce this validation layer's original intent
+#' (a fixed last-N-points terminal fit on a plain linear trapezoid).
 #' @keywords internal
 .run_nca_layer <- function(data, lambda_points = 3) {
   nca_in <- .normalize_nca_input(data)
-  res <- perform_enhanced_nca_analysis(nca_in, lambda_points = lambda_points)
+  res <- perform_nca_analysis(
+    nca_in, id_cols = c("subj", "tmt"),
+    time_col = "time", conc_col = "conc",
+    lambda_z_method = "manual", auc_method = "linear",
+    lambda_z_points = lambda_points
+  )
   if (is.null(res) || nrow(res) == 0) {
     stop("NCA produced no results for this dataset.")
   }
@@ -240,9 +252,9 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
     AUC0t     = res$AUC0t,
     AUC0inf   = res$AUC0inf,
     t_half    = res$t_half,
-    lambda_z  = res$Lambda_z,
-    lambda_z_r2 = res$Lambda_z_r2,
-    lambda_z_n_points = res$Lambda_z_points,
+    lambda_z  = res$lambda_z,
+    lambda_z_r2 = res$lambda_z_r_squared,
+    lambda_z_n_points = res$lambda_z_points,
     stringsAsFactors = FALSE
   )
   list(subject_df = std, study = list())
