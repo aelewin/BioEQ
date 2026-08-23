@@ -3,6 +3,108 @@
 # Wires the Validation UI to the R/validation_runner.R engine. Holds NO cache
 # of BioEQ-computed results - every "Run" click invokes the runner fresh.
 
+# Helper: format a numeric-or-string value for display (shared by all
+# validation table renderers below).
+.validation_fmt <- function(x) {
+  if (is.null(x) || length(x) == 0) return("-")
+  n <- suppressWarnings(as.numeric(x))
+  if (is.na(n)) return(as.character(x))
+  formatC(n, format = "f", digits = 2)
+}
+
+# Helper: build the Parameter | Expected | BioEQ | Delta | Result table,
+# optionally with a leading identifier column (e.g. "Subject" or
+# "Checkpoint") whose values are supplied in `id_values` (same row order as
+# `cmp`, and already grouped so identical values run consecutively). Runs of
+# identical id_values are merged into a single rowspan-ed cell rather than
+# repeating the label on every row.
+.validation_build_comparison_table <- function(cmp, id_label = NULL, id_values = NULL) {
+  fmt <- .validation_fmt
+  n <- nrow(cmp)
+
+  is_start <- rep(TRUE, n)
+  span_at  <- rep(1L, n)
+  if (!is.null(id_values) && n > 0) {
+    rl <- rle(id_values)
+    starts <- cumsum(c(1L, utils::head(rl$lengths, -1)))
+    is_start <- rep(FALSE, n)
+    is_start[starts] <- TRUE
+    span_at[starts] <- rl$lengths
+  }
+
+  rows <- lapply(seq_len(n), function(i) {
+    p   <- cmp$pass[i]
+    lbl <- if (is.na(p)) "NO REF" else if (isTRUE(p)) "PASS" else "FAIL"
+    colr <- if (is.na(p)) "#7f8c8d" else if (isTRUE(p)) "#27ae60" else "#c0392b"
+    cells <- list()
+    if (!is.null(id_values) && is_start[i]) {
+      cells <- list(tags$td(rowspan = span_at[i],
+                            style = "font-weight:600; vertical-align: middle;",
+                            id_values[i]))
+    }
+    cells <- c(cells, list(
+      tags$td(cmp$parameter[i]),
+      tags$td(fmt(cmp$expected_value[i])),
+      tags$td(fmt(cmp$computed_value[i])),
+      tags$td(fmt(cmp$deviation[i])),
+      tags$td(style = sprintf("color:%s; font-weight:700;", colr), lbl)
+    ))
+    do.call(tags$tr, cells)
+  })
+  header_cells <- if (!is.null(id_label)) list(tags$th(id_label)) else list()
+  header_cells <- c(header_cells, list(
+    tags$th("Parameter"), tags$th("Expected"),
+    tags$th("BioEQ"), tags$th(HTML("&Delta;")), tags$th("Result")
+  ))
+  tags$table(class = "table table-sm table-striped",
+    style = "margin: 0; font-size: 13px;",
+    tags$thead(do.call(tags$tr, header_cells)),
+    tags$tbody(rows)
+  )
+}
+
+# Helper: for a check that runs MULTIPLE subjects/profiles through ONE
+# dataset (e.g. TTT's 3 synthetic profiles, carryover's 3 synthetic
+# subjects), compute "n subjects checked / n subjects total" per parameter.
+.validation_param_coverage_by_subject <- function(cmp) {
+  if (is.null(cmp) || nrow(cmp) == 0 || !("subject" %in% names(cmp))) return(NULL)
+  n <- length(unique(cmp$subject))
+  params <- unique(cmp$parameter)
+  setNames(vapply(params, function(p) {
+    sprintf("%d/%d", length(unique(cmp$subject[cmp$parameter == p])), n)
+  }, character(1)), params)
+}
+
+# Helper: for a check that runs ONE profile through MULTIPLE separate
+# validation datasets (e.g. missing data's 3 scenarios: exclude/interpolate/
+# LOCF), compute "n data sets containing this parameter / n data sets total".
+.validation_param_coverage_by_dataset <- function(results_list) {
+  n <- length(results_list)
+  if (n == 0) return(NULL)
+  params <- unique(unlist(lapply(results_list, function(r) {
+    if (is.null(r$comparison) || nrow(r$comparison) == 0) return(character(0))
+    unique(r$comparison$parameter)
+  })))
+  if (length(params) == 0) return(NULL)
+  setNames(vapply(params, function(p) {
+    cnt <- sum(vapply(results_list, function(r) {
+      !is.null(r$comparison) && nrow(r$comparison) > 0 && p %in% r$comparison$parameter
+    }, logical(1)))
+    sprintf("%d/%d", cnt, n)
+  }, character(1)), params)
+}
+
+# Helper: render the "<noun> analyzed per parameter" summary line. `noun` is
+# "subjects" for per-subject checks (TTT, carryover) or "data sets" for
+# per-scenario checks (missing data's exclude/interpolate/LOCF).
+.validation_coverage_line <- function(coverage_named_vec, noun = "subjects") {
+  if (is.null(coverage_named_vec) || length(coverage_named_vec) == 0) return(NULL)
+  div(style = "font-size: 12px; color: #4a5568; margin: 0 0 6px 0;",
+    strong(sprintf("%s analyzed per parameter: ", tools::toTitleCase(noun))),
+    paste(sprintf("%s (%s)", names(coverage_named_vec), coverage_named_vec), collapse = " · ")
+  )
+}
+
 # Helper: render a per-dataset comparison panel (compact). Used for NCA
 # datasets and any standalone result that isn't bundled into a BE group.
 .validation_render_dataset_panel <- function(result) {
@@ -20,6 +122,17 @@
     if (is.na(n)) return(as.character(x))
     formatC(n, format = "f", digits = 2)
   }
+
+  # Header "#/#" = number of TESTS. For a single-profile check (e.g. NCA,
+  # one profile vs. WinNonlin) a "test" is one parameter comparison, so this
+  # defaults to the parameter-row pass/total from result$summary (e.g.
+  # 13/13). For a per-subject check (TTT, carryover - multiple synthetic
+  # profiles in one data set) a "test" is one subject fully screened, so
+  # this gets overridden below to subject-level pass/total (e.g. 3/3),
+  # where a subject only counts as passing if every one of its rows passed.
+  s <- result$summary %||% c(total = 0, pass = 0)
+  header_total_n <- s[["total"]] %||% 0
+  header_pass_n  <- s[["pass"]] %||% 0
 
   # ---- Body content -----------------------------------------------------
   body_content <- if (!is.null(result$error) && status %in% c("ERROR", "DATA_MISSING")) {
@@ -55,27 +168,27 @@
 
   } else if (!is.null(result$comparison)) {
     cmp <- result$comparison
-    # Compact display: Parameter | Expected | BioEQ | Δ | Result
-    rows <- lapply(seq_len(nrow(cmp)), function(i) {
-      p   <- cmp$pass[i]
-      lbl <- if (is.na(p)) "NO REF" else if (isTRUE(p)) "PASS" else "FAIL"
-      colr <- if (is.na(p)) "#7f8c8d" else if (isTRUE(p)) "#27ae60" else "#c0392b"
-      tags$tr(
-        tags$td(cmp$parameter[i]),
-        tags$td(fmt(cmp$expected_value[i])),
-        tags$td(fmt(cmp$computed_value[i])),
-        tags$td(fmt(cmp$deviation[i])),
-        tags$td(style = sprintf("color:%s; font-weight:700;", colr), lbl)
-      )
-    })
-    tbl <- tags$table(class = "table table-sm table-striped",
-      style = "margin: 0; font-size: 13px;",
-      tags$thead(tags$tr(
-        tags$th("Parameter"), tags$th("Expected"),
-        tags$th("BioEQ"), tags$th(HTML("&Delta;")), tags$th("Result")
-      )),
-      tags$tbody(rows)
-    )
+    # When this one dataset carries results for MULTIPLE subjects/profiles
+    # (e.g. TTT's 3 synthetic profiles, carryover's 3 synthetic subjects),
+    # group all of each subject's rows together and label them "Subject N"
+    # (in order of first appearance) so a reader can see, at a glance, which
+    # profile each row belongs to. Rows sharing a Subject are then merged
+    # into one rowspan-ed cell by .validation_build_comparison_table().
+    id_label <- NULL
+    id_values <- NULL
+    coverage_line <- NULL
+    if ("subject" %in% names(cmp) && length(unique(cmp$subject)) > 1) {
+      uniq_subs <- unique(cmp$subject)
+      ds_map <- setNames(paste("Subject", seq_along(uniq_subs)), as.character(uniq_subs))
+      cmp <- cmp[order(match(cmp$subject, uniq_subs)), , drop = FALSE]
+      id_label <- "Subject"
+      id_values <- unname(ds_map[as.character(cmp$subject)])
+      coverage_line <- .validation_coverage_line(.validation_param_coverage_by_subject(cmp), noun = "subjects")
+      subj_all_pass <- vapply(split(cmp$pass, cmp$subject), function(p) all(isTRUE_vec(p)), logical(1))
+      header_total_n <- length(subj_all_pass)
+      header_pass_n  <- sum(subj_all_pass)
+    }
+    tbl <- .validation_build_comparison_table(cmp, id_label, id_values)
     extra <- NULL
     if (layer == "NCA") {
       extra <- div(style = "margin-top: 8px;",
@@ -86,34 +199,29 @@
         )
       )
     }
-    tagList(tbl, extra)
+    tagList(coverage_line, tbl, extra)
 
   } else {
     div(class = "text-muted", em("No data."))
   }
 
   # ---- Header ----------------------------------------------------------
+  # Header format: "Title n/N" (N tests - see header_total_n/header_pass_n
+  # above) followed by the colored PASS/FAIL bubble. No separate
+  # parenthetical status word - one #/# per panel, one status bubble.
   status_color <- switch(status,
     "PASS" = "#27ae60", "FAIL" = "#c0392b",
     "ERROR" = "#c0392b", "DATA_MISSING" = "#7f8c8d",
     "NO_REFERENCE" = "#7f8c8d", "#7f8c8d"
   )
-  s <- result$summary %||% c(total = 0, pass = 0, fail = 0, no_ref = 0)
-  pass_n <- s[["pass"]] %||% 0; fail_n <- s[["fail"]] %||% 0
-  total_n <- s[["total"]] %||% 0
-  count_str <- if (total_n > 0) {
-    sprintf("%d/%d", pass_n, total_n)
-  } else "-"
 
   box(
     width = 12, collapsible = TRUE, collapsed = (status == "PASS"),
     title = tagList(
-      span(style = "font-weight: 600;", result$name %||% result$dataset_id),
-      span(style = "float: right; display: flex; gap: 12px; align-items: center;",
-        span(style = sprintf("background: %s; color: white; padding: 2px 10px; border-radius: 10px; font-weight: 700; font-size: 11px;", status_color),
-             status_text),
-        span(style = "color: #7f8c8d; font-size: 12px;", count_str)
-      )
+      span(style = "font-weight: 600;",
+           sprintf("%s %d/%d", result$name %||% result$dataset_id, header_pass_n, header_total_n)),
+      span(style = sprintf("float: right; background: %s; color: white; padding: 2px 10px; border-radius: 10px; font-weight: 700; font-size: 11px;", status_color),
+           status_text)
     ),
     body_content
   )
@@ -233,11 +341,73 @@
     width = 12, collapsible = TRUE, collapsed = (status_overall == "PASS"),
     title = tagList(
       span(style = "font-weight: 600;",
-           sprintf("%s (%s) %d/%d", group_name, status_overall, n_pass, n_total)),
+           sprintf("%s %d/%d", group_name, n_pass, n_total)),
       span(style = sprintf("float: right; background: %s; color: white; padding: 2px 10px; border-radius: 10px; font-weight: 700; font-size: 11px;", status_color),
            status_overall)
     ),
     tbl
+  )
+}
+
+# Helper: render the Missing Data Handling group (3 datasets - exclude /
+# interpolate / LOCF - all run against the same synthetic profile through
+# the exact same handle_missing_data() call the app uses) as ONE panel
+# containing all 3 scenario tables at once, each titled with the specific
+# setting it tests. The header/coverage line summarize across all 3.
+.validation_render_missing_data_shell <- function(results_by_id, ordered_ids, manifest) {
+  results_list <- lapply(ordered_ids, function(id) results_by_id[[id]])
+  names(results_list) <- ordered_ids
+
+  # "Missing Data Handling - Exclude (complete)" -> "Exclude (complete)" -
+  # the "Missing Data Handling" part is already the panel's own title.
+  scenario_name <- function(id) {
+    name <- id
+    if (!is.null(manifest)) {
+      row <- manifest[manifest$dataset_id == id, , drop = FALSE]
+      if (nrow(row) > 0) name <- row$name[1]
+    }
+    sub("^Missing Data Handling - ", "", name)
+  }
+
+  # Header count is data-set-level (how many of the 3 scenario files fully
+  # passed), matching the group panels - not the parameter-level count.
+  overalls <- vapply(results_list, function(r) r$overall %||% "NOT_RUN", character(1))
+  n_total <- length(results_list)
+  n_pass  <- sum(overalls == "PASS")
+  n_fail  <- sum(overalls == "FAIL")
+  status_overall <- if (n_fail > 0) "FAIL" else if (n_total > 0 && n_pass == n_total) "PASS" else "NO_REFERENCE"
+  status_color <- switch(status_overall, "PASS" = "#27ae60", "FAIL" = "#c0392b", "#7f8c8d")
+
+  coverage_line <- .validation_coverage_line(.validation_param_coverage_by_dataset(results_list), noun = "data sets")
+
+  # Composite subject key ("1_t0.5") -> human-readable checkpoint description
+  # - this profile has exactly 3: a BLQ point, a middle gap, a terminal gap
+  # (see validation/datasets/missing_data_synthetic.csv).
+  checkpoint_label <- function(subj) {
+    tm <- sub("^.*_t", "", as.character(subj))
+    desc <- switch(tm, "0.5" = "BLQ", "4" = "Missing (middle)", "24" = "Missing (terminal)", "Checkpoint")
+    sprintf("T%s = %s", tm, desc)
+  }
+
+  scenario_tables <- lapply(ordered_ids, function(id) {
+    r <- results_list[[id]]
+    heading <- h5(style = "margin: 16px 0 4px; font-weight: 700;", scenario_name(id))
+    if (is.null(r) || is.null(r$comparison) || nrow(r$comparison) == 0) {
+      return(tagList(heading, div(class = "text-muted", em("No data."))))
+    }
+    cmp <- r$comparison
+    id_values <- vapply(cmp$subject, checkpoint_label, character(1))
+    tagList(heading, .validation_build_comparison_table(cmp, "Checkpoint", id_values))
+  })
+
+  box(
+    width = 12, collapsible = TRUE, collapsed = (status_overall == "PASS"),
+    title = tagList(
+      span(style = "font-weight: 600;", sprintf("Missing Data Handling %d/%d", n_pass, n_total)),
+      span(style = sprintf("float: right; background: %s; color: white; padding: 2px 10px; border-radius: 10px; font-weight: 700; font-size: 11px;", status_color),
+           status_overall)
+    ),
+    div(coverage_line, do.call(tagList, scenario_tables))
   )
 }
 
@@ -531,11 +701,35 @@ validation_server <- function(input, output, session) {
 
     # Group ids that should render as a single combined table.
     combine_gids <- c("be_parallel", "be_2x2_crossover", "be_replicate_abel")
+    # The missing-data and carryover groups render separately (missing data
+    # as one panel with a scenario dropdown; carryover as an ordinary
+    # dataset panel) but both need to be pulled OUT of standalone here so
+    # they can be placed at the end, after the ANOVA groups - matching the
+    # Coverage Map's table order (Table 1 NCA, Table 2/3 ANOVA, Table 5
+    # Data Handling: missing data then carryover).
+    missing_data_gid <- "missing_data_handling"
+    carryover_gid <- "carryover_detection"
+    missing_data_ids <- if (!is.null(m)) {
+      m$dataset_id[!is.na(m$group_id) & m$group_id == missing_data_gid]
+    } else character(0)
+    carryover_ids <- if (!is.null(m)) {
+      m$dataset_id[!is.na(m$group_id) & m$group_id == carryover_gid]
+    } else character(0)
 
     # Bin results
     by_gid <- list()
     standalone <- list()
+    missing_data_results <- list()
+    carryover_results <- list()
     for (r in res) {
+      if (r$dataset_id %in% missing_data_ids) {
+        missing_data_results[[r$dataset_id]] <- r
+        next
+      }
+      if (r$dataset_id %in% carryover_ids) {
+        carryover_results[[length(carryover_results) + 1]] <- r
+        next
+      }
       gid <- gid_of(r$dataset_id)
       if (!is.na(gid) && gid %in% combine_gids) {
         by_gid[[gid]] <- c(by_gid[[gid]], list(r))
@@ -545,17 +739,25 @@ validation_server <- function(input, output, session) {
     }
 
     panels <- list()
-    # Standalone (NCA, etc.) first, matching the Coverage Map's Table 1 (NCA)
-    # ordering ahead of Table 2/3 (Parallel/2x2/Replicate).
+    # 1. Standalone Table 1 (NCA) content - NCA, TTT.
     for (r in standalone) {
       panels[[length(panels) + 1]] <- .validation_render_dataset_panel(r)
     }
-    # Combined per-group panels (in display order)
+    # 2. Table 2/3 ANOVA groups (Parallel, 2x2 Crossover, Replicate).
     for (gid in combine_gids) {
       if (is.null(by_gid[[gid]])) next
       panels[[length(panels) + 1]] <- .validation_render_group_panel(
         by_gid[[gid]], gname_of(gid)
       )
+    }
+    # 3. Table 5 Data Handling - missing data (pre-NCA), then carryover (post-NCA).
+    if (length(missing_data_results) > 0) {
+      panels[[length(panels) + 1]] <- .validation_render_missing_data_shell(
+        missing_data_results, missing_data_ids, m
+      )
+    }
+    for (r in carryover_results) {
+      panels[[length(panels) + 1]] <- .validation_render_dataset_panel(r)
     }
     do.call(tagList, panels)
   })
@@ -588,6 +790,46 @@ validation_server <- function(input, output, session) {
 
   output$validation_has_results <- reactive({ !is.null(results_rv()) })
   outputOptions(output, "validation_has_results", suspendWhenHidden = FALSE)
+
+  # ---------------------------------------------------------------------
+  # Download the raw validation data sets (all of them) as a ZIP, so a user
+  # can reproduce the checks manually outside the app. Rebuilt fresh from
+  # the embedded store every time - never requires the loose CSVs under
+  # validation/ to be present on disk (they may not be; see
+  # R/validation_runner.R's embedded-store design).
+  # ---------------------------------------------------------------------
+  output$validation_download_all_csv <- downloadHandler(
+    filename = function() paste0("BioEQ_validation_datasets_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".zip"),
+    content = function(file) {
+      m <- manifest_rv() %||% load_validation_manifest()
+      g <- groups_rv()   %||% load_validation_groups()
+
+      tmp_dir <- tempfile("bioeq_validation_")
+      dir.create(file.path(tmp_dir, "datasets"), recursive = TRUE)
+      dir.create(file.path(tmp_dir, "expected_results"), recursive = TRUE)
+
+      utils::write.csv(m, file.path(tmp_dir, "manifest.csv"), row.names = FALSE, na = "")
+      if (!is.null(g)) utils::write.csv(g, file.path(tmp_dir, "groups.csv"), row.names = FALSE, na = "")
+
+      readme_src <- file.path("validation", "README.md")
+      if (file.exists(readme_src)) file.copy(readme_src, file.path(tmp_dir, "README.md"))
+
+      for (id in m$dataset_id) {
+        if (!validation_dataset_available(id)) next
+        ds <- tryCatch(load_validation_dataset(id), error = function(e) NULL)
+        if (!is.null(ds)) {
+          utils::write.csv(ds, file.path(tmp_dir, "datasets", paste0(id, ".csv")), row.names = FALSE)
+        }
+        exp <- tryCatch(load_expected_results(id), error = function(e) NULL)
+        if (!is.null(exp) && nrow(exp) > 0) {
+          utils::write.csv(exp, file.path(tmp_dir, "expected_results", paste0(id, ".csv")), row.names = FALSE, na = "")
+        }
+      }
+
+      zip::zip(zipfile = file, files = list.files(tmp_dir, recursive = TRUE), root = tmp_dir)
+      unlink(tmp_dir, recursive = TRUE)
+    }
+  )
 
   # ---------------------------------------------------------------------
   # Downloads

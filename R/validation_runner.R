@@ -228,16 +228,18 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
 #' Runs through perform_nca_analysis() - the SAME PKNCA-backed engine the
 #' Shiny app uses (R/nca_pknca.R) - rather than a separate validation-only
 #' implementation, so this suite actually exercises the code path the app
-#' runs. lambda_z_method="manual"/lambda_z_points=lambda_points and
-#' auc_method="linear" reproduce this validation layer's original intent
-#' (a fixed last-N-points terminal fit on a plain linear trapezoid).
+#' runs. Defaults (lambda_z_method="manual", auc_method="linear") reproduce
+#' this validation layer's original intent (a fixed last-N-points terminal
+#' fit on a plain linear trapezoid); callers can override either via the
+#' manifest's `params` column (see run_validation_for_dataset()'s NCA branch).
 #' @keywords internal
-.run_nca_layer <- function(data, lambda_points = 3) {
+.run_nca_layer <- function(data, lambda_points = 3, lambda_z_method = "manual",
+                           auc_method = "linear") {
   nca_in <- .normalize_nca_input(data)
   res <- perform_nca_analysis(
     nca_in, id_cols = c("subj", "tmt"),
     time_col = "time", conc_col = "conc",
-    lambda_z_method = "manual", auc_method = "linear",
+    lambda_z_method = lambda_z_method, auc_method = auc_method,
     lambda_z_points = lambda_points
   )
   if (is.null(res) || nrow(res) == 0) {
@@ -263,6 +265,92 @@ compare_value <- function(computed, expected, tolerance_type = "relative",
     lambda_z_adj_r_squared = res$lambda_z_adj_r_squared,
     lambda_z_points = res$lambda_z_points,
     lambda_z_terminal_times = as.character(res$lambda_z_terminal_times),
+    stringsAsFactors = FALSE
+  )
+  list(subject_df = std, study = list())
+}
+
+# ---------------------------------------------------------------------------
+# BioEQ-generated internal-consistency layers (TTT / missing data / carryover)
+#
+# These layers do not compare against external reference software - there is
+# none for these checks. Instead they run BioEQ's own functions
+# (handle_missing_data(), detect_carryover()) on self-authored synthetic data
+# with a hand-computable correct answer, exercising the exact same functions
+# and default arguments the Shiny app uses (analysis_setup_server.R).
+# ---------------------------------------------------------------------------
+
+#' Parse a small "key=value;key=value" config string from the manifest's
+#' optional `params` column.
+#' @keywords internal
+.parse_kv <- function(s) {
+  if (is.null(s) || length(s) == 0 || is.na(s) || !nzchar(s)) return(list())
+  pairs <- strsplit(trimws(strsplit(s, ";")[[1]]), "=")
+  setNames(lapply(pairs, function(x) trimws(x[2])),
+           trimws(vapply(pairs, `[`, character(1), 1)))
+}
+
+#' Look up a key in a .parse_kv() result, falling back to `default` when the
+#' key is absent OR present-but-NA (a bare key with no "="). `%||%` alone
+#' does not catch the NA case, since .parse_kv() returns NA_character_
+#' (not NULL) for a malformed bare key.
+#' @keywords internal
+.cfg_val <- function(cfg, key, default) {
+  val <- cfg[[key]]
+  if (is.null(val) || is.na(val) || !nzchar(val)) return(default)
+  val
+}
+
+#' Run BioEQ's handle_missing_data() on a synthetic profile and expose the
+#' result at a per-checkpoint granularity (composite subject key "<Subject>_t<Time>"),
+#' since the expected-results lookup has no time/period axis of its own.
+#' @keywords internal
+.run_missing_data_layer <- function(data, middle_method = "complete",
+                                    terminal_method = "complete") {
+  res <- handle_missing_data(
+    data = data, middle_method = middle_method, terminal_method = terminal_method,
+    group_cols = c("Subject", "Treatment"), time_col = "Time",
+    conc_col = "Concentration", period_col = "Period"
+  )
+  log <- res$log
+  final <- res$data
+  if (is.null(log) || nrow(log) == 0) {
+    return(list(subject_df = NULL, study = list()))
+  }
+  included <- vapply(seq_len(nrow(log)), function(i) {
+    any(final$Subject == log$Subject[i] &
+        as.character(final$Time) == as.character(log$Time[i]))
+  }, logical(1))
+  final_conc <- vapply(seq_len(nrow(log)), function(i) {
+    if (!included[i]) return(NA_real_)
+    match_rows <- final$Subject == log$Subject[i] &
+      as.character(final$Time) == as.character(log$Time[i])
+    final$Concentration[match_rows][1]
+  }, numeric(1))
+  std <- data.frame(
+    subject = paste0(log$Subject, "_t", as.character(log$Time)),
+    treatment = as.character(log$Treatment),
+    included = as.character(included),
+    final_concentration = final_conc,
+    stringsAsFactors = FALSE
+  )
+  list(subject_df = std, study = list())
+}
+
+#' Run BioEQ's detect_carryover() on synthetic multi-period profiles.
+#' @keywords internal
+.run_carryover_layer <- function(data, threshold = 5) {
+  res <- detect_carryover(data = data, threshold = threshold)
+  sm <- res$carryover_data
+  if (is.null(sm) || nrow(sm) == 0) {
+    return(list(subject_df = NULL, study = list()))
+  }
+  std <- data.frame(
+    subject = as.character(sm$Subject),
+    predose_conc = suppressWarnings(as.numeric(sm[["Pre-dose Conc"]])),
+    cmax = suppressWarnings(as.numeric(sm$Cmax)),
+    percent_of_cmax = suppressWarnings(as.numeric(sm[["% of Cmax"]])),
+    carryover_detected = as.character(sm$Status == "EXCLUDE"),
     stringsAsFactors = FALSE
   )
   list(subject_df = std, study = list())
@@ -598,14 +686,33 @@ run_validation_for_dataset <- function(dataset_id, manifest = NULL,
   # Run the appropriate analysis fresh
   computed <- tryCatch({
     layer <- toupper(row$layer[1])
+    params_str <- if ("params" %in% names(row)) row$params[1] else NA_character_
     if (layer == "NCA") {
-      .run_nca_layer(data, lambda_points = lambda_points)
+      cfg <- .parse_kv(params_str)
+      .run_nca_layer(
+        data, lambda_points = lambda_points,
+        lambda_z_method = .cfg_val(cfg, "lambda", "manual"),
+        auc_method      = .cfg_val(cfg, "auc", "linear")
+      )
+    } else if (layer == "NCA_TTT") {
+      .run_nca_layer(data, lambda_points = lambda_points, lambda_z_method = "ttt")
     } else if (layer %in% c("ANOVA+BE", "ANOVA_BE", "BE")) {
       .run_be_layer(data, design = row$design[1])
     } else if (layer == "BOTH") {
       nca <- .run_nca_layer(data, lambda_points = lambda_points)
       # For "Both" layer, BE analysis would consume the NCA output - treat as future extension.
       list(subject_df = nca$subject_df, study = list())
+    } else if (layer == "MISSING_DATA") {
+      cfg <- .parse_kv(params_str)
+      .run_missing_data_layer(
+        data,
+        middle_method = cfg$middle %||% "complete",
+        terminal_method = cfg$terminal %||% "complete"
+      )
+    } else if (layer == "CARRYOVER") {
+      cfg <- .parse_kv(params_str)
+      thr <- suppressWarnings(as.numeric(cfg$threshold))
+      .run_carryover_layer(data, threshold = if (is.na(thr)) 5 else thr)
     } else {
       stop("Unknown layer: ", row$layer[1])
     }

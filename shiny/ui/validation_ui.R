@@ -108,10 +108,11 @@ validation_ui <- function() {
         status = "info", solidHeader = TRUE, width = 12,
         collapsible = TRUE, collapsed = TRUE,
 
-        h4("What every BioEQ analysis is benchmarked against"),
-        p("NCA is benchmarked against ", strong("Phoenix WinNonlin"), "; ANOVA/BE against ", strong("SAS"),
-          ". Tables below show the calculation, its SAS/WinNonlin equivalent, and which datasets ",
-          "have a published SAS/WinNonlin result to compare against."),
+        div(style = "text-align: right; margin-bottom: 12px;",
+          downloadButton("validation_download_all_csv",
+                         label = "Download Validation Data Sets (ZIP)",
+                         class = "btn-sm")
+        ),
 
         h4("Table 1 - NCA"),
         p(class = "text-muted", style = "font-size: 12px;",
@@ -121,14 +122,14 @@ validation_ui <- function() {
           "<table class='bioeq-mapping'>",
           "<thead><tr><th>Calculation</th><th>BioEQ package/call</th><th>WinNonlin equivalent</th><th>Validating dataset</th></tr></thead><tbody>",
           "<tr><td>AUC0t — Linear trapezoidal</td><td><code>PKNCA::pk.nca()</code>, <code>auc.method=\"linear\"</code></td><td>Linear Trapezoidal</td><td><a href='https://www.pkpd168.com/_files/ugd/2cabb8_e9c279faac004d668927945a4921bb54.pdf' target='_blank' rel='noopener noreferrer'>Lee &amp; Lee (2009), bear/WinNonlin validation report</a><br><small class='text-muted'>Subject 1, Period 1 only</small></td></tr>",
-          "<tr><td>AUC0t — Linear-up/Log-down</td><td><code>PKNCA::pk.nca()</code>, <code>auc.method=\"lin up/log down\"</code></td><td>Linear Up/Log Down Trapezoidal</td><td>Planned</td></tr>",
-          "<tr><td>λz — TTT</td><td>BioEQ rule (t≥ 2·Tmax) flags points, PKNCA fits</td><td>No native equivalent</td><td>Planned</td></tr>",
-          "<tr><td>λz — ARS</td><td><code>PKNCA::pk.nca()</code> best-fit search (max adj. R²)</td><td>Best Fit</td><td>Planned</td></tr>",
+          "<tr><td>AUC0t — Linear-up/Log-down</td><td><code>PKNCA::pk.nca()</code>, <code>auc.method=\"lin up/log down\"</code></td><td>Linear Up/Log Down Trapezoidal</td><td><a href='https://asancpt.github.io/NonCompart-tests/' target='_blank' rel='noopener noreferrer'>Bae (2018), NonCompart/WinNonlin cross-validation report</a><br><small class='text-muted'>Theoph, 12 subjects</small></td></tr>",
+          "<tr><td>λz — TTT</td><td>BioEQ rule (t≥ 2·Tmax) flags points, PKNCA fits</td><td>No native equivalent</td><td>BioEQ-generated (internal check) — 3 synthetic profiles, varying Tmax, confirming the full 2×Tmax→Tlast window is used with no truncation, and that PKNCA's fitted λz/R² match an independent regression on that exact point set for each profile</td></tr>",
+          "<tr><td>λz — ARS</td><td><code>PKNCA::pk.nca()</code> best-fit search (max adj. R²)</td><td>Best Fit</td><td><a href='https://asancpt.github.io/NonCompart-tests/' target='_blank' rel='noopener noreferrer'>Bae (2018), NonCompart/WinNonlin cross-validation report</a><br><small class='text-muted'>Theoph, 12 subjects</small></td></tr>",
           "<tr><td>λz — Manual</td><td>BioEQ flags fixed points, PKNCA fits</td><td>Manual</td><td><a href='https://www.pkpd168.com/_files/ugd/2cabb8_e9c279faac004d668927945a4921bb54.pdf' target='_blank' rel='noopener noreferrer'>Lee &amp; Lee (2009), bear/WinNonlin validation report</a><br><small class='text-muted'>Subject 1, Period 1 only</small></td></tr>",
           "</tbody></table>"
         ),
 
-        h4("Table 2 - Parallel & 2×2 Crossover ANOVA"),
+        h4("Table 2 - Parallel & 2×2 Crossover"),
         p(class = "text-muted", style = "font-size: 12px;", "Used for Average BE (ABE) on parallel and standard 2×2 crossover designs."),
         HTML(
           "<table class='bioeq-mapping'>",
@@ -141,7 +142,7 @@ validation_ui <- function() {
           "</tbody></table>"
         ),
 
-        h4("Table 3 - Replicate-Design ANOVA (replicateBE)"),
+        h4("Table 3 - Replicate-Design"),
         p(class = "text-muted", style = "font-size: 12px;",
           "All ANOVAs on replicate designs are performed through ", code("replicateBE"),
           ", regardless of BE evaluation method (ABEL or RSABE)."),
@@ -175,8 +176,8 @@ validation_ui <- function() {
         HTML(
           "<table class='bioeq-mapping'>",
           "<thead><tr><th>Calculation</th><th>BioEQ function</th><th>Equivalence</th><th>Validating dataset</th></tr></thead><tbody>",
-          "<tr><td>Missing data handling (pre-NCA)</td><td><code>handle_missing_data()</code> (<code>R/missing_data_handling.R</code>) — position-aware: BLQ→0, middle/terminal complete-case, interpolation, or LOCF</td><td>Not a SAS/WinNonlin procedure — internal QC/pre-processing rule</td><td>Planned</td></tr>",
-          "<tr><td>Carryover detection (post-NCA)</td><td><code>detect_carryover()</code> (<code>R/carryover_detection.R</code>) — pre-dose concentration vs. same-period Cmax, 5% threshold</td><td>ICH M13A §2.2.3.3 guideline criterion — not a SAS/WinNonlin procedure</td><td>Planned</td></tr>",
+          "<tr><td>Missing data handling (pre-NCA)</td><td><code>handle_missing_data()</code> (<code>R/missing_data_handling.R</code>) — position-aware: BLQ→0, middle/terminal complete-case, interpolation, or LOCF</td><td>Not a SAS/WinNonlin procedure — internal QC/pre-processing rule</td><td>BioEQ-generated (internal check) — derived from the bear/WinNonlin 2×2 dataset, 3 scenarios (exclude/interpolate/LOCF)</td></tr>",
+          "<tr><td>Carryover detection (post-NCA)</td><td><code>detect_carryover()</code> (<code>R/carryover_detection.R</code>) — pre-dose concentration vs. same-period Cmax, 5% threshold</td><td>ICH M13A §2.2.3.3 guideline criterion — not a SAS/WinNonlin procedure</td><td>BioEQ-generated (internal check) — 3 synthetic profiles, one exceeding the 5% threshold</td></tr>",
           "</tbody></table>"
         )
       )

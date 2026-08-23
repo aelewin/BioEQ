@@ -1,0 +1,6 @@
+parameter,scope,subject,treatment,expected_value,tolerance_type,tolerance_value,unit,reference_source,notes
+included,subject,1_t0.5,T,TRUE,exact,,,"BioEQ handle_missing_data() (R/missing_data_handling.R)","BLQ point is always converted to 0, never excluded, regardless of middle/terminal method."
+final_concentration,subject,1_t0.5,T,0,absolute,0.001,ng/mL,"BioEQ handle_missing_data() (R/missing_data_handling.R)","BLQ -> 0 rule."
+included,subject,1_t4,T,TRUE,exact,,,"BioEQ handle_missing_data() (R/missing_data_handling.R)","middle_method=interpolate: middle gap at t=4 is imputed, not excluded."
+final_concentration,subject,1_t4,T,1223.2,absolute,0.01,ng/mL,"BioEQ handle_missing_data() (R/missing_data_handling.R)","Linear interpolation between t=3 (1375) and t=8 (616): 1375 + (4-3)/(8-3)*(616-1375) = 1223.2."
+included,subject,1_t24,T,FALSE,exact,,,"BioEQ handle_missing_data() (R/missing_data_handling.R)","terminal_method=complete: interpolation never applies to terminal points (no next neighbor), so terminal_method still governs and excludes t=24."
