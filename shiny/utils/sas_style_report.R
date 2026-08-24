@@ -435,21 +435,58 @@
 }
 
 # "Tests of Hypotheses Using the Type III MS for Subject(Sequence) as an
-# Error Term" — the Sequence effect re-tested against the between-subject MS.
+# Error Term" — the Sequence effect (and, when Group is in the model, the Group
+# effect — both between-subject factors tested against the same
+# Subject(Group x Sequence) error term) re-tested against the between-subject MS.
+# Mirrors render_seq_subj_test_card() in shiny/server/results_dashboard_server.R.
 .render_seq_subj_test_real <- function(param_result) {
-  seq_test <- tryCatch(param_result$subj_seq_analysis$hypothesis_tests$seq,
-                        error = function(e) NULL)
-  if (is.null(seq_test) || is.null(seq_test$f_value) || is.na(seq_test$f_value)) return("")
+  tests <- tryCatch(param_result$subj_seq_analysis$hypothesis_tests, error = function(e) NULL)
+  if (is.null(tests) || length(tests) == 0) return("")
+
+  label_for <- function(key) switch(key, seq = "Sequence", grp = "Group", key)
+  ordered_keys <- intersect(c("grp", "seq"), names(tests))
+  rows <- Filter(function(k) {
+    t <- tests[[k]]
+    !is.null(t) && !is.null(t$f_value) && !is.na(t$f_value)
+  }, ordered_keys)
+  if (length(rows) == 0) return("")
+
   tab <- data.frame(
-    Source = "Sequence",
-    DF = .fmt_int(seq_test$df),
-    `Type III SS` = .fmt_num(seq_test$ss, 6),
-    `Mean Square` = .fmt_num(seq_test$ms, 6),
-    `F Value` = .fmt_num(seq_test$f_value, 2),
-    `Pr > F` = .fmt_p(seq_test$p_value),
+    Source = vapply(rows, label_for, character(1)),
+    DF = vapply(rows, function(k) .fmt_int(tests[[k]]$df), character(1)),
+    `Type III SS` = vapply(rows, function(k) .fmt_num(tests[[k]]$ss, 6), character(1)),
+    `Mean Square` = vapply(rows, function(k) .fmt_num(tests[[k]]$ms, 6), character(1)),
+    `F Value` = vapply(rows, function(k) .fmt_num(tests[[k]]$f_value, 2), character(1)),
+    `Pr > F` = vapply(rows, function(k) .fmt_p(tests[[k]]$p_value), character(1)),
     check.names = FALSE, stringsAsFactors = FALSE
   )
   .df_to_html(tab)
+}
+
+# Group x Treatment interaction — supportive/exploratory analysis only. Never
+# part of the model that determines BE; see compute_group_treatment_interaction()
+# in R/simple_anova.R and render_group_treatment_interaction_card() in
+# shiny/server/results_dashboard_server.R (the interactive-tab equivalent).
+.render_group_treatment_real <- function(param_result) {
+  gt <- param_result$group_treatment_interaction
+  if (is.null(gt) || is.null(gt$f) || is.na(gt$f)) return("")
+  tab <- data.frame(
+    Source = "Group x Treatment",
+    `DF (num, den)` = sprintf("%s, %s", .fmt_int(gt$df1), .fmt_int(gt$df2)),
+    `Type III SS` = .fmt_num(gt$ss, 6),
+    `Mean Square` = .fmt_num(gt$ms, 6),
+    `F Value` = .fmt_num(gt$f, 2),
+    `Pr > F` = .fmt_p(gt$p),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  paste0(
+    "<p class='sas-note'><strong>Not used to determine bioequivalence.</strong> ",
+    "Per ICH M13A's final guideline, Group x Treatment is excluded from the model ",
+    "that determines BE (it would bias the treatment effect); reported here only ",
+    "as a supportive check for heterogeneity of the treatment effect across groups. ",
+    "Tested against the ", .html_escape(gt$error_term %||% "Residual"), " mean square.</p>",
+    .df_to_html(tab)
+  )
 }
 
 # Least Squares Means — the same 3-table SAS layout as the interactive tab's
@@ -562,10 +599,16 @@
     summary_html <- .render_model_summary_real(pr, log_label)
     type3_html   <- .render_type3_real(pr)
     seqsub_html  <- .render_seq_subj_test_real(pr)
+    grptrt_html  <- .render_group_treatment_real(pr)
     lsmeans_html <- .render_lsmeans_real(pr, log_label)
     param_html   <- .render_parameter_estimates_real(pr, ref_lvl, test_lvl)
 
     if (!nzchar(class_html) && !nzchar(summary_html) && !nzchar(type3_html)) next
+
+    # "Subject(Sequence)" becomes "Subject(Group x Sequence)" once Group is in
+    # the model (mirrors the interactive tab's render_seq_subj_test_card()).
+    has_grp_test <- !is.null(tryCatch(pr$subj_seq_analysis$hypothesis_tests$grp, error = function(e) NULL))
+    seqsub_error_term <- if (has_grp_test) "Subject(Group x Sequence)" else "Subject(Sequence)"
 
     blocks <- c(blocks, paste0(
       "<h3 class='sas-subhead'>ANOVA for log-transformed ", .html_escape(p), "</h3>",
@@ -578,7 +621,9 @@
         "<h4 class='sas-subhead'>Analysis of Variance (Type III SS)</h4>", type3_html) else "",
       if (nzchar(seqsub_html)) paste0(
         "<h4 class='sas-subhead'>Tests of Hypotheses Using the Type III MS ",
-        "for Subject(Sequence) as an Error Term</h4>", seqsub_html) else "",
+        "for ", seqsub_error_term, " as an Error Term</h4>", seqsub_html) else "",
+      if (nzchar(grptrt_html)) paste0(
+        "<h4 class='sas-subhead'>Group &times; Treatment Interaction &mdash; Supportive Analysis</h4>", grptrt_html) else "",
       lsmeans_html,
       if (nzchar(param_html)) paste0(
         "<h4 class='sas-subhead'>Parameter Estimates</h4>", param_html) else "",

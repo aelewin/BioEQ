@@ -634,9 +634,9 @@ observeEvent(input$run_analysis, {
       }
     },
     random_effects = input$random_effects %||% "(1|subject)",
-    # Group Effects Configuration
-    include_group_fixed = input$include_group_fixed %||% FALSE,
-    include_group_random = input$include_group_random %||% FALSE,
+    # Group Effects Configuration - Group is always a fixed effect ("Model II",
+    # see R/simple_anova.R); there is no "random group" option.
+    include_group = input$include_group %||% FALSE,
     include_group_treatment_interaction = input$include_group_treatment_interaction %||% FALSE,
     # Parallel Design Configuration
     welch_correction = as.logical(input$welch_correction_be %||% TRUE),
@@ -876,8 +876,12 @@ observeEvent(input$run_analysis, {
         analysis_data$merge_id <- paste(analysis_data$Subject, analysis_data$Treatment, sep = "_")
         nca_results$merge_id <- paste(nca_results$Subject, nca_results$Treatment, sep = "_")
 
-        # Get design variables from original data
-        design_cols <- c("merge_id", "Subject", "Sequence", "Period", "Treatment")
+        # Get design variables from original data. Sequence/Period only exist for
+        # crossover designs - a parallel-design dataset (Subject, Treatment, Time,
+        # Concentration, no Sequence/Period) never has them, so only pull columns
+        # that are actually present in analysis_data to avoid an
+        # "undefined columns selected" error.
+        design_cols <- intersect(c("merge_id", "Subject", "Sequence", "Period", "Treatment"), names(analysis_data))
         if ("group" %in% names(analysis_data)) design_cols <- c(design_cols, "group")
         design_vars <- analysis_data[!duplicated(analysis_data$merge_id), design_cols]
 
@@ -1071,12 +1075,11 @@ observeEvent(input$run_analysis, {
           # alpha for ANOVA CI: for TOST alpha=0.05 (one-sided) -> CI alpha=0.10 (two-sided 90% CI)
           anova_alpha <- (analysis_config$alpha_level %||% 0.05) * 2
           simple_anova_results <- perform_simple_anova(
-            nca_results, 
+            nca_results,
             numeric_params,  # Use validated numeric parameters
             analysis_config$anova_model,
             analysis_config$random_effects,
-            analysis_config$include_group_fixed,
-            analysis_config$include_group_random,
+            analysis_config$include_group,
             analysis_config$include_group_treatment_interaction,
             alpha = anova_alpha
           )

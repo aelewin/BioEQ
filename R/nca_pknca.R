@@ -1,44 +1,7 @@
 # BioEQ - PKNCA-Backed NCA Engine
 #
-# Replaces the hand-written AUC/lambda_z math in nca_functions.R with the
-# PKNCA CRAN package (validated, published, actively maintained). This file
-# provides calculate_pk_parameters_pknca(), a drop-in replacement for
-# calculate_pk_parameters() with an IDENTICAL signature and an output
-# contract that preserves every column name downstream consumers rely on
-# (see bioeq-dead-code-audit-2026-08 / the NCA audit for the full consumer
-# map). perform_nca_analysis() in nca_functions.R calls this function; all
-# grouping/ID/rbind logic there is unchanged.
-#
-# Design decisions (2026-08 NCA migration):
-#   - AUC methods: only "linear" and "mixed" (-> PKNCA "lin up/log down")
-#     are supported. The old "log" and "linear_log" methods are removed.
-#   - lambda_z methods: only "ttt", "ars", "manual" are supported ("aic" is
-#     removed). PKNCA has no native TTT — the TTT/manual point-selection
-#     RULE is computed here and handed to PKNCA via the logical
-#     include_half.life column (verified against the installed package's
-#     own v06-half-life-calculation vignette; must be logical TRUE/FALSE,
-#     NOT a character reason string — an earlier attempt using character
-#     values was silently ignored by PKNCA). "ars" is PKNCA's own default
-#     best-fit adjusted-R^2 curve-stripping (include_half.life left NA).
-#   - BLQ concentrations are 0 (conc.blq = 0); unavailable/missing points
-#     are dropped (conc.na = "drop") - not imputed.
-#   - MRT, CL_F, Vd_F are dropped entirely (MRT was 1/lambda_z, not
-#     AUMC/AUC; CL_F/Vd_F were computed against a hardcoded dose=1).
-#   - lambda_z_slope/_intercept/_se/_t_value/_p_value and the serialized
-#     lambda_z_terminal_times/_concs strings have no PKNCA equivalent (PKNCA
-#     reports only the window boundaries lambda.z.time.first/.time.last).
-#     They are reconstructed here by re-fitting lm(log(conc) ~ time) on
-#     exactly PKNCA's selected window - required by the Lambda Z Regression
-#     plot (R/plotting.R:create_lambda_z_regression_plots()), which draws
-#     the line as exp(intercept + slope * time) and therefore needs the
-#     raw (negative) ln-scale slope, not lambda_z itself.
-
 #' Calculate PK parameters for a single concentration-time curve using PKNCA
 #'
-#' Drop-in replacement for calculate_pk_parameters() (R/nca_functions.R).
-#' Same signature, same conceptual output (a named list convertible via
-#' as.data.frame()), computed via the PKNCA package instead of hand-written
-#' trapezoidal/regression code.
 #'
 #' @param time Numeric vector of sample times
 #' @param conc Numeric vector of concentrations (BLQ should be coded as 0)

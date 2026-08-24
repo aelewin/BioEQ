@@ -587,45 +587,47 @@ tagList(
                   ),
                   div(style = "font-size: 11px; color: #666; margin-top: 5px;",
                     "Subject as a random intercept — (1|subject) — is the standard random-effects structure for a bioequivalence mixed model."
-                  ),
-                  
-                  # Group as random effect option (only for ABE mixed models,
-                  # standard 2x2 crossover only for now)
-                  conditionalPanel(
-                    condition = "output.groups_detected && output.is_non_replicate_design && !output.is_parallel_design",
-                    div(style = "margin-top: 10px; padding: 10px; background-color: #fff3cd; border-radius: 5px; border-left: 3px solid #ffc107;",
-                      h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #856404;"),
-                      checkboxInput(
-                        "include_group_random",
-                        "Include Group as Random Effect",
-                        value = FALSE
-                      ),
-                      div(style = "font-size: 11px; color: #856404; margin-top: 5px;",
-                        "Groups detected in data (2×2 crossover). Check to include group-to-group variability in the mixed-effects model."
-                      )
-                    )
                   )
                 )
               ),
-              
-              # Group effects for fixed AND mixed models (ABE, standard 2x2 crossover only for now —
-              # ABEL/RSABE handle their own models; replicate/parallel designs not yet supported).
+
+              # ===============================================================
+              # GROUP EFFECTS — one consolidated panel for all four ANOVA model
+              # types and both parallel and 2x2x2 crossover designs (ABE only;
+              # ABEL/RSABE handle their own models; 2x2x3/2x2x4 replicate designs
+              # not yet supported — output.is_non_replicate_design gates that).
+              # Group is always a FIXED effect ("Model II" per the "Group Effect"
+              # article at bebac.at / ICH M13A's final guideline — the article
+              # explicitly argues against treating group as random). There is
+              # deliberately no "as random effect" option.
+              # ===============================================================
               conditionalPanel(
-                condition = "(input.anova_model == 'fixed' || input.anova_model == 'nlme') && output.groups_detected && input.be_analysis_type == 'ABE' && output.is_non_replicate_design && !output.is_parallel_design",
+                condition = "output.groups_detected && output.is_non_replicate_design && input.be_analysis_type == 'ABE'",
                 div(style = "margin-top: 10px; padding: 10px; background-color: #d1ecf1; border-radius: 5px; border-left: 3px solid #17a2b8;",
                   h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #0c5460;"),
                   checkboxInput(
-                    "include_group_fixed",
-                    "Include Group as Fixed Effect",
+                    "include_group",
+                    "Include Group in Model",
                     value = TRUE
                   ),
-                  checkboxInput(
-                    "include_group_treatment_interaction",
-                    "Include Group \u00D7 Treatment Interaction",
-                    value = FALSE
-                  ),
                   div(style = "font-size: 11px; color: #0c5460; margin-top: 5px;",
-                    "Groups detected in data (2×2 crossover). Adds a Group term to the ANOVA to assess whether dosing/facility group explains any variance."
+                    "Groups detected in data. Adds Group as a fixed effect (“Model II”) — Group, Sequence × Group, and Period nested within Group for crossover designs; Group alongside Treatment for parallel designs — per ICH M13A’s guidance for multi-group BE studies. This is the model used to determine bioequivalence."
+                  ),
+                  conditionalPanel(
+                    condition = "input.include_group",
+                    div(style = "margin-top: 10px; padding-top: 10px; border-top: 1px dashed #99d3e0;",
+                      checkboxInput(
+                        "include_group_treatment_interaction",
+                        "Test Group × Treatment Interaction (supportive analysis only)",
+                        value = FALSE
+                      ),
+                      div(style = "font-size: 11px; color: #0c5460; margin-top: 5px;",
+                        icon("triangle-exclamation"), " Reported as a separate diagnostic — ",
+                        tags$b("never used to determine bioequivalence"), ". Per ICH M13A, Group × Treatment ",
+                        "must stay out of the model that determines BE; this only evaluates whether the treatment ",
+                        "effect looks heterogeneous across groups."
+                      )
+                    )
                   )
                 )
               )

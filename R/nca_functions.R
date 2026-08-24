@@ -1,17 +1,6 @@
 # BioEQ - Non-Compartmental Analysis Functions
 # Modernized NCA functions for bioequivalence analysis
 
-# NOTE: The original hand-written NCA math (calculate_auc_linear,
-# estimate_lambda_z, calculate_pk_parameters, calculate_auc_trap,
-# calculate_lambda_z_fixed_points, calculate_pAUC,
-# perform_enhanced_nca_analysis) was removed in the 2026-08 PKNCA
-# migration - see R/nca_pknca.R for the replacement engine and
-# bioeq-dead-code-audit-2026-08 / the NCA audit for why (the old code
-# had a real defect: aic/ars/manual all included Cmax in the terminal
-# regression). perform_nca_analysis() below is unchanged except that it
-# now calls calculate_pk_parameters_pknca() instead of the removed
-# calculate_pk_parameters().
-
 #' Perform Complete NCA Analysis
 #'
 #' @param data Data frame with time and concentration data

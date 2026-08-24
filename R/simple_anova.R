@@ -55,22 +55,35 @@ detect_anova_design <- function(nca_data) {
 #' the "Tests of Hypotheses Using the Type III MS for Subject(Seq) as Error Term"
 #' table (Sequence tested against the between-subject Subject(Sequence) MS instead).
 #'
+#' Also handles the Group-augmented "Model II" formula (see the "Group Effect"
+#' article at bebac.at and ICH M13A's final guideline, section on multi-group BE
+#' studies): `y ~ grp + seq + grp:seq + subj:(grp:seq) + grp:prd + drug`. Whether the
+#' model includes Group is auto-detected from its own terms (`"grp" %in%
+#' all.vars(formula(model))`) rather than a separate flag, so callers never need to
+#' track it independently of the model they already built. When Group is present the
+#' breakdown grows from 5 to 7 rows (Group, Sequence, Group x Sequence,
+#' Subject(Group x Sequence), Period(Group), Treatment, Residual) and the
+#' Subject(Sequence)-as-error-term table gains a second hypothesis test for Group
+#' (tested against the same Subject(Group x Sequence) error term as Sequence).
+#'
 #' Extracted from `perform_simple_anova()`'s fixed-effects branch so RSABE can reuse
 #' the exact same SAS-style decomposition on its own already-fit model, instead of
 #' only ever showing a plain Type I `anova()` table. Pure refactor — behavior for
 #' `perform_simple_anova()` callers is unchanged.
 #'
-#' @param model An `lm` object fit as `y ~ seq + subj:seq + prd + drug`
+#' @param model An `lm` object fit as `y ~ seq + subj:seq + prd + drug`, or (when a
+#'   `grp` column was included) `y ~ grp + seq + grp:seq + subj:(grp:seq) + grp:prd + drug`
 #' @param type3_ss Unused; kept for backward compatibility with existing callers
 #'   that still pass a pre-computed `drop1()` result. Type III SS is always
 #'   computed via `emmeans::joint_tests()` now (see below), which is the only
 #'   approach that reproduces SAS PROC GLM's Type III SS exactly, including for
 #'   the Sequence term (see next paragraph).
 #' @return list(comprehensive_anova = data.frame, subj_seq_analysis = list), or NULL
-#'   if the model's terms don't match the expected crossover shape (caller should
+#'   if the model's terms don't match either expected crossover shape (caller should
 #'   fall back to a generic Model/Error/Corrected-Total summary in that case).
 #' @export
 build_crossover_anova_tables <- function(model, type3_ss = NULL) {
+  has_grp <- "grp" %in% all.vars(formula(model))
   anova_table <- tryCatch(anova(model), error = function(e) NULL)
   if (is.null(anova_table)) return(NULL)
 
@@ -133,30 +146,75 @@ build_crossover_anova_tables <- function(model, type3_ss = NULL) {
   }
 
   seq_t  <- find_term("^seq$")
-  subj_t <- find_term("subj.*seq|seq.*subj")
-  prd_t  <- find_term("^prd$")
+  prd_t  <- if (has_grp) find_term("^grp:prd$|^prd:grp$") else find_term("^prd$")
   drug_t <- find_term("^drug$")
+  subj_t <- if (has_grp) {
+    find_term("grp.*seq.*subj|grp.*subj.*seq|subj.*grp.*seq")
+  } else {
+    find_term("subj.*seq|seq.*subj")
+  }
+  grp_t     <- if (has_grp) find_term("^grp$") else NULL
+  grp_seq_t <- if (has_grp) find_term("^grp:seq$|^seq:grp$") else NULL
   if (is.null(seq_t) || is.null(subj_t) || is.null(prd_t) || is.null(drug_t)) return(NULL)
+  if (has_grp && (is.null(grp_t) || is.null(grp_seq_t))) return(NULL)
 
-  comprehensive_anova <- data.frame(
-    Source = c("Sequence", "Subject(Sequence)", "Period", "Treatment", "Residual"),
-    Df = c(seq_t$df, subj_t$df, prd_t$df, drug_t$df, df_resid),
-    `Sum Sq` = c(seq_t$ss, subj_t$ss, prd_t$ss, drug_t$ss, ss_resid),
-    `Mean Sq` = c(seq_t$ms, subj_t$ms, prd_t$ms, drug_t$ms, ms_resid),
-    `F value` = c(seq_t$f, subj_t$f, prd_t$f, drug_t$f, NA),
-    `Pr(>F)`  = c(seq_t$p, subj_t$p, prd_t$p, drug_t$p, NA),
-    check.names = FALSE,
-    stringsAsFactors = FALSE
-  )
+  comprehensive_anova <- if (has_grp) {
+    data.frame(
+      Source = c("Group", "Sequence", "Group x Sequence", "Subject(Group x Sequence)",
+                 "Period(Group)", "Treatment", "Residual"),
+      Df = c(grp_t$df, seq_t$df, grp_seq_t$df, subj_t$df, prd_t$df, drug_t$df, df_resid),
+      `Sum Sq` = c(grp_t$ss, seq_t$ss, grp_seq_t$ss, subj_t$ss, prd_t$ss, drug_t$ss, ss_resid),
+      `Mean Sq` = c(grp_t$ms, seq_t$ms, grp_seq_t$ms, subj_t$ms, prd_t$ms, drug_t$ms, ms_resid),
+      `F value` = c(grp_t$f, seq_t$f, grp_seq_t$f, subj_t$f, prd_t$f, drug_t$f, NA),
+      `Pr(>F)`  = c(grp_t$p, seq_t$p, grp_seq_t$p, subj_t$p, prd_t$p, drug_t$p, NA),
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  } else {
+    data.frame(
+      Source = c("Sequence", "Subject(Sequence)", "Period", "Treatment", "Residual"),
+      Df = c(seq_t$df, subj_t$df, prd_t$df, drug_t$df, df_resid),
+      `Sum Sq` = c(seq_t$ss, subj_t$ss, prd_t$ss, drug_t$ss, ss_resid),
+      `Mean Sq` = c(seq_t$ms, subj_t$ms, prd_t$ms, drug_t$ms, ms_resid),
+      `F value` = c(seq_t$f, subj_t$f, prd_t$f, drug_t$f, NA),
+      `Pr(>F)`  = c(seq_t$p, subj_t$p, prd_t$p, drug_t$p, NA),
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  }
   rownames(comprehensive_anova) <- comprehensive_anova$Source
 
   # Second table: "Tests of Hypotheses Using the Type III MS for Subject(Seq) as Error Term"
-  # The SAME Sequence SS/MS as above (a single fixed quantity, per SAS convention),
-  # but F-tested against Subject(Sequence) MS instead of Residual MS — the
-  # standard, correct significance test for the Sequence effect in a crossover
-  # design (matches SAS PROC GLM's second table exactly).
+  # (or "Subject(Group x Seq)" when Group is present). The SAME Sequence (and, when
+  # present, Group) SS/MS as above (a single fixed quantity, per SAS convention), but
+  # F-tested against the between-subject MS instead of Residual MS — the standard,
+  # correct significance test for Sequence (and Group) in a crossover design (matches
+  # SAS PROC GLM's second table exactly). Group is tested against the SAME
+  # Subject(Group x Sequence) error term as Sequence, per the same logic (both are
+  # between-subject factors).
   f_seq_vs_subj <- seq_t$ms / subj_t$ms
   p_seq_vs_subj <- pf(f_seq_vs_subj, seq_t$df, subj_t$df, lower.tail = FALSE)
+
+  hypothesis_tests <- list(
+    seq = list(
+      df      = seq_t$df,
+      ss      = seq_t$ss,
+      ms      = seq_t$ms,
+      f_value = f_seq_vs_subj,
+      p_value = p_seq_vs_subj
+    )
+  )
+  if (has_grp) {
+    f_grp_vs_subj <- grp_t$ms / subj_t$ms
+    p_grp_vs_subj <- pf(f_grp_vs_subj, grp_t$df, subj_t$df, lower.tail = FALSE)
+    hypothesis_tests$grp <- list(
+      df      = grp_t$df,
+      ss      = grp_t$ss,
+      ms      = grp_t$ms,
+      f_value = f_grp_vs_subj,
+      p_value = p_grp_vs_subj
+    )
+  }
 
   subj_seq_analysis <- list(
     error_term = list(
@@ -164,18 +222,97 @@ build_crossover_anova_tables <- function(model, type3_ss = NULL) {
       ss = subj_t$ss,
       ms = subj_t$ms
     ),
-    hypothesis_tests = list(
-      seq = list(
-        df      = seq_t$df,
-        ss      = seq_t$ss,
-        ms      = seq_t$ms,
-        f_value = f_seq_vs_subj,
-        p_value = p_seq_vs_subj
-      )
-    )
+    hypothesis_tests = hypothesis_tests
   )
 
   list(comprehensive_anova = comprehensive_anova, subj_seq_analysis = subj_seq_analysis)
+}
+
+#' Build a Type III SS table for a fixed-effects parallel-design model
+#'
+#' Given an `lm(y ~ drug, ...)` or `lm(y ~ grp + drug, ...)` fit — the parallel-design
+#' analogue of `build_crossover_anova_tables()` — builds a per-term Type III SS
+#' breakdown (Group [if present], Treatment, Residual) via the same
+#' `emmeans::joint_tests()` marginal-contrast approach, instead of the generic
+#' Model/Error/Corrected-Total aggregate. Group vs. Treatment need Type III (not
+#' Type I/sequential) SS here because an unbalanced group x treatment cross-tab would
+#' otherwise make each term's SS depend on formula order.
+#'
+#' @param model An `lm` object fit as `y ~ drug` or `y ~ grp + drug`
+#' @return A Source/Df/Sum Sq/Mean Sq/F value/Pr(>F) data.frame (Group [if present],
+#'   Treatment, Residual), or NULL if the model's terms don't match.
+#' @export
+build_parallel_anova_table <- function(model) {
+  has_grp <- "grp" %in% all.vars(formula(model))
+
+  anova_table <- tryCatch(anova(model), error = function(e) NULL)
+  if (is.null(anova_table)) return(NULL)
+  at_rows   <- rownames(anova_table)
+  resid_row <- at_rows[grepl("^Resid", at_rows)]
+  if (length(resid_row) != 1) return(NULL)
+  df_resid <- anova_table[resid_row, "Df"]
+  ss_resid <- anova_table[resid_row, "Sum Sq"]
+  ms_resid <- anova_table[resid_row, "Mean Sq"]
+
+  jt <- tryCatch(suppressMessages(emmeans::joint_tests(model)), error = function(e) NULL)
+  if (is.null(jt)) return(NULL)
+  ef <- attr(jt, "est.fcns")
+  beta <- coef(model)
+  V <- tryCatch(vcov(model), error = function(e) NULL)
+  if (is.null(ef) || is.null(V)) return(NULL)
+  ok <- !is.na(beta)
+  beta_ok <- beta[ok]
+  V_ok <- V[ok, ok, drop = FALSE]
+
+  compute_term <- function(term_name) {
+    L <- ef[[term_name]]
+    if (is.null(L)) return(NULL)
+    L <- L[, ok, drop = FALSE]
+    Lb <- L %*% beta_ok
+    df1 <- nrow(L)
+    vv <- tryCatch(solve(L %*% V_ok %*% t(L)), error = function(e) NULL)
+    if (is.null(vv)) return(NULL)
+    f_stat <- as.numeric(t(Lb) %*% vv %*% Lb) / df1
+    ss <- f_stat * df1 * ms_resid
+    list(df = df1, ss = ss, ms = ss / df1, f = f_stat,
+         p = pf(f_stat, df1, df_resid, lower.tail = FALSE))
+  }
+  find_term <- function(pattern) {
+    hit <- names(ef)[grepl(pattern, names(ef))]
+    if (length(hit) != 1) return(NULL)
+    compute_term(hit)
+  }
+
+  drug_t <- find_term("^drug$")
+  grp_t  <- if (has_grp) find_term("^grp$") else NULL
+  if (is.null(drug_t)) return(NULL)
+  if (has_grp && is.null(grp_t)) return(NULL)
+
+  out <- if (has_grp) {
+    data.frame(
+      Source = c("Group", "Treatment", "Residual"),
+      Df = c(grp_t$df, drug_t$df, df_resid),
+      `Sum Sq` = c(grp_t$ss, drug_t$ss, ss_resid),
+      `Mean Sq` = c(grp_t$ms, drug_t$ms, ms_resid),
+      `F value` = c(grp_t$f, drug_t$f, NA),
+      `Pr(>F)`  = c(grp_t$p, drug_t$p, NA),
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  } else {
+    data.frame(
+      Source = c("Treatment", "Residual"),
+      Df = c(drug_t$df, df_resid),
+      `Sum Sq` = c(drug_t$ss, ss_resid),
+      `Mean Sq` = c(drug_t$ms, ms_resid),
+      `F value` = c(drug_t$f, NA),
+      `Pr(>F)`  = c(drug_t$p, NA),
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  }
+  rownames(out) <- out$Source
+  out
 }
 
 #' Least-Squares Means (via emmeans) for the treatment factor, with CI
@@ -392,9 +529,99 @@ compute_reference_anova_variance <- function(data, param_col) {
   )
 }
 
+#' Group x Treatment interaction test — supportive/exploratory analysis only
+#'
+#' Fits a diagnostic-only model containing the Group x Treatment interaction
+#' (BEBAC's / ICH M13A's "Model I") and reports whether it is significant, for the
+#' supportive analysis ICH M13A's final guideline calls for whenever a BE study is
+#' multi-group ("investigation of group x treatment interaction in a supportive
+#' analysis"). This result is NEVER used to determine bioequivalence — the primary
+#' PE/CI always come from the caller's own Model II fit (grp + ... + drug, no
+#' interaction), fit independently of this function; including Group x Treatment in
+#' the model that determines BE biases the treatment effect, per the FDA's 2022
+#' draft guidance and ICH M13A's final guideline. Per the "Group Effect" article at
+#' bebac.at, Group x Treatment should be tested against the between-subject error
+#' (Subject(Group x Sequence) MS) for crossover designs, not the Residual MS —
+#' unlike Sequence/Period/Treatment, which are tested against Residual MS by SAS
+#' convention. Parallel designs have no repeated-measures structure, so the
+#' ordinary within-model F-test (against Residual MS) is the correct — and only —
+#' option there.
+#'
+#' @param complete_data Data frame with `grp` and `drug` factor columns already set
+#'   (and, for crossover, `seq`/`prd`/`subj`), as prepared by `perform_simple_anova()`
+#' @param param Name of the (log-transformed) parameter column to test
+#' @param study_design "crossover" or "parallel"
+#' @return list(df1, df2, f, p, ss, ms, error_term) describing the Group x Treatment
+#'   test, or NULL if the diagnostic model couldn't be fit/decomposed (e.g. too few
+#'   group x sequence cells to estimate the interaction)
+#' @export
+compute_group_treatment_interaction <- function(complete_data, param, study_design) {
+  formula_str <- if (study_design == "crossover") {
+    sprintf("%s ~ grp + seq + grp:seq + subj:(grp:seq) + grp:prd + drug + grp:drug", param)
+  } else {
+    sprintf("%s ~ grp + drug + grp:drug", param)
+  }
+
+  tryCatch({
+    model <- lm(as.formula(formula_str), data = complete_data, na.action = na.omit)
+    jt <- suppressMessages(emmeans::joint_tests(model))
+    ef <- attr(jt, "est.fcns")
+    beta <- coef(model)
+    V <- vcov(model)
+    ok <- !is.na(beta)
+    beta_ok <- beta[ok]
+    V_ok <- V[ok, ok, drop = FALSE]
+
+    at <- anova(model)
+    resid_row <- rownames(at)[grepl("^Resid", rownames(at))]
+    df_resid <- at[resid_row, "Df"]
+    ms_resid <- at[resid_row, "Mean Sq"]
+
+    compute_term <- function(term_name) {
+      L <- ef[[term_name]]
+      if (is.null(L)) return(NULL)
+      L <- L[, ok, drop = FALSE]
+      Lb <- L %*% beta_ok
+      df1 <- nrow(L)
+      vv <- tryCatch(solve(L %*% V_ok %*% t(L)), error = function(e) NULL)
+      if (is.null(vv)) return(NULL)
+      f_stat <- as.numeric(t(Lb) %*% vv %*% Lb) / df1
+      ss <- f_stat * df1 * ms_resid
+      list(df = df1, ss = ss, ms = ss / df1)
+    }
+    find_term <- function(pattern) {
+      hit <- names(ef)[grepl(pattern, names(ef))]
+      if (length(hit) != 1) return(NULL)
+      compute_term(hit)
+    }
+
+    gt_t <- find_term("^grp:drug$|^drug:grp$")
+    if (is.null(gt_t)) return(NULL)
+
+    if (study_design == "crossover") {
+      subj_t <- find_term("grp.*seq.*subj|grp.*subj.*seq|subj.*grp.*seq")
+      if (is.null(subj_t)) return(NULL)
+      f_val <- gt_t$ms / subj_t$ms
+      p_val <- pf(f_val, gt_t$df, subj_t$df, lower.tail = FALSE)
+      list(df1 = gt_t$df, df2 = subj_t$df, f = f_val, p = p_val,
+           ss = gt_t$ss, ms = gt_t$ms,
+           error_term = "Subject(Group x Sequence)")
+    } else {
+      f_val <- gt_t$ms / ms_resid
+      p_val <- pf(f_val, gt_t$df, df_resid, lower.tail = FALSE)
+      list(df1 = gt_t$df, df2 = df_resid, f = f_val, p = p_val,
+           ss = gt_t$ss, ms = gt_t$ms,
+           error_term = "Residual")
+    }
+  }, error = function(e) {
+    bioeq_log(sprintf("Group x Treatment supportive test failed for %s: %s", param, e$message), "WARNING")
+    NULL
+  })
+}
+
 #'
 perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", random_effects = "(1|subject)",
-                                include_group_fixed = FALSE, include_group_random = FALSE, 
+                                include_group = FALSE,
                                 include_group_treatment_interaction = FALSE,
                                 alpha = 0.1) {
   
@@ -486,17 +713,20 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
   bioeq_log(sprintf("Drug coefficient name: %s", drug_coef_name), "DEBUG")
   lsmeans_result <- NULL  # populated after the model is fit, below
 
-  # Check for group effects and prepare group factor
+  # Check for group effects and prepare group factor. Group is always a fixed
+  # effect (Model II, per the "Group Effect" article at bebac.at and ICH M13A's
+  # final guideline) - there is deliberately no "random group" option; treating
+  # group as random is not what any regulatory source recommends.
   has_groups <- FALSE
-  if ("group" %in% names(nca_data) && (include_group_fixed || include_group_random)) {
+  if ("group" %in% names(nca_data) && include_group) {
     unique_groups <- unique(nca_data$group[!is.na(nca_data$group)])
     if (length(unique_groups) > 1) {
       has_groups <- TRUE
       nca_data$grp <- as.factor(nca_data$group)
       bioeq_log(sprintf(
-        "Group factor detected (%d levels: %s) - fixed=%s random=%s interaction=%s",
+        "Group factor detected (%d levels: %s) - Model II (fixed) | G x T supportive test=%s",
         length(unique_groups), paste(unique_groups, collapse = ", "),
-        include_group_fixed, include_group_random, include_group_treatment_interaction), "DEBUG")
+        include_group_treatment_interaction), "DEBUG")
     }
   }
   
@@ -565,35 +795,28 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         "fixed" = {
           # Fixed Effects Model using lm (all effects fixed)
 
-          # Choose formula based on study design and group effects
+          # Choose formula based on study design and group effects. Group x
+          # Treatment is deliberately NEVER added here - it stays out of the
+          # primary/BE-determining model (see compute_group_treatment_interaction()
+          # below, called separately as a supportive-only diagnostic). This is
+          # "Model II" per the "Group Effect" article at bebac.at / ICH M13A's
+          # final guideline: Group is a fixed main effect, Period is nested within
+          # Group (periods for different groups fall on different calendar dates
+          # and aren't directly comparable), and Subject is nested within
+          # Group x Sequence.
           if (study_design == "parallel") {
-            # For parallel design: Parameter ~ treatment [+ group effects]
-            formula_parts <- c("drug")
-
-            if (has_groups && include_group_fixed) {
-              formula_parts <- c(formula_parts, "grp")
-              if (include_group_treatment_interaction) {
-                formula_parts <- c(formula_parts, "grp:drug")
-              }
-            }
-
-            formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
-
-          } else {
-            # For crossover design: Parameter ~ sequence + subject %in% sequence + period + treatment [+ group effects]
-            if (has_groups && include_group_fixed) {
-              # For crossover with groups: subjects are nested within groups
-              # Model: Parameter ~ group + sequence %in% group + subject %in% (group:sequence) + period + treatment
-              formula_parts <- c("grp", "seq:grp", "subj:(grp:seq)", "prd", "drug")
-
-              if (include_group_treatment_interaction) {
-                formula_parts <- c(formula_parts, "grp:drug")
-              }
-
-              formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
+            # Parallel: Parameter ~ treatment [+ group]
+            formula_str <- if (has_groups) {
+              sprintf("%s ~ grp + drug", param)
             } else {
-              # Standard crossover without groups
-              formula_str <- sprintf("%s ~ seq + subj:seq + prd + drug", param)
+              sprintf("%s ~ drug", param)
+            }
+          } else {
+            # Crossover: Parameter ~ sequence + subject %in% sequence + period + treatment [+ group]
+            formula_str <- if (has_groups) {
+              sprintf("%s ~ grp + seq + grp:seq + subj:(grp:seq) + grp:prd + drug", param)
+            } else {
+              sprintf("%s ~ seq + subj:seq + prd + drug", param)
             }
           }
           bioeq_log(sprintf("[%s] fixed-effects formula: %s", param, formula_str), "DEBUG")
@@ -610,55 +833,11 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           model_summary <- summary(model)
           model_aic <- AIC(model)
           
-          # Build SAS-style source-level ANOVA table for crossover; generic fallback otherwise
-          if (study_design == "crossover" && !has_groups) {
-            built <- build_crossover_anova_tables(model, type3_ss)
-            if (!is.null(built)) {
-              comprehensive_anova <- built$comprehensive_anova
-              subj_seq_analysis   <- built$subj_seq_analysis
-            } else {
-              # Unexpected row names: fall back to generic 3-row summary
-              bioeq_log(sprintf(
-                "Expected crossover ANOVA rows not found (rows: %s) - using generic summary",
-                paste(rownames(anova_table), collapse = ", ")), "WARNING")
-              comprehensive_anova <- data.frame(
-                Source = c("Model", "Error", "Corrected Total"),
-                Df = c(
-                  sum(anova_table$Df[-nrow(anova_table)]),
-                  anova_table$Df[nrow(anova_table)],
-                  sum(anova_table$Df)
-                ),
-                `Sum Sq` = c(
-                  sum(anova_table$`Sum Sq`[-nrow(anova_table)]),
-                  anova_table$`Sum Sq`[nrow(anova_table)],
-                  sum(anova_table$`Sum Sq`)
-                ),
-                `Mean Sq` = c(
-                  sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)]),
-                  anova_table$`Mean Sq`[nrow(anova_table)],
-                  NA
-                ),
-                `F value` = c(
-                  (sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)])) /
-                    anova_table$`Mean Sq`[nrow(anova_table)],
-                  NA, NA
-                ),
-                `Pr(>F)` = c(
-                  pf((sum(anova_table$`Sum Sq`[-nrow(anova_table)]) / sum(anova_table$Df[-nrow(anova_table)])) /
-                       anova_table$`Mean Sq`[nrow(anova_table)],
-                     sum(anova_table$Df[-nrow(anova_table)]),
-                     anova_table$Df[nrow(anova_table)], lower.tail = FALSE),
-                  NA, NA
-                ),
-                check.names = FALSE,
-                stringsAsFactors = FALSE
-              )
-              rownames(comprehensive_anova) <- comprehensive_anova$Source
-            }
-
-          } else {
-            # Parallel design or crossover with groups: generic 3-row summary
-            comprehensive_anova <- data.frame(
+          # Generic Model/Error/Corrected-Total 3-row fallback, used only when the
+          # per-term Type III builders below can't match the model's terms (should
+          # not normally happen for the formulas this function constructs).
+          generic_anova_summary <- function() {
+            out <- data.frame(
               Source = c("Model", "Error", "Corrected Total"),
               Df = c(
                 sum(anova_table$Df[-nrow(anova_table)]),
@@ -690,7 +869,39 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
               check.names = FALSE,
               stringsAsFactors = FALSE
             )
-            rownames(comprehensive_anova) <- comprehensive_anova$Source
+            rownames(out) <- out$Source
+            out
+          }
+
+          # Build SAS-style source-level Type III ANOVA table. Crossover gets the
+          # full Sequence/Subject(Sequence)/Period/Treatment breakdown - widened to
+          # Group/Sequence/Group x Sequence/Subject(Group x Sequence)/Period(Group)/
+          # Treatment when Group is included (build_crossover_anova_tables()
+          # auto-detects this from the fitted model's own terms). Parallel gets the
+          # matching Group/Treatment breakdown. Either falls back to the generic
+          # 3-row summary only if the term-matching regexes don't find what they
+          # expect (should not happen for the formulas built above).
+          if (study_design == "crossover") {
+            built <- build_crossover_anova_tables(model, type3_ss)
+            if (!is.null(built)) {
+              comprehensive_anova <- built$comprehensive_anova
+              subj_seq_analysis   <- built$subj_seq_analysis
+            } else {
+              bioeq_log(sprintf(
+                "Expected crossover ANOVA rows not found (rows: %s) - using generic summary",
+                paste(rownames(anova_table), collapse = ", ")), "WARNING")
+              comprehensive_anova <- generic_anova_summary()
+            }
+          } else {
+            built <- build_parallel_anova_table(model)
+            if (!is.null(built)) {
+              comprehensive_anova <- built
+            } else {
+              bioeq_log(sprintf(
+                "Expected parallel ANOVA rows not found (rows: %s) - using generic summary",
+                paste(rownames(anova_table), collapse = ", ")), "WARNING")
+              comprehensive_anova <- generic_anova_summary()
+            }
           }
 
           # Extract treatment effect
@@ -711,63 +922,42 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             stop("nlme package not available. Please install nlme package.")
           }
           
-          # Parse random effects specification
-          # For nlme, we need to create the proper random effects formula
-          # Handle group effects in random effects specification
-          if (has_groups && include_group_random) {
-            # Modify random effects to include groups
-            if (random_effects == "(1|subject)") {
-              # Add group nesting: (1|group/subject) or (1|subject) with group in fixed effects
-              random_formula <- ~ 1 | grp/subj
-              grouping_var <- "grp"
-            } else {
-              # Try to parse user-specified random effects and add group
-              random_formula <- as.formula(paste("~", gsub("^\\(|\\)$", "", random_effects)))
-              grouping_var <- all.vars(random_formula)[length(all.vars(random_formula))]
-            }
+          # Parse random effects specification. Group does NOT change the random
+          # spec: subjects are already globally unique-coded (see the note on
+          # Subject(Sequence) at the top of this file), so a plain subject random
+          # intercept already captures the same between-subject variability that
+          # the fixed model's explicit subj:(grp:seq) nesting represents - there is
+          # no separate "group as random effect" option (Group is always fixed;
+          # see the note where has_groups is computed above).
+          if (random_effects == "(1|subject)") {
+            random_formula <- ~ 1 | subj
+            grouping_var <- "subj"
           } else {
-            # Standard random effects without groups
-            if (random_effects == "(1|subject)") {
-              random_formula <- ~ 1 | subj
-              grouping_var <- "subj"
-            } else {
-              random_formula <- as.formula(paste("~", gsub("^\\(|\\)$", "", random_effects)))
-              grouping_var <- all.vars(random_formula)[length(all.vars(random_formula))]
-            }
+            random_formula <- as.formula(paste("~", gsub("^\\(|\\)$", "", random_effects)))
+            grouping_var <- all.vars(random_formula)[length(all.vars(random_formula))]
           }
-          
+
           # Check if grouping variable exists in data
           if (!grouping_var %in% names(complete_data)) {
-            stop(sprintf("Grouping variable '%s' not found in data. Available variables: %s", 
+            stop(sprintf("Grouping variable '%s' not found in data. Available variables: %s",
                         grouping_var, paste(names(complete_data), collapse=", ")))
           }
-          
-          # Choose formula based on study design and group effects
+
+          # Choose fixed-effects formula based on study design and group effects.
+          # Group x Treatment is never added here - see the "fixed" branch above
+          # for why (kept out of the primary/BE-determining model on purpose).
           if (study_design == "parallel") {
-            # For parallel design: Parameter ~ treatment [+ group effects]
-            formula_parts <- c("drug")
-            
-            if (has_groups && include_group_fixed) {
-              formula_parts <- c(formula_parts, "grp")
-              if (include_group_treatment_interaction) {
-                formula_parts <- c(formula_parts, "grp:drug")
-              }
+            formula_str <- if (has_groups) {
+              sprintf("%s ~ grp + drug", param)
+            } else {
+              sprintf("%s ~ drug", param)
             }
-            
-            formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
-
           } else {
-            # For crossover design: Parameter ~ sequence + period + treatment [+ group effects]
-            formula_parts <- c("seq", "prd", "drug")
-
-            if (has_groups && include_group_fixed) {
-              formula_parts <- c("grp", formula_parts)
-              if (include_group_treatment_interaction) {
-                formula_parts <- c(formula_parts, "grp:drug")
-              }
+            formula_str <- if (has_groups) {
+              sprintf("%s ~ grp + seq + grp:seq + grp:prd + drug", param)
+            } else {
+              sprintf("%s ~ seq + prd + drug", param)
             }
-
-            formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
           }
           bioeq_log(sprintf("[%s] nlme formula: %s, random = %s", param, formula_str, deparse(random_formula)), "DEBUG")
           model_formula <- as.formula(formula_str)
@@ -905,13 +1095,20 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             stop("lme4 and lmerTest packages required. Please install both packages.")
           }
 
-          # Choose formula based on study design
+          # Choose formula based on study design and group effects. Group x
+          # Treatment is never added here - see the "fixed" branch above for why.
           if (study_design == "parallel") {
-            # For parallel design: Parameter ~ treatment + random_effects
-            formula_str <- sprintf("%s ~ drug + %s", param, random_effects)
+            formula_str <- if (has_groups) {
+              sprintf("%s ~ grp + drug + %s", param, random_effects)
+            } else {
+              sprintf("%s ~ drug + %s", param, random_effects)
+            }
           } else {
-            # For crossover design: Parameter ~ sequence + period + treatment + random_effects
-            formula_str <- sprintf("%s ~ seq + prd + drug + %s", param, random_effects)
+            formula_str <- if (has_groups) {
+              sprintf("%s ~ grp + seq + grp:seq + grp:prd + drug + %s", param, random_effects)
+            } else {
+              sprintf("%s ~ seq + prd + drug + %s", param, random_effects)
+            }
           }
           bioeq_log(sprintf("[%s] Satterthwaite formula: %s", param, formula_str), "DEBUG")
           model_formula <- as.formula(formula_str)
@@ -991,13 +1188,20 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             stop("lme4 and lmerTest packages required. Please install both packages.")
           }
 
-          # Choose formula based on study design
+          # Choose formula based on study design and group effects. Group x
+          # Treatment is never added here - see the "fixed" branch above for why.
           if (study_design == "parallel") {
-            # For parallel design: Parameter ~ treatment + random_effects
-            formula_str <- sprintf("%s ~ drug + %s", param, random_effects)
+            formula_str <- if (has_groups) {
+              sprintf("%s ~ grp + drug + %s", param, random_effects)
+            } else {
+              sprintf("%s ~ drug + %s", param, random_effects)
+            }
           } else {
-            # For crossover design: Parameter ~ sequence + period + treatment + random_effects
-            formula_str <- sprintf("%s ~ seq + prd + drug + %s", param, random_effects)
+            formula_str <- if (has_groups) {
+              sprintf("%s ~ grp + seq + grp:seq + grp:prd + drug + %s", param, random_effects)
+            } else {
+              sprintf("%s ~ seq + prd + drug + %s", param, random_effects)
+            }
           }
           bioeq_log(sprintf("[%s] Kenward-Roger formula: %s", param, formula_str), "DEBUG")
           model_formula <- as.formula(formula_str)
@@ -1210,6 +1414,17 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         }, error = function(e) NULL)
       }
 
+      # Group x Treatment interaction — supportive/exploratory analysis only,
+      # opt-in. Fit and tested entirely independently of the primary model above
+      # (pe_estimate/ci_lower/ci_upper/model are never touched by this); see
+      # compute_group_treatment_interaction()'s docs for why this must stay
+      # separate from the BE-determining model.
+      group_treatment_interaction <- if (has_groups && include_group_treatment_interaction) {
+        compute_group_treatment_interaction(complete_data, param, study_design)
+      } else {
+        NULL
+      }
+
       # Store comprehensive results
       anova_results[[param]] <- list(
         parameter = param,
@@ -1217,6 +1432,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         anova = anova_table,                    # Type I SS (sequential)
         anova_comprehensive = comprehensive_anova,  # Model/Error/Corrected Total
         type3_ss = type3_ss,                    # Type III SS (marginal)
+        group_treatment_interaction = group_treatment_interaction,  # supportive-only diagnostic; see above
         summary = model_summary,
         aic = model_aic,
         n_observations = nrow(complete_data),

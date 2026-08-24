@@ -397,17 +397,46 @@ render_type3_marginal_card <- function(param_result) {
 }
 
 # Card: "Tests of Hypotheses Using the Type III MS for Subject(Sequence) as an
-# Error Term" — the Sequence effect re-tested against the between-subject MS
-# instead of Residual MS (the standard, correct significance test for
-# Sequence in a crossover design). Requires `param_result$subj_seq_analysis`.
+# Error Term" — the Sequence effect (and, when Group is included, the Group
+# effect — both are between-subject factors tested against the same
+# Subject(Group x Sequence) error term) re-tested against the between-subject MS
+# instead of Residual MS (the standard, correct significance test for these
+# effects in a crossover design). Loops over every entry in
+# `param_result$subj_seq_analysis$hypothesis_tests` (built by
+# build_crossover_anova_tables() in R/simple_anova.R) rather than assuming only
+# "seq" is present, so the table gains a Group row automatically when Group is
+# in the model — the title still says "Subject(Sequence)" for the plain case;
+# when Group is present it becomes "Subject(Group x Sequence)" to match.
 render_seq_subj_test_card <- function(param_result) {
   ssa <- param_result$subj_seq_analysis
-  seq_test <- tryCatch(ssa$hypothesis_tests$seq, error = function(e) NULL)
-  if (is.null(seq_test) || is.null(seq_test$f_value) || is.na(seq_test$f_value)) return(NULL)
+  tests <- tryCatch(ssa$hypothesis_tests, error = function(e) NULL)
+  if (is.null(tests) || length(tests) == 0) return(NULL)
+
+  label_for <- function(key) switch(key, seq = "Sequence", grp = "Group", key)
+  # Preserve a stable, meaningful order (Group before Sequence, matching the
+  # comprehensive Type III table's row order) rather than list-insertion order.
+  ordered_keys <- intersect(c("grp", "seq"), names(tests))
+  rows <- lapply(ordered_keys, function(key) {
+    t <- tests[[key]]
+    if (is.null(t) || is.null(t$f_value) || is.na(t$f_value)) return(NULL)
+    tags$tr(
+      tags$td(style = "font-weight: bold;", label_for(key)),
+      tags$td(as.character(t$df), style = "text-align: right;"),
+      tags$td(sprintf("%.6f", t$ss), style = "text-align: right;"),
+      tags$td(sprintf("%.6f", t$ms), style = "text-align: right;"),
+      tags$td(sprintf("%.2f", t$f_value), style = "text-align: right;"),
+      tags$td(format.pval(t$p_value, digits = 4), style = "text-align: right;")
+    )
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (length(rows) == 0) return(NULL)
+
+  error_term_label <- if ("grp" %in% names(tests)) "Subject(Group x Sequence)" else "Subject(Sequence)"
+
   div(class = "card mb-3",
     div(class = "card-header",
       h6(class = "card-title mb-0", icon("table"),
-         " Tests of Hypotheses Using the Type III MS for Subject(Sequence) as an Error Term")
+         sprintf(" Tests of Hypotheses Using the Type III MS for %s as an Error Term", error_term_label))
     ),
     div(class = "card-body",
       div(class = "table-responsive",
@@ -421,14 +450,54 @@ render_seq_subj_test_card <- function(param_result) {
               tags$th("Pr > F", style = "text-align: right;")
             )
           ),
+          tags$tbody(rows)
+        )
+      )
+    )
+  )
+}
+
+# Card: Group x Treatment interaction — supportive/exploratory analysis only.
+# Requires `param_result$group_treatment_interaction`
+# (compute_group_treatment_interaction() in R/simple_anova.R), populated only
+# when the user opted into the "Test Group x Treatment Interaction" checkbox.
+# Deliberately styled/worded to make it unmistakable that this test is NOT part
+# of the model that determined bioequivalence — per ICH M13A's final guideline,
+# Group x Treatment must stay out of the BE-determining model and is reported
+# only as a supportive analysis.
+render_group_treatment_interaction_card <- function(param_result) {
+  gt <- param_result$group_treatment_interaction
+  if (is.null(gt) || is.null(gt$f) || is.na(gt$f)) return(NULL)
+  div(class = "card mb-3", style = "border-left: 4px solid #ffc107;",
+    div(class = "card-header", style = "background-color: #fff3cd;",
+      h6(class = "card-title mb-0", icon("triangle-exclamation"),
+         " Group × Treatment Interaction — Supportive Analysis")
+    ),
+    div(class = "card-body",
+      p(style = "font-size: 0.85em; color: #856404; margin-bottom: 10px;",
+        tags$b("Not used to determine bioequivalence."), " Per ICH M13A's final guideline, the ",
+        "Group × Treatment interaction term is excluded from the model that determines BE (it would ",
+        "bias the treatment effect); it is evaluated here only to check whether the treatment effect looks ",
+        "heterogeneous across groups. Tested against the ", tags$code(gt$error_term), " mean square."),
+      div(class = "table-responsive",
+        tags$table(class = "table table-striped table-hover table-sm",
+          tags$thead(class = "table-warning",
+            tags$tr(
+              tags$th("Source"), tags$th("DF (num, den)", style = "text-align: right;"),
+              tags$th("Type III SS", style = "text-align: right;"),
+              tags$th("Mean Square", style = "text-align: right;"),
+              tags$th("F Value", style = "text-align: right;"),
+              tags$th("Pr > F", style = "text-align: right;")
+            )
+          ),
           tags$tbody(
             tags$tr(
-              tags$td(style = "font-weight: bold;", "Sequence"),
-              tags$td(as.character(seq_test$df), style = "text-align: right;"),
-              tags$td(sprintf("%.6f", seq_test$ss), style = "text-align: right;"),
-              tags$td(sprintf("%.6f", seq_test$ms), style = "text-align: right;"),
-              tags$td(sprintf("%.2f", seq_test$f_value), style = "text-align: right;"),
-              tags$td(format.pval(seq_test$p_value, digits = 4), style = "text-align: right;")
+              tags$td(style = "font-weight: bold;", "Group × Treatment"),
+              tags$td(sprintf("%s, %s", gt$df1, gt$df2), style = "text-align: right;"),
+              tags$td(sprintf("%.6f", gt$ss), style = "text-align: right;"),
+              tags$td(sprintf("%.6f", gt$ms), style = "text-align: right;"),
+              tags$td(sprintf("%.2f", gt$f), style = "text-align: right;"),
+              tags$td(format.pval(gt$p, digits = 4), style = "text-align: right;")
             )
           )
         )
@@ -2557,7 +2626,13 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       }
       
       # ── Second table: "Tests of Hypotheses Using Type III MS for Subject(Sequence)" ──
+      # (or "Subject(Group x Sequence)", gaining a Group row, when Group is in the model)
       seq_subj_test_div <- render_seq_subj_test_card(param_result)
+
+      # ── Group x Treatment interaction (supportive analysis only, opt-in) ──
+      # Populated only when the user checked "Test Group x Treatment
+      # Interaction"; never affects pe_estimate/ci_lower/ci_upper above.
+      group_treatment_div <- render_group_treatment_interaction_card(param_result)
 
       # ── Least Squares Means (SAS-style 3-table layout) ──
       lsmeans_cards <- render_lsmeans_cards(param_result, param_name)
@@ -2580,6 +2655,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         anova_tables_div,
         type3_tests_div,
         seq_subj_test_div,
+        group_treatment_div,
         lsmeans_cards,
         contrast_card
       ))
