@@ -28,22 +28,20 @@ perform_nca_analysis <- function(data, id_cols = c("subject", "treatment"),
                                 auc_method = "mixed", lambda_z_points = 3,
                                 calculate_pAUC = FALSE, pAUC_start = 0, pAUC_end = 2) {
   
-  cat("🧮 Performing NCA analysis...\n")
-  
   # Check which id_cols are actually available
   available_id_cols <- intersect(id_cols, names(data))
   missing_id_cols <- setdiff(id_cols, names(data))
-  
+
   # Check if required time and concentration columns exist
   if (!time_col %in% names(data)) {
-    cat(sprintf("❌ Time column '%s' not found in data\n", time_col))
-    cat(sprintf("Available columns: %s\n", paste(names(data), collapse = ", ")))
+    bioeq_log(sprintf("Time column '%s' not found in data - available columns: %s",
+                      time_col, paste(names(data), collapse = ", ")), "ERROR")
     return(data.frame(error = "Missing time column"))
   }
-  
+
   if (!conc_col %in% names(data)) {
-    cat(sprintf("❌ Concentration column '%s' not found in data\n", conc_col))
-    cat(sprintf("Available columns: %s\n", paste(names(data), collapse = ", ")))
+    bioeq_log(sprintf("Concentration column '%s' not found in data - available columns: %s",
+                      conc_col, paste(names(data), collapse = ", ")), "ERROR")
     return(data.frame(error = "Missing concentration column"))
   }
   
@@ -57,7 +55,7 @@ perform_nca_analysis <- function(data, id_cols = c("subject", "treatment"),
   data$group_id <- do.call(paste, c(data[id_cols], sep = "_"))
   unique_groups <- unique(data$group_id)
   
-  cat("  Analyzing", length(unique_groups), "concentration profiles...\n")
+  bioeq_log(sprintf("Analyzing %d concentration profiles", length(unique_groups)), "DEBUG")
   
   for (i in seq_along(unique_groups)) {
     group_data <- data[data$group_id == unique_groups[i], ]
@@ -97,8 +95,7 @@ perform_nca_analysis <- function(data, id_cols = c("subject", "treatment"),
   nca_results <- do.call(rbind, results_list)
   rownames(nca_results) <- NULL
   
-  cat("✅ NCA analysis completed\n")
-  cat("  Parameters calculated for", nrow(nca_results), "profiles\n\n")
+  bioeq_log(sprintf("NCA analysis completed - parameters calculated for %d profiles", nrow(nca_results)), "DEBUG")
   
   # Add class for S3 methods
   class(nca_results) <- c("nca_results", "data.frame")

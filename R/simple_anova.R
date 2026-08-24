@@ -98,7 +98,12 @@ build_crossover_anova_tables <- function(model, type3_ss = NULL) {
   # `attr(., "est.fcns")`, filtered to the model's non-aliased coefficients.
   # Verified to reproduce SAS's Type III SS for Sequence, Subject(Sequence),
   # Period, and Treatment to 6+ decimal places on real data.
-  jt <- tryCatch(emmeans::joint_tests(model), error = function(e) NULL)
+  # suppressMessages(): emmeans prints "NOTE: A nesting structure was
+  # detected..." on every call for our seq + subj:seq + prd + drug models -
+  # once per parameter per model fit, which was the single largest source of
+  # unsuppressed console noise. It's informational, not a warning about a
+  # problem; the nesting is intentional (subject nested in sequence).
+  jt <- tryCatch(suppressMessages(emmeans::joint_tests(model)), error = function(e) NULL)
   if (is.null(jt)) return(NULL)
   ef <- attr(jt, "est.fcns")
   beta <- coef(model)
@@ -192,7 +197,12 @@ build_crossover_anova_tables <- function(model, type3_ss = NULL) {
 #'   SE, df, and CI, or NULL if emmeans fails (e.g. model too degenerate).
 compute_lsmeans_ci <- function(model, ref_level, test_level, level = 0.90) {
   tryCatch({
-    emm <- emmeans::emmeans(model, ~ drug, level = level)
+    # suppressMessages(): same emmeans nesting NOTE as joint_tests() above -
+    # this is the other of the two call sites that reach it. Both
+    # compute_lsmeans_ci() and build_crossover_anova_tables() (which calls
+    # joint_tests() above) are also called from R/rsabe_analysis.R, so
+    # suppressing here covers RSABE's ANOVA path too.
+    emm <- suppressMessages(emmeans::emmeans(model, ~ drug, level = level))
     emm_df <- as.data.frame(emm)
 
     row_ref  <- emm_df[as.character(emm_df$drug) == ref_level, , drop = FALSE]
@@ -392,76 +402,42 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
   if (is.null(alpha) || is.na(alpha) || alpha <= 0 || alpha >= 1) alpha <- 0.1
   ci_level <- 1 - alpha  # e.g., alpha=0.1 -> 90% CI
   
-  cat("\n=== ANOVA Analysis ===\n")
-  
   # Standardize column names to lowercase for consistent processing
   # This handles both capitalized (Subject, Treatment) and lowercase (subject, treatment) inputs
   col_mapping <- c(
     "Subject" = "subject",
-    "Treatment" = "treatment", 
+    "Treatment" = "treatment",
     "Period" = "period",
     "Sequence" = "sequence",
     "Group" = "group"
   )
-  
+
   for (old_name in names(col_mapping)) {
     new_name <- col_mapping[[old_name]]
     if (old_name %in% names(nca_data) && !new_name %in% names(nca_data)) {
       nca_data[[new_name]] <- nca_data[[old_name]]
-      cat(sprintf("  📝 Standardized column: %s -> %s\n", old_name, new_name))
+      bioeq_log(sprintf("Standardized column: %s -> %s", old_name, new_name), "DEBUG")
     }
   }
-  
+
   # Detect study design
   study_design <- detect_anova_design(nca_data)
-  cat(sprintf("Detected Study Design: %s\n", study_design))
-  
-  # Display model type and formula based on method and design
-  switch(anova_model,
-    "fixed" = {
-      cat("Model Type: Fixed Effects (lm)\n")
-      if (study_design == "parallel") {
-        cat("Model: Parameter ~ treatment\n")
-      } else {
-        cat("Model: Parameter ~ seq + subj:seq + prd + drug\n")
-      }
-      cat("Package: stats\n")
-    },
-    "nlme" = {
-      cat("Model Type: Mixed Effects (lme - nlme)\n")
-      if (study_design == "parallel") {
-        cat("Model: Parameter ~ treatment\n")
-      } else {
-        cat("Model: Parameter ~ sequence + period + treatment\n")
-      }
-      cat(sprintf("Random Effects: %s\n", random_effects))
-      cat("Package: nlme\n")
-    },
-    "satterthwaite" = {
-      cat("Model Type: Mixed Effects (lmer - Satterthwaite)\n")
-      if (study_design == "parallel") {
-        cat("Model: Parameter ~ treatment + random_effects\n")
-      } else {
-        cat("Model: Parameter ~ sequence + period + treatment + random_effects\n")
-      }
-      cat(sprintf("Random Effects: %s\n", random_effects))
-      cat("Package: lmerTest (Satterthwaite DF)\n")
-    },
-    "kenward-roger" = {
-      cat("Model Type: Mixed Effects (lmer - Kenward-Roger)\n")
-      if (study_design == "parallel") {
-        cat("Model: Parameter ~ treatment + random_effects\n")
-      } else {
-        cat("Model: Parameter ~ sequence + period + treatment + random_effects\n")
-      }
-      cat(sprintf("Random Effects: %s\n", random_effects))
-      cat("Package: lmerTest (Kenward-Roger DF)\n")
-    }
+
+  # One-line model description for troubleshooting - the run's phase line
+  # ("ANOVA - N parameters, <model>") is what a normal run sees; this is the
+  # formula-level detail behind it, recoverable via bioeq_debug_on().
+  model_desc <- switch(anova_model,
+    "fixed"         = if (study_design == "parallel") "lm: Parameter ~ treatment" else "lm: Parameter ~ seq + subj:seq + prd + drug",
+    "nlme"          = sprintf("nlme: Parameter ~ %s, random = %s",
+                               if (study_design == "parallel") "treatment" else "sequence + period + treatment", random_effects),
+    "satterthwaite" = sprintf("lmerTest (Satterthwaite DF): Parameter ~ %s + random_effects, random = %s",
+                               if (study_design == "parallel") "treatment" else "sequence + period + treatment", random_effects),
+    "kenward-roger" = sprintf("lmerTest (Kenward-Roger DF): Parameter ~ %s + random_effects, random = %s",
+                               if (study_design == "parallel") "treatment" else "sequence + period + treatment", random_effects)
   )
-  
-  cat(sprintf("Analyzing parameters: %s\n", paste(parameters, collapse = ", ")))
-  cat("========================\n\n")
-  
+  bioeq_log(sprintf("Study design: %s | Model: %s | Parameters: %s",
+                     study_design, model_desc, paste(parameters, collapse = ", ")), "DEBUG")
+
   # Check required design variables based on study design
   if (study_design == "crossover") {
     required_vars <- c("sequence", "subject", "period", "treatment")
@@ -490,26 +466,26 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
   
   if (all(c("R", "T") %in% unique_treatments)) {
     nca_data$drug <- factor(nca_data$treatment, levels = c("R", "T"))
-    cat("  ✓ Drug factor set with R as reference (R, T)\n")
   } else if (all(c("Reference", "Test") %in% unique_treatments)) {
     nca_data$drug <- factor(nca_data$treatment, levels = c("Reference", "Test"))
-    cat("  ✓ Drug factor set with Reference as reference (Reference, Test)\n")
   } else {
-    # Fallback to automatic assignment but warn user
+    # Fallback to automatic assignment - this is a real ambiguity (T/R ratio
+    # direction depends on factor level order), so it stays visible rather
+    # than DEBUG-gated.
     nca_data$drug <- as.factor(nca_data$treatment)
-    cat(sprintf("  ⚠️  Warning: Could not identify R/T or Reference/Test treatments. Found: %s\n", 
-                paste(unique_treatments, collapse = ", ")))
-    cat("  ⚠️  Factor levels will be set alphabetically - verify T/R ratio interpretation\n")
+    bioeq_log(sprintf(
+      "Could not identify R/T or Reference/Test treatments (found: %s) - factor levels set alphabetically, verify T/R ratio interpretation",
+      paste(unique_treatments, collapse = ", ")), "WARNING")
   }
-  
+
   # Determine the drug coefficient name dynamically based on factor levels
   # When levels are c("R", "T"), coefficient is "drugT"
   # When levels are c("Reference", "Test"), coefficient is "drugTest"
   drug_levels <- levels(nca_data$drug)
   drug_coef_name <- paste0("drug", drug_levels[length(drug_levels)])  # Non-reference level
-  cat(sprintf("  ✓ Drug coefficient name: %s\n", drug_coef_name))
+  bioeq_log(sprintf("Drug coefficient name: %s", drug_coef_name), "DEBUG")
   lsmeans_result <- NULL  # populated after the model is fit, below
-  
+
   # Check for group effects and prepare group factor
   has_groups <- FALSE
   if ("group" %in% names(nca_data) && (include_group_fixed || include_group_random)) {
@@ -517,20 +493,10 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
     if (length(unique_groups) > 1) {
       has_groups <- TRUE
       nca_data$grp <- as.factor(nca_data$group)
-      cat(sprintf("  ✓ Group factor detected with %d levels: %s\n", 
-                  length(unique_groups), paste(unique_groups, collapse = ", ")))
-      
-      if (include_group_fixed) {
-        cat("  📊 Including Group as fixed effect\n")
-      }
-      if (include_group_random) {
-        cat("  📊 Including Group as random effect\n")
-      }
-      if (include_group_treatment_interaction) {
-        cat("  📊 Including Group × Treatment interaction\n")
-      }
-    } else {
-      cat("  ℹ️  Group column found but only one group detected - ignoring group effects\n")
+      bioeq_log(sprintf(
+        "Group factor detected (%d levels: %s) - fixed=%s random=%s interaction=%s",
+        length(unique_groups), paste(unique_groups, collapse = ", "),
+        include_group_fixed, include_group_random, include_group_treatment_interaction), "DEBUG")
     }
   }
   
@@ -540,28 +506,28 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
   # Loop through each parameter
   for (param in parameters) {
     
-    cat(sprintf("\n--- Analyzing %s ---\n", param))
-    
+    bioeq_log(sprintf("Analyzing %s", param), "DEBUG")
+
     # Check if parameter exists in data
     if (!param %in% names(nca_data)) {
-      cat(sprintf("Warning: Parameter %s not found in NCA data. Skipping.\n", param))
+      bioeq_log(sprintf("Parameter %s not found in NCA data - skipping", param), "WARNING")
       next
     }
-    
+
     # Extract parameter values
     param_values <- nca_data[[param]]
-    
+
     # Check for missing values
     if (all(is.na(param_values))) {
-      cat(sprintf("Warning: All values are NA for %s. Skipping.\n", param))
+      bioeq_log(sprintf("All values are NA for %s - skipping", param), "WARNING")
       next
     }
-    
+
     # Remove rows with missing parameter values
     complete_data <- nca_data[!is.na(param_values), ]
-    
+
     if (nrow(complete_data) < 4) {
-      cat(sprintf("Warning: Insufficient data for %s (n=%d). Skipping.\n", param, nrow(complete_data)))
+      bioeq_log(sprintf("Insufficient data for %s (n=%d) - skipping", param, nrow(complete_data)), "WARNING")
       next
     }
     
@@ -598,43 +564,40 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         
         "fixed" = {
           # Fixed Effects Model using lm (all effects fixed)
-          cat(sprintf("  🔧 Using Fixed Effects Model for %s...\n", param))
-          
+
           # Choose formula based on study design and group effects
           if (study_design == "parallel") {
             # For parallel design: Parameter ~ treatment [+ group effects]
             formula_parts <- c("drug")
-            
+
             if (has_groups && include_group_fixed) {
               formula_parts <- c(formula_parts, "grp")
               if (include_group_treatment_interaction) {
                 formula_parts <- c(formula_parts, "grp:drug")
               }
             }
-            
+
             formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
-            cat(sprintf("  📋 Parallel design model: %s\n", formula_str))
-            
+
           } else {
             # For crossover design: Parameter ~ sequence + subject %in% sequence + period + treatment [+ group effects]
             if (has_groups && include_group_fixed) {
               # For crossover with groups: subjects are nested within groups
               # Model: Parameter ~ group + sequence %in% group + subject %in% (group:sequence) + period + treatment
               formula_parts <- c("grp", "seq:grp", "subj:(grp:seq)", "prd", "drug")
-              
+
               if (include_group_treatment_interaction) {
                 formula_parts <- c(formula_parts, "grp:drug")
               }
-              
+
               formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
-              cat(sprintf("  📋 Crossover design with groups model: %s\n", formula_str))
             } else {
               # Standard crossover without groups
               formula_str <- sprintf("%s ~ seq + subj:seq + prd + drug", param)
-              cat(sprintf("  📋 Crossover design model: %s\n", formula_str))
             }
           }
-          
+          bioeq_log(sprintf("[%s] fixed-effects formula: %s", param, formula_str), "DEBUG")
+
           model_formula <- as.formula(formula_str)
           
           # Fit model
@@ -655,8 +618,9 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
               subj_seq_analysis   <- built$subj_seq_analysis
             } else {
               # Unexpected row names: fall back to generic 3-row summary
-              cat(sprintf("  ⚠️  Expected crossover ANOVA rows not found (rows: %s); using generic summary\n",
-                          paste(rownames(anova_table), collapse = ", ")))
+              bioeq_log(sprintf(
+                "Expected crossover ANOVA rows not found (rows: %s) - using generic summary",
+                paste(rownames(anova_table), collapse = ", ")), "WARNING")
               comprehensive_anova <- data.frame(
                 Source = c("Model", "Error", "Corrected Total"),
                 Df = c(
@@ -742,8 +706,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         
         "nlme" = {
           # Mixed Effects Model using nlme::lme
-          cat(sprintf("  🔧 Using Mixed Effects Model (nlme) for %s...\n", param))
-          
+
           if (!requireNamespace("nlme", quietly = TRUE)) {
             stop("nlme package not available. Please install nlme package.")
           }
@@ -757,7 +720,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
               # Add group nesting: (1|group/subject) or (1|subject) with group in fixed effects
               random_formula <- ~ 1 | grp/subj
               grouping_var <- "grp"
-              cat("  📊 Modified random effects to include groups: ~ 1 | grp/subj\n")
             } else {
               # Try to parse user-specified random effects and add group
               random_formula <- as.formula(paste("~", gsub("^\\(|\\)$", "", random_effects)))
@@ -793,70 +755,53 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             }
             
             formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
-            cat(sprintf("  📋 Parallel design model: %s\n", formula_str))
-            
+
           } else {
             # For crossover design: Parameter ~ sequence + period + treatment [+ group effects]
             formula_parts <- c("seq", "prd", "drug")
-            
+
             if (has_groups && include_group_fixed) {
               formula_parts <- c("grp", formula_parts)
               if (include_group_treatment_interaction) {
                 formula_parts <- c(formula_parts, "grp:drug")
               }
             }
-            
+
             formula_str <- sprintf("%s ~ %s", param, paste(formula_parts, collapse = " + "))
-            cat(sprintf("  📋 Crossover design model: %s\n", formula_str))
           }
+          bioeq_log(sprintf("[%s] nlme formula: %s, random = %s", param, formula_str, deparse(random_formula)), "DEBUG")
           model_formula <- as.formula(formula_str)
-          cat(sprintf("  [DEBUG] Model formula: %s\n", formula_str))
-          cat(sprintf("  [DEBUG] Data dimensions: %d rows, %d cols\n", nrow(complete_data), ncol(complete_data)))
-          cat(sprintf("  [DEBUG] Available variables: %s\n", paste(names(complete_data), collapse=", ")))
-          cat(sprintf("  [DEBUG] Grouping variable '%s' has %d levels\n", grouping_var, length(unique(complete_data[[grouping_var]]))))
-          
+
           # Fit model with error handling
-          cat("  [DEBUG] Fitting nlme model...\n")
           tryCatch({
-            model <- nlme::lme(model_formula, 
+            model <- nlme::lme(model_formula,
                              random = random_formula,
-                             data = complete_data, 
+                             data = complete_data,
                              na.action = na.omit,
                              method = "REML")
-            cat("  [DEBUG] Model fitted successfully\n")
           }, error = function(e) {
-            cat(sprintf("  [ERROR] nlme model fitting failed: %s\n", e$message))
             stop(sprintf("nlme model fitting failed for %s: %s", param, e$message))
           })
           lsmeans_result <- compute_lsmeans_ci(model, drug_levels[1], drug_levels[length(drug_levels)], level = ci_level)
 
-          cat("  [DEBUG] Getting summaries...\n")
-          
           # Get summaries
           model_summary <- summary(model)
           model_aic <- AIC(model)
-          cat("  [DEBUG] Summaries obtained\n")
-          
+
           # Extract treatment effect
           tTable <- model_summary$tTable
-          cat(sprintf("  [DEBUG] tTable rownames: %s\n", paste(rownames(tTable), collapse=", ")))
-          
+
           if (drug_coef_name %in% rownames(tTable)) {
-            cat(sprintf("  [DEBUG] Found %s coefficient\n", drug_coef_name))
             pe_estimate <- 100 * exp(tTable[drug_coef_name, "Value"])
-            
-            # Get confidence intervals for nlme model 
-            cat("  [DEBUG] Getting confidence intervals...\n")
+
+            # Get confidence intervals for nlme model
             tryCatch({
               ci_obj <- nlme::intervals(model, which = "fixed", level = ci_level)
-              cat("  [DEBUG] Intervals object obtained\n")
               if (drug_coef_name %in% rownames(ci_obj$fixed)) {
                 ci_vals <- 100 * exp(ci_obj$fixed[drug_coef_name, c("lower", "upper")])
                 ci_lower <- ci_vals[1]
                 ci_upper <- ci_vals[2]
-                cat("  [DEBUG] Confidence intervals extracted from intervals() function\n")
               } else {
-                cat(sprintf("  [DEBUG] %s not found in intervals object, using manual calculation\n", drug_coef_name))
                 # Fallback: calculate CI manually using t-distribution
                 coef_val <- tTable[drug_coef_name, "Value"]
                 se_val <- tTable[drug_coef_name, "Std.Error"]
@@ -866,7 +811,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
                 ci_upper <- 100 * exp(coef_val + t_crit * se_val)
               }
             }, error = function(e) {
-              cat(sprintf("  [DEBUG] Error in intervals(): %s\n", e$message))
               # Fallback calculation if intervals() fails
               coef_val <- tTable[drug_coef_name, "Value"]
               se_val <- tTable[drug_coef_name, "Std.Error"]
@@ -874,88 +818,61 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
               t_crit <- qt(1 - alpha/2, df_val)  # CI based on alpha
               ci_lower <- 100 * exp(coef_val - t_crit * se_val)
               ci_upper <- 100 * exp(coef_val + t_crit * se_val)
-              cat("  [DEBUG] Used fallback CI calculation\n")
             })
-            
+
             df_residual <- tTable[drug_coef_name, "DF"]
-          } else {
-            cat(sprintf("  [DEBUG] %s not found in tTable\n", drug_coef_name))
           }
-          
+
           # Create anova-like table for nlme
-          cat("  [DEBUG] Getting ANOVA table...\n")
           anova_table <- anova(model)  # This gives Type I SS for nlme
-          cat("  [DEBUG] ANOVA table obtained\n")
-          cat(sprintf("  [DEBUG] ANOVA table dimensions: %d rows, %d cols\n", nrow(anova_table), ncol(anova_table)))
-          
+
           # Type III (marginal) tests of fixed effects — nlme supports this via
           # anova(model, type = "marginal"); this is the appropriate per-term
           # significance table for a mixed model (SAS PROC MIXED "Type 3 Tests
           # of Fixed Effects" equivalent): Sequence, Period, Treatment each with
           # numDF/denDF/F-value/p-value.
-          cat("  [DEBUG] Computing Type III (marginal) fixed-effects tests...\n")
           type3_ss <- tryCatch({
             anova(model, type = "marginal")
           }, error = function(e) {
-            cat(sprintf("  [DEBUG] Marginal anova failed (%s); falling back to sequential\n", e$message))
             anova_table
           })
-          cat("  [DEBUG] Type III SS table created\n")
 
           # Create comprehensive ANOVA table (Model/Error/Corrected Total) for nlme
           # For mixed models, we focus on fixed effects.
           # NOTE: nlme's `model$dims` does not expose a `$p` (fixed-effect count)
           # element in current nlme versions — use length(fixef(model)) instead,
           # which previously caused residual_df/model_df to silently become NA.
-          cat("  [DEBUG] Creating comprehensive ANOVA table...\n")
           n_fixef <- length(nlme::fixef(model))
           residual_df <- as.numeric(model$dims$N - n_fixef)
           residual_ss <- sum(resid(model)^2)
           residual_ms <- residual_ss / residual_df
-          cat("  [DEBUG] Residual calculations done\n")
-          
+
           # Calculate model SS as difference from total
           # For nlme models, we need to extract y values differently
           y_values <- tryCatch({
-            cat("  [DEBUG] Attempting model.frame approach...\n")
             model.response(model.frame(model))
           }, error = function(e) {
-            cat(sprintf("  [DEBUG] model.frame failed (%s), trying alternative...\n", e$message))
             # Alternative: get response from model data
             tryCatch({
               # Get the response variable from the model formula
               response_name <- all.vars(formula(model))[1]
-              cat(sprintf("  [DEBUG] Response variable name: %s\n", response_name))
               model$data[[response_name]]
             }, error = function(e2) {
-              cat(sprintf("  [DEBUG] Alternative failed (%s), using complete_data...\n", e2$message))
               # Final fallback: use original data
               complete_data[[param]]
             })
           })
-          cat(sprintf("  [DEBUG] Y values extracted, length: %d\n", length(y_values)))
-          
+
           # Ensure we have valid y_values
           if (is.null(y_values) || length(y_values) == 0) {
             stop("Could not extract response values from model")
           }
-          
+
           total_ss <- sum((y_values - mean(y_values, na.rm = TRUE))^2, na.rm = TRUE)
           model_ss <- total_ss - residual_ss
           model_df <- as.numeric(n_fixef - 1)  # Excluding intercept
           model_ms <- model_ss / model_df
-          cat("  [DEBUG] Model calculations done\n")
-          
-          # Debug the values before creating data frame
-          cat(sprintf("  [DEBUG] comprehensive_anova values:\n"))
-          cat(sprintf("    model_df: %s (length: %d)\n", toString(model_df), length(model_df)))
-          cat(sprintf("    residual_df: %s (length: %d)\n", toString(residual_df), length(residual_df)))
-          cat(sprintf("    model_ss: %s (length: %d)\n", toString(model_ss), length(model_ss)))
-          cat(sprintf("    residual_ss: %s (length: %d)\n", toString(residual_ss), length(residual_ss)))
-          cat(sprintf("    total_ss: %s (length: %d)\n", toString(total_ss), length(total_ss)))
-          cat(sprintf("    model_ms: %s (length: %d)\n", toString(model_ms), length(model_ms)))
-          cat(sprintf("    residual_ms: %s (length: %d)\n", toString(residual_ms), length(residual_ms)))
-          
+
           # Ensure all values are single scalars
           model_df <- as.numeric(model_df)[1]
           residual_df <- as.numeric(residual_df)[1]
@@ -964,7 +881,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           total_ss <- as.numeric(total_ss)[1]
           model_ms <- as.numeric(model_ms)[1]
           residual_ms <- as.numeric(residual_ms)[1]
-          
+
           comprehensive_anova <- data.frame(
             Source = c("Model", "Error", "Corrected Total"),
             Df = c(model_df, residual_df, model_df + residual_df),
@@ -979,27 +896,24 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
             stringsAsFactors = FALSE
           )
           rownames(comprehensive_anova) <- comprehensive_anova$Source
-          cat("  [DEBUG] Comprehensive ANOVA table created successfully\n")
         },
         
         "satterthwaite" = {
           # Mixed Effects Model using lmerTest with Satterthwaite DF
-          cat(sprintf("  🔧 Using Mixed Effects Model (Satterthwaite) for %s...\n", param))
-          
+
           if (!requireNamespace("lme4", quietly = TRUE) || !requireNamespace("lmerTest", quietly = TRUE)) {
             stop("lme4 and lmerTest packages required. Please install both packages.")
           }
-          
+
           # Choose formula based on study design
           if (study_design == "parallel") {
             # For parallel design: Parameter ~ treatment + random_effects
             formula_str <- sprintf("%s ~ drug + %s", param, random_effects)
-            cat(sprintf("  📋 Parallel design model: %s\n", formula_str))
           } else {
             # For crossover design: Parameter ~ sequence + period + treatment + random_effects
             formula_str <- sprintf("%s ~ seq + prd + drug + %s", param, random_effects)
-            cat(sprintf("  📋 Crossover design model: %s\n", formula_str))
           }
+          bioeq_log(sprintf("[%s] Satterthwaite formula: %s", param, formula_str), "DEBUG")
           model_formula <- as.formula(formula_str)
           
           # Fit model
@@ -1072,22 +986,20 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         
         "kenward-roger" = {
           # Mixed Effects Model using lmerTest with Kenward-Roger DF
-          cat(sprintf("  🔧 Using Mixed Effects Model (Kenward-Roger) for %s...\n", param))
-          
+
           if (!requireNamespace("lme4", quietly = TRUE) || !requireNamespace("lmerTest", quietly = TRUE)) {
             stop("lme4 and lmerTest packages required. Please install both packages.")
           }
-          
+
           # Choose formula based on study design
           if (study_design == "parallel") {
             # For parallel design: Parameter ~ treatment + random_effects
             formula_str <- sprintf("%s ~ drug + %s", param, random_effects)
-            cat(sprintf("  📋 Parallel design model: %s\n", formula_str))
           } else {
             # For crossover design: Parameter ~ sequence + period + treatment + random_effects
             formula_str <- sprintf("%s ~ seq + prd + drug + %s", param, random_effects)
-            cat(sprintf("  📋 Crossover design model: %s\n", formula_str))
           }
+          bioeq_log(sprintf("[%s] Kenward-Roger formula: %s", param, formula_str), "DEBUG")
           model_formula <- as.formula(formula_str)
           
           # Fit model
@@ -1161,22 +1073,21 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
       
       # Validate model was fitted successfully
       if (is.null(model)) {
-        cat(sprintf("  ❌ Model fitting failed for %s\n", param))
+        bioeq_log(sprintf("Model fitting failed for %s - skipping", param), "WARNING")
         next
       }
-      
-      cat("✓ Model fitted successfully\n")
-      cat(sprintf("  Observations: %d\n", nrow(complete_data)))
-      
+
       # Common result extraction
       if (!is.null(model_summary)) {
-        if (anova_model == "fixed") {
-          cat(sprintf("  R-squared: %.4f (Adj: %.4f)\n", 
-                      model_summary$r.squared %||% NA, model_summary$adj.r.squared %||% NA))
+        r2_line <- if (anova_model == "fixed") {
+          sprintf(" | R-squared: %.4f (Adj: %.4f)",
+                  model_summary$r.squared %||% NA, model_summary$adj.r.squared %||% NA)
+        } else {
+          ""
         }
-        if (!is.null(model_aic)) {
-          cat(sprintf("  AIC: %.2f\n", model_aic))
-        }
+        aic_line <- if (!is.null(model_aic)) sprintf(" | AIC: %.2f", model_aic) else ""
+        bioeq_log(sprintf("[%s] fitted, %d observations%s%s",
+                           param, nrow(complete_data), r2_line, aic_line), "DEBUG")
       }
       
       # Extract method-specific diagnostics
@@ -1198,8 +1109,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
       
       # Print treatment effect info
       if (!is.null(pe_estimate)) {
-        cat(sprintf("  Residual MSE: %s\n", if(is.null(residual_mse)) "NA" else format(residual_mse, digits=6)))
-        
         # Extract treatment coefficient based on model type
         treatment_coef <- NA
         treatment_se <- NA
@@ -1228,10 +1137,13 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
           }
         }
         
-        cat(sprintf("  Treatment effect: %s (SE: %s, p: %s)\n", 
-                    format(treatment_coef, digits=6),
-                    format(treatment_se, digits=6),
-                    format(treatment_pval, digits=4)))
+        bioeq_log(sprintf(
+          "[%s] Residual MSE: %s | Treatment effect: %s (SE: %s, p: %s)",
+          param,
+          if (is.null(residual_mse)) "NA" else format(residual_mse, digits = 6),
+          format(treatment_coef, digits = 6),
+          format(treatment_se, digits = 6),
+          format(treatment_pval, digits = 4)), "DEBUG")
       }
       
       # Calculate parameter mean from observed data or fitted values
@@ -1246,8 +1158,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         # Fallback to raw data mean
         mean(complete_data[[param]], na.rm = TRUE)
       })
-      
-      cat(sprintf("  [DEBUG] Parameter mean calculated: %s\n", param_mean))
       
       # Calculate Root MSE
       root_mse <- if (!is.na(residual_mse)) sqrt(residual_mse) else NA
@@ -1300,27 +1210,6 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
         }, error = function(e) NULL)
       }
 
-      cat(sprintf("  [DEBUG] About to create results list for %s\n", param))
-      cat(sprintf("  [DEBUG] Variable checks before assignment:\n"))
-      cat(sprintf("    pe_estimate: %s (exists: %s)\n", 
-                 if(exists("pe_estimate")) paste(pe_estimate, collapse=",") else "MISSING", 
-                 exists("pe_estimate")))
-      cat(sprintf("    ci_lower: %s (exists: %s)\n", 
-                 if(exists("ci_lower")) paste(ci_lower, collapse=",") else "MISSING", 
-                 exists("ci_lower")))
-      cat(sprintf("    ci_upper: %s (exists: %s)\n", 
-                 if(exists("ci_upper")) paste(ci_upper, collapse=",") else "MISSING", 
-                 exists("ci_upper")))
-      cat(sprintf("    treatment_coef: %s (exists: %s)\n", 
-                 if(exists("treatment_coef")) paste(treatment_coef, collapse=",") else "MISSING", 
-                 exists("treatment_coef")))
-      cat(sprintf("    comprehensive_anova: %s (exists: %s)\n", 
-                 if(exists("comprehensive_anova")) "data.frame" else "MISSING", 
-                 exists("comprehensive_anova")))
-      cat(sprintf("    type3_ss: %s (exists: %s)\n", 
-                 if(exists("type3_ss")) "data.frame" else "MISSING", 
-                 exists("type3_ss")))
-      
       # Store comprehensive results
       anova_results[[param]] <- list(
         parameter = param,
@@ -1357,7 +1246,7 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
       )
       
     }, error = function(e) {
-      cat(sprintf("✗ Error fitting model for %s: %s\n", param, e$message))
+      bioeq_log(sprintf("Error fitting model for %s: %s", param, e$message), "ERROR")
       anova_results[[param]] <- list(
         parameter = param,
         error = e$message,
@@ -1365,8 +1254,8 @@ perform_simple_anova <- function(nca_data, parameters, anova_model = "fixed", ra
       )
     })
   }
-  
-  cat(sprintf("[DEBUG] ✓ Simple ANOVA completed for %d parameters\n", length(anova_results)))
+
+  bioeq_log(sprintf("Simple ANOVA completed for %d parameters", length(anova_results)), "DEBUG")
   return(anova_results)
 }
 

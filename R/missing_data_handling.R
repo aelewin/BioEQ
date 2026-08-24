@@ -27,7 +27,7 @@ handle_missing_data <- function(data, middle_method = "complete",
                                time_col = "Time", conc_col = "Concentration",
                                period_col = "Period") {
   
-  cat(sprintf("\U0001f504 Handling missing data — middle: %s, terminal: %s\n", middle_method, terminal_method))
+  bioeq_log(sprintf("Handling missing data - middle: %s, terminal: %s", middle_method, terminal_method), "DEBUG")
   
   # Validate input
   required_cols <- c(group_cols, time_col, conc_col)
@@ -86,14 +86,14 @@ handle_missing_data <- function(data, middle_method = "complete",
   }
   
   if (blq_count > 0) {
-    cat(sprintf("\U2705 Set %d BLQ values to 0\n", blq_count))
+    bioeq_log(sprintf("Set %d BLQ values to 0", blq_count), "DEBUG")
   }
   
   # ── Step 2: Handle NA concentrations with position-aware methods ──
   na_mask <- is.na(data[[conc_col]])
   
   if (!any(na_mask)) {
-    cat("\U2705 No missing concentration values detected\n")
+    bioeq_log("No missing concentration values detected", "DEBUG")
   } else {
     # Split by subject-treatment group to classify positions
     data_grouped <- split(data, do.call(paste, c(data[group_cols], sep = "_")))
@@ -215,8 +215,8 @@ handle_missing_data <- function(data, middle_method = "complete",
     
     n_imputed <- sum(imputation_log$Method %in% c("interpolation", "locf", "locf_fallback"), na.rm = TRUE)
     n_removed <- sum(imputation_log$Method == "removed", na.rm = TRUE)
-    cat(sprintf("\U2705 Missing data handled: %d imputed, %d excluded across %d profiles\n",
-                n_imputed, n_removed, length(data_grouped)))
+    bioeq_log(sprintf("Missing data handled: %d imputed, %d excluded across %d profiles",
+                      n_imputed, n_removed, length(data_grouped)), "WARNING")
   }
   
   return(list(

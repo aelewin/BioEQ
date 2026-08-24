@@ -67,13 +67,12 @@ perform_be_analysis <- function(data,
 #' @return BE analysis results with analysis type metadata
 #' @export
 perform_be_analysis_by_type <- function(data, analysis_type = "ABE", design = "auto", params = list()) {
-  
-  cat(sprintf("🔬 [BE-ROUTER] Performing %s analysis (design=%s)...\n", analysis_type, design))
-  cat(sprintf("🔬 [BE-ROUTER] Data: %d rows; pk_parameters: %s\n",
-              nrow(data), paste(params$pk_parameters %||% "(none)", collapse = ", ")))
-  cat(sprintf("🔬 [BE-ROUTER] anova_results keys: %s\n",
-              if (is.null(params$anova_results)) "(NULL)" else paste(names(params$anova_results), collapse = ", ")))
-  
+
+  bioeq_log(sprintf(
+    "[BE-ROUTER] %s analysis (design=%s), %d rows, pk_parameters: %s",
+    analysis_type, design, nrow(data), paste(params$pk_parameters %||% "(none)", collapse = ", ")
+  ), "DEBUG")
+
   # Route to appropriate analysis function
   results <- switch(analysis_type,
     "ABE" = perform_average_be(data, design, params),
@@ -105,7 +104,7 @@ perform_be_analysis_by_type <- function(data, analysis_type = "ABE", design = "a
 #' @export
 perform_average_be <- function(data, design = "auto", params = list()) {
   
-  cat("📊 Performing Average Bioequivalence (ABE) analysis...\n")
+  bioeq_log("Performing Average Bioequivalence (ABE) analysis", "DEBUG")
   
   # Extract parameters with defaults
   alpha <- params$alpha_level %||% 0.05
@@ -221,20 +220,19 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     }
   }
   
-  cat(sprintf("🔬 Performing ABEL analysis using replicateBE::%s...\n", method_label))
-  cat(sprintf("   ANOVA Model: %s\n", anova_model))
-  
+  bioeq_log(sprintf("Performing ABEL analysis using replicateBE::%s (model=%s)", method_label, anova_model), "DEBUG")
+
   # Extract parameters
   alpha <- params$alpha_level %||% 0.05
   parameters <- params$pk_parameters %||% c("Cmax", "AUC0t", "AUC0inf")
-  
+
   # User-selected eligibility: which base parameters are evaluated for expanded limits.
   # All other parameters use fixed 80–125% limits regardless of CVwR.
   # This is independent of the CVwR cap (set via abel_upper_cap) and the ANOVA model.
   abel_eligible_params <- params$abel_eligible_params %||% c("Cmax")
   abel_eligible_upper <- toupper(abel_eligible_params)
-  cat(sprintf("   ABEL-eligible parameters (user-selected): %s\n",
-              paste(abel_eligible_params, collapse = ", ")))
+  bioeq_log(sprintf("ABEL-eligible parameters (user-selected): %s",
+                     paste(abel_eligible_params, collapse = ", ")), "DEBUG")
   
   # Helper: determine if a parameter is in the user-selected ABEL-eligible list.
   is_abel_eligible <- function(param_name, eligible = abel_eligible_upper) {
@@ -281,24 +279,24 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     
     # Check if we've already processed this base parameter
     if (base_param_name %in% processed_params) {
-      cat(sprintf("⏭️  Skipping '%s' - already processed as '%s'\n", param, base_param_name))
+      bioeq_log(sprintf("Skipping '%s' - already processed as '%s'", param, base_param_name), "DEBUG")
       next
     }
-    
+
     # If this is a log parameter, check if non-log version exists
     if (is_log_param) {
       # Extract base parameter name (e.g., "Cmax" from "lnCmax")
       base_param <- sub("^(ln|log)", "", param, ignore.case = TRUE)
-      
+
       if (base_param %in% names(data)) {
         # Non-log version exists - use that instead
-        cat(sprintf("ℹ️  Found non-log version '%s' for '%s' - using non-log data (replicateBE will log-transform)\n", 
-                    base_param, param))
+        bioeq_log(sprintf("Found non-log version '%s' for '%s' - using non-log data (replicateBE will log-transform)",
+                           base_param, param), "DEBUG")
         param_to_use <- base_param
         data_is_logged <- FALSE
       } else {
         # Only log version available - use it
-        cat(sprintf("ℹ️  Only log-transformed '%s' available - using pre-logged data\n", param))
+        bioeq_log(sprintf("Only log-transformed '%s' available - using pre-logged data", param), "DEBUG")
         param_to_use <- param
         data_is_logged <- TRUE
       }
@@ -307,17 +305,17 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       # Check if log version exists and warn if both present
       log_versions <- c(paste0("ln", param), paste0("log", param), paste0("Log", param))
       found_log <- log_versions[log_versions %in% names(data)]
-      
+
       if (length(found_log) > 0 && param %in% names(data)) {
         # Both exist - prefer non-log
-        cat(sprintf("ℹ️  Using non-log '%s' (ignoring log version: %s)\n", 
-                    param, paste(found_log, collapse = ", ")))
+        bioeq_log(sprintf("Using non-log '%s' (ignoring log version: %s)",
+                           param, paste(found_log, collapse = ", ")), "DEBUG")
         param_to_use <- param
         data_is_logged <- FALSE
       } else if (length(found_log) > 0) {
         # Only log version exists
-        cat(sprintf("ℹ️  Non-log '%s' not found, using log-transformed version '%s'\n", 
-                    param, found_log[1]))
+        bioeq_log(sprintf("Non-log '%s' not found, using log-transformed version '%s'",
+                           param, found_log[1]), "DEBUG")
         param_to_use <- found_log[1]
         data_is_logged <- TRUE
       } else if (param %in% names(data)) {
@@ -326,14 +324,14 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
         data_is_logged <- FALSE
       } else {
         # Neither exists
-        cat("⚠️  Parameter", param, "not found in data, skipping...\n")
+        bioeq_log(sprintf("Parameter %s not found in data - skipping", param), "WARNING")
         next
       }
     }
-    
+
     # Check if the parameter exists in data
     if (!param_to_use %in% names(data)) {
-      cat("⚠️  Parameter", param_to_use, "not found in data, skipping...\n")
+      bioeq_log(sprintf("Parameter %s not found in data - skipping", param_to_use), "WARNING")
       next
     }
     
@@ -350,8 +348,8 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       # NON-ELIGIBLE: Use standard ABE with fixed 80-125% limits
       # (e.g., AUC parameters under EMA, AUC0inf under HC)
       # ---------------------------------------------------------------
-      cat(sprintf("  📋 %s: Not eligible for ABEL scaling under %s — using fixed ABE limits (80-125%%)\n",
-                  base_param_name, paste(abel_eligible_params, collapse = "+")))
+      bioeq_log(sprintf("%s: not eligible for ABEL scaling under %s - using fixed ABE limits (80-125%%)",
+                        base_param_name, paste(abel_eligible_params, collapse = "+")), "DEBUG")
       
       tryCatch({
         # Use the ANOVA results already computed for this parameter
@@ -441,15 +439,15 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
           )
           
           conclusion_list[[base_param_name]] <- be_pass
-          
-          cat(sprintf("  ✓ %s (ABE): PE=%.2f%%, CI [%.2f%%, %.2f%%], Limits [%.1f%%, %.1f%%], BE=%s\n",
-                      base_param_name, pe, ci_lo_val, ci_hi_val, fixed_lower, fixed_upper,
-                      ifelse(be_pass, "Pass", "Fail")))
+
+          bioeq_log(sprintf("%s (ABE): PE=%.2f%%, CI [%.2f%%, %.2f%%], Limits [%.1f%%, %.1f%%], BE=%s",
+                             base_param_name, pe, ci_lo_val, ci_hi_val, fixed_lower, fixed_upper,
+                             ifelse(be_pass, "Pass", "Fail")), "DEBUG")
         } else {
-          cat(sprintf("  ⚠️  %s: No ANOVA results available, skipping\n", base_param_name))
+          bioeq_log(sprintf("%s: No ANOVA results available - skipping", base_param_name), "WARNING")
         }
       }, error = function(e) {
-        cat(sprintf("  ❌ Error processing %s (ABE fallback): %s\n", base_param_name, e$message))
+        bioeq_log(sprintf("Error processing %s (ABE fallback): %s", base_param_name, e$message), "ERROR")
       })
       
       next  # Skip to next parameter
@@ -458,7 +456,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     # =====================================================================
     # ABEL-ELIGIBLE: Route through replicateBE for scaled limits
     # =====================================================================
-    cat(sprintf("  📋 %s: Eligible for ABEL scaling (user-selected)\n", base_param_name))
+    bioeq_log(sprintf("%s: eligible for ABEL scaling (user-selected)", base_param_name), "DEBUG")
     
     tryCatch({
       # Prepare data for replicateBE (expects lowercase: subject, period, sequence, treatment, PK)
@@ -518,8 +516,8 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
 
       .new_sequence <- vapply(.seq_orig, function(g) .canonical_map[[g]], character(1))
 
-      cat(sprintf("  - Sequence map (orig -> reconstructed T/R): %s\n",
-                  paste0(names(.canonical_map), "->", unlist(.canonical_map), collapse = ", ")))
+      bioeq_log(sprintf("Sequence map (orig -> reconstructed T/R): %s",
+                         paste0(names(.canonical_map), "->", unlist(.canonical_map), collapse = ", ")), "DEBUG")
 
       replicate_data <- data.frame(
         subject = as.factor(data$Subject),
@@ -539,15 +537,16 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
                               function(p) length(unique(p)))
       .partial_subj <- names(.periods_kept)[.periods_kept < max(.periods_kept)]
       if (length(.partial_subj) > 0) {
-        cat(sprintf("  ℹ %d subject(s) with partial periods retained (replicateBE handles unbalanced data): %s\n",
-                    length(.partial_subj), paste(.partial_subj, collapse = ", ")))
+        bioeq_log(sprintf(
+          "%d subject(s) with partial periods retained (replicateBE handles unbalanced data): %s",
+          length(.partial_subj), paste(.partial_subj, collapse = ", ")), "DEBUG")
       }
 
-      cat(sprintf("  - Reconstructed sequence levels: %s (n=%d rows, %d subjects)\n",
-                  paste(levels(replicate_data$sequence), collapse = ", "),
-                  nrow(replicate_data),
-                  length(unique(as.character(replicate_data$subject)))))
-      
+      bioeq_log(sprintf("Reconstructed sequence levels: %s (n=%d rows, %d subjects)",
+                         paste(levels(replicate_data$sequence), collapse = ", "),
+                         nrow(replicate_data),
+                         length(unique(as.character(replicate_data$subject)))), "DEBUG")
+
       if (nrow(replicate_data) == 0) {
         stop("No valid data for parameter ", param_to_use)
       }
@@ -559,18 +558,14 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       temp_dir <- tempdir()
       temp_file <- file.path(temp_dir, paste0("abel_temp_", param_to_use))
       write.csv(replicate_data, paste0(temp_file, ".csv"), row.names = FALSE, quote = FALSE)
-      
-      cat(sprintf("  - Wrote temp file: %s.csv\n", temp_file))
-      cat(sprintf("  - Data structure: %d rows, PK range: [%.2f, %.2f]\n", 
-                  nrow(replicate_data), min(replicate_data$PK, na.rm=TRUE), max(replicate_data$PK, na.rm=TRUE)))
-      cat(sprintf("  - Column types: subject=%s, period=%s, sequence=%s, treatment=%s, PK=%s\n",
-                  class(replicate_data$subject)[1], class(replicate_data$period)[1], 
-                  class(replicate_data$sequence)[1], class(replicate_data$treatment)[1], 
-                  class(replicate_data$PK)[1]))
-      cat(sprintf("  - Using %s data (logtrans = %s)\n", 
-                  ifelse(data_is_logged, "pre-logged", "non-log"), 
-                  ifelse(data_is_logged, "FALSE", "TRUE")))
-      
+
+      bioeq_log(sprintf(
+        "Wrote %s.csv - %d rows, PK range [%.2f, %.2f], using %s data",
+        temp_file, nrow(replicate_data),
+        min(replicate_data$PK, na.rm = TRUE), max(replicate_data$PK, na.rm = TRUE),
+        ifelse(data_is_logged, "pre-logged", "non-log")), "DEBUG")
+
+
       # Get ABEL-specific parameters from params (with defaults)
       # The cap selector directly chooses the replicateBE regulator code:
       #   "50"    -> EMA   (CVwR cap at 50% -> limits 69.84% – 143.19%)
@@ -590,14 +585,14 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       abel_ola <- if (!is.null(params$abel_outlier_analysis)) params$abel_outlier_analysis else FALSE
       abel_fence <- if (!is.null(params$abel_outlier_fence)) params$abel_outlier_fence else 2
       
-      cat(sprintf("  - ABEL Settings: Cap=%s -> replicateBE regulator=%s (adjust=%s, ola=%s, fence=%.1f)\n", 
-                  abel_cap_input, abel_regulator_code, abel_adjust, abel_ola, abel_fence))
-      
+      bioeq_log(sprintf("ABEL settings: Cap=%s -> replicateBE regulator=%s (adjust=%s, ola=%s, fence=%.1f)",
+                        abel_cap_input, abel_regulator_code, abel_adjust, abel_ola, abel_fence), "DEBUG")
+
       # replicateBE::method.A() does NOT support regulator="HC" — only method.B() does.
       # If user selected HC + Fixed Effects, auto-fall back to method.B(option=2) (nlme/SAS CONTAIN),
       # which is the closest equivalent to a linear/ANOVA model for HC.
       if (use_method_a && abel_regulator_code == "HC") {
-        cat("  ⚠ HC regulator requires replicateBE::method.B() — auto-switching to Method B (option=2, nlme/SAS CONTAIN DF).\n")
+        bioeq_log("HC regulator requires replicateBE::method.B() - auto-switching to Method B (option=2, nlme/SAS CONTAIN DF)", "WARNING")
         use_method_a <- FALSE
         df_method <- 2
         method_label <- "Method B (HC-required, nlme/SAS CONTAIN DF, option=2)"
@@ -621,16 +616,15 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
             fence = abel_fence           # Outlier detection fence
           )
         }, error = function(e) {
-          cat(sprintf("[ERROR] replicateBE::method.A() failed for %s: %s\n", param, e$message))
-          print(traceback())
+          bioeq_log(sprintf("replicateBE::method.A() failed for %s: %s", param, e$message), "ERROR")
           stop(e)
         })
       } else {
         # Method B: Mixed effects model with specified DF approximation
         # NOTE: method.B() does NOT support 'adjust' (TIE adjustment) — only method.A() does.
         # The 'option' parameter must be numeric: 1=Satterthwaite, 2=nlme/SAS, 3=Kenward-Roger
-        cat(sprintf("  - Method B option=%d (%s)\n", df_method,
-                    switch(as.character(df_method), "1"="Satterthwaite", "2"="nlme/SAS CONTAIN", "3"="Kenward-Roger")))
+        bioeq_log(sprintf("Method B option=%d (%s)", df_method,
+                          switch(as.character(df_method), "1"="Satterthwaite", "2"="nlme/SAS CONTAIN", "3"="Kenward-Roger")), "DEBUG")
         abel_result <- tryCatch({
           replicateBE::method.B(
             path.in = temp_dir,
@@ -646,8 +640,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
             fence = abel_fence           # Outlier detection fence
           )
         }, error = function(e) {
-          cat(sprintf("[ERROR] replicateBE::method.B(option=%d) failed for %s: %s\n", df_method, param, e$message))
-          print(traceback())
+          bioeq_log(sprintf("replicateBE::method.B(option=%d) failed for %s: %s", df_method, param, e$message), "ERROR")
           stop(e)
         })
       }
@@ -703,7 +696,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       real_anova <- tryCatch({
         fit_rsabe_model(anova_input, log_col, anova_model = if (use_method_a) "fixed" else "nlme")
       }, error = function(e) {
-        cat(sprintf("  ⚠ Could not fit independent ANOVA model for %s: %s\n", base_param_name, e$message))
+        bioeq_log(sprintf("Could not fit independent ANOVA model for %s: %s", base_param_name, e$message), "WARNING")
         NULL
       })
 
@@ -721,14 +714,15 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       refvar_result <- tryCatch({
         compute_reference_anova_variance(anova_input, log_col)
       }, error = function(e) {
-        cat(sprintf("  ⚠ Could not fit reference-only ANOVA for %s: %s\n", base_param_name, e$message))
+        bioeq_log(sprintf("Could not fit reference-only ANOVA for %s: %s", base_param_name, e$message), "WARNING")
         NULL
       })
       if (!is.null(refvar_result) && !is.na(refvar_result$cv_wR)) {
         cv_wr_check <- abel_result[1, "CVwR(%)"]
         if (!is.na(cv_wr_check) && abs(refvar_result$cv_wR - cv_wr_check) > 0.05) {
-          cat(sprintf("  ⚠ Reference-only-ANOVA CVwR (%.4f%%) disagrees with replicateBE's CVwR (%.4f%%) for %s — using replicateBE's (authoritative).\n",
-                      refvar_result$cv_wR, cv_wr_check, base_param_name))
+          bioeq_log(sprintf(
+            "Reference-only-ANOVA CVwR (%.4f%%) disagrees with replicateBE's CVwR (%.4f%%) for %s - using replicateBE's (authoritative)",
+            refvar_result$cv_wR, cv_wr_check, base_param_name), "WARNING")
         }
       }
 
@@ -829,23 +823,21 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
       )
       
       conclusion_list[[base_param_name]] <- be_pass
-      
-      cat(sprintf("  ✓ %s: GMR=%.4f, 90%% CI [%.4f, %.4f], CV_WR=%.2f%%, BE=%s\n",
-                  base_param_name, gmr, ci_lo, ci_hi, cv_wr, ifelse(be_pass, "Pass", "Fail")))
-      
+
+      bioeq_log(sprintf("%s: GMR=%.4f, 90%% CI [%.4f, %.4f], CV_WR=%.2f%%, BE=%s",
+                        base_param_name, gmr, ci_lo, ci_hi, cv_wr, ifelse(be_pass, "Pass", "Fail")), "DEBUG")
+
     }, error = function(e) {
-      cat("❌ Error analyzing", param, ":", e$message, "\n")
-      cat("   Traceback:\n")
-      tryCatch(print(rlang::trace_back()), error = function(x) print(traceback()))
+      bioeq_log(sprintf("Error analyzing %s: %s", param, e$message), "ERROR")
     })
   }
-  
+
   if (length(ci_list) == 0) {
-    cat(sprintf("[ABEL-FATAL] ci_list is empty after processing %d parameters: %s\n",
-                length(parameters), paste(parameters, collapse = ", ")))
-    cat(sprintf("[ABEL-FATAL] processed_params: %s\n", paste(processed_params, collapse = ", ")))
-    cat(sprintf("[ABEL-FATAL] anova_results available keys: %s\n",
-                if (is.null(params$anova_results)) "(NULL params$anova_results)" else paste(names(params$anova_results), collapse = ", ")))
+    bioeq_log(sprintf(
+      "[ABEL-FATAL] ci_list empty after processing %d parameters (%s); processed_params: %s; anova_results keys: %s",
+      length(parameters), paste(parameters, collapse = ", "), paste(processed_params, collapse = ", "),
+      if (is.null(params$anova_results)) "(NULL params$anova_results)" else paste(names(params$anova_results), collapse = ", ")
+    ), "DEBUG")
     stop("No parameters could be analyzed successfully")
   }
   
@@ -883,7 +875,7 @@ perform_abel_placeholder <- function(data, design = "auto", params = list()) {
     limits_justification = sprintf("ABEL with replicateBE regulator=%s, eligible parameters=%s, fixed 80-125%% for others", abel_regulator_code, paste(abel_eligible_params, collapse = "+"))
   )
   
-  cat("✅ ABEL analysis completed!\n")
+  bioeq_log("ABEL analysis completed", "DEBUG")
   return(results)
 }
 
@@ -900,39 +892,34 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
                                anova_model = "fixed", anova_results = NULL,
                                be_limits_per_param = NULL) {
   
-  cat("🔬 Analyzing 2x2x2 crossover bioequivalence study...\n")
-  
   # Check if ANOVA results are provided
   if (is.null(anova_results)) {
     stop("ANOVA results must be provided. Use the ANOVA module to generate results first.")
   }
-  
+
   # Validate PK parameters against available ANOVA results
   available_params <- names(anova_results)
   pk_params <- parameters[parameters %in% available_params]
-  
+
   if (length(pk_params) == 0) {
     stop("No valid parameters found in ANOVA results. Available: ", paste(available_params, collapse = ", "))
   }
-  
-  cat(sprintf("📊 Using ANOVA results for %d parameters: %s\n", 
-              length(pk_params), paste(pk_params, collapse = ", ")))
-  
+
   # Extract BE results from ANOVA
   be_results <- extract_be_from_anova(anova_results, alpha, be_limits, be_limits_per_param)
-  
+
   # Instead of filtering based on input parameters, use all parameters that were successfully analyzed
   # This ensures that all user-selected parameters that had valid ANOVA results are included
   filtered_ci <- be_results$confidence_intervals
   filtered_anova <- be_results$anova_results
-  
+
   # Remove any NULL or NA entries
   filtered_ci <- filtered_ci[!sapply(filtered_ci, is.null)]
   filtered_anova <- filtered_anova[!sapply(filtered_anova, is.null)]
-  
-  cat(sprintf("🔗 Including all valid CI parameters: %s\n", 
-              paste(names(filtered_ci), collapse = ", ")))
-  
+
+  bioeq_log(sprintf("2x2x2 crossover: %d parameters, including CIs for: %s",
+                     length(pk_params), paste(names(filtered_ci), collapse = ", ")), "DEBUG")
+
   if (length(filtered_ci) == 0) {
     stop("No valid confidence intervals available for the requested parameters")
   }
@@ -962,7 +949,7 @@ be_crossover_2x2x2 <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
     result$anova_method_description <- if (anova_model == "mixed") "Mixed Effects Model (REML)" else "Fixed Effects Model"
   }
   
-  cat("✅ 2x2x2 crossover analysis completed!\n")
+  bioeq_log("2x2x2 crossover analysis completed", "DEBUG")
   return(result)
 }
 
@@ -979,34 +966,29 @@ be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
                        welch_correction = TRUE,
                        be_limits_per_param = NULL) {
   
-  cat("🔬 Analyzing parallel group bioequivalence study...\n")
-  
-  # For parallel BE analysis, we need raw parameters because log transformation 
+  # For parallel BE analysis, we need raw parameters because log transformation
   # happens inside the analysis function (prepare_parameter_data)
   # Filter to only raw parameters (not log-transformed ones)
   available_params <- intersect(parameters, names(data))
-  
+
   # Remove any log-transformed parameters to avoid double log transformation
   raw_params <- available_params[!startsWith(available_params, "ln")]
-  
+
   # Remove Tmax as it requires non-parametric analysis, not confidence intervals
   # Tmax should be analyzed using median differences and Wilcoxon tests per regulatory guidance
   if ("Tmax" %in% raw_params) {
-    cat("ℹ️  Note: Tmax excluded from parametric BE analysis (requires non-parametric methods)\n")
-    cat("   For Tmax assessment, use median differences and Wilcoxon signed-rank tests\n")
-    cat("   as recommended by FDA and EMA guidance documents.\n")
+    bioeq_log("Tmax excluded from parametric BE analysis (requires non-parametric methods - median differences / Wilcoxon signed-rank per FDA/EMA guidance)", "DEBUG")
     raw_params <- raw_params[raw_params != "Tmax"]
   }
-  
+
   if (length(raw_params) == 0) {
-    cat("⚠️ No suitable raw parameters found for parallel BE analysis.\n")
-    cat("Available parameters in data: ", paste(names(data), collapse = ", "), "\n")
-    cat("Original requested parameters: ", paste(parameters, collapse = ", "), "\n")
-    cat("Note: Parallel analysis requires raw parameters for internal log transformation.\n")
+    bioeq_log(sprintf(
+      "No suitable raw parameters found for parallel BE analysis - available: %s, requested: %s",
+      paste(names(data), collapse = ", "), paste(parameters, collapse = ", ")), "WARNING")
     return(NULL)
   }
-  
-  cat("Using raw parameters for parallel analysis:", paste(raw_params, collapse = ", "), "\n")
+
+  bioeq_log(sprintf("Using raw parameters for parallel analysis: %s", paste(raw_params, collapse = ", ")), "DEBUG")
   
   # Validate PK parameters
   pk_params <- validate_pk_parameters(data, raw_params)
@@ -1016,8 +998,8 @@ be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
   statistical_results <- list()
   
   for (param in pk_params) {
-    cat("  Analyzing", param, "...\n")
-    
+    bioeq_log(sprintf("Analyzing %s", param), "DEBUG")
+
     # Perform parallel group analysis
     tryCatch({
       param_results <- analyze_parallel_parameter(data, param, alpha, welch_correction)
@@ -1046,15 +1028,14 @@ be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
         confidence_intervals[[param]] <- ci
         statistical_results[[param]] <- param_results$stats
         
-        cat("    ", param, ": ", sprintf("%.2f%% (%.2f%% - %.2f%%)", 
-                                        param_results$ci$point_estimate, 
-                                        param_results$ci$ci_lower, 
-                                        param_results$ci$ci_upper), "\n")
+        bioeq_log(sprintf("%s: %.2f%% (%.2f%% - %.2f%%)",
+                          param, param_results$ci$point_estimate,
+                          param_results$ci$ci_lower, param_results$ci$ci_upper), "DEBUG")
       } else {
-        cat("    ⚠️ ", param, ": Analysis returned NULL\n")
+        bioeq_log(sprintf("%s: analysis returned NULL", param), "WARNING")
       }
     }, error = function(e) {
-      cat("    ❌ ", param, ": Error -", e$message, "\n")
+      bioeq_log(sprintf("%s: Error - %s", param, e$message), "ERROR")
       # Continue with other parameters
     })
   }
@@ -1074,7 +1055,7 @@ be_parallel <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
     be_limits = be_limits
   )
   
-  cat("✅ Parallel group analysis completed!\n")
+  bioeq_log("Parallel group analysis completed", "DEBUG")
   return(result)
 }
 
@@ -1093,12 +1074,10 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
                         anova_results = NULL,
                         be_limits_per_param = NULL) {
 
-  cat("🔬 Analyzing replicate crossover bioequivalence study (ABE)...\n")
-
   # ── PRIMARY PATH: use pre-computed ANOVA results (same approach as 2x2x2) ──
   # This is the preferred path when ANOVA has already been run by the Shiny app.
   if (!is.null(anova_results) && length(anova_results) > 0) {
-    cat("📊 Using pre-computed ANOVA results for replicate BE analysis...\n")
+    bioeq_log("Using pre-computed ANOVA results for replicate BE analysis", "DEBUG")
 
     be_from_anova <- extract_be_from_anova(anova_results, alpha, be_limits, be_limits_per_param)
     filtered_ci <- be_from_anova$confidence_intervals
@@ -1118,10 +1097,10 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
         be_limits = be_limits
       )
 
-      cat("✅ Replicate ABE analysis from ANOVA completed!\n")
+      bioeq_log("Replicate ABE analysis from ANOVA completed", "DEBUG")
       return(result)
     }
-    cat("⚠️  ANOVA path produced no CIs — falling back to mixed model\n")
+    bioeq_log("ANOVA path produced no CIs - falling back to mixed model", "WARNING")
   }
 
   # ── FALLBACK PATH: standalone mixed-effects model ──
@@ -1134,15 +1113,13 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
     design_name = "Replicate", sequences = character(0), n_periods = NA,
     is_replicate = TRUE, is_partial_replicate = FALSE
   ))
-  cat("📋 Detected design:", design_info$design_name, "\n")
-  cat("   Periods:", design_info$n_periods, "\n")
+  bioeq_log(sprintf("Detected design: %s, %s periods", design_info$design_name, design_info$n_periods), "DEBUG")
 
   confidence_intervals <- list()
   variability_results  <- list()
   scaling_decisions    <- list()
 
   for (param in pk_params) {
-    cat("  Analyzing", param, "...\n")
     tryCatch({
       param_results <- analyze_replicate_parameter(data_with_seq, param, alpha, scaling)
       if (!is.null(param_results)) {
@@ -1153,14 +1130,14 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
           cv_wr = param_results$variability$cv_wr,
           threshold = 30
         )
-        cat(sprintf("    CV_wR: %.1f%%  CI: %.1f%% [%.1f%%, %.1f%%]\n",
-                    param_results$variability$cv_wr,
-                    param_results$ci$point_estimate,
-                    param_results$ci$ci_lower,
-                    param_results$ci$ci_upper))
+        bioeq_log(sprintf("[%s] CV_wR: %.1f%%  CI: %.1f%% [%.1f%%, %.1f%%]",
+                          param, param_results$variability$cv_wr,
+                          param_results$ci$point_estimate,
+                          param_results$ci$ci_lower,
+                          param_results$ci$ci_upper), "DEBUG")
       }
     }, error = function(e) {
-      cat(sprintf("    ❌ Mixed model failed for %s: %s\n", param, e$message))
+      bioeq_log(sprintf("Mixed model failed for %s: %s", param, e$message), "WARNING")
     })
   }
 
@@ -1179,7 +1156,7 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
     design_info = design_info
   )
 
-  cat("✅ Replicate crossover analysis completed!\n")
+  bioeq_log("Replicate crossover analysis completed", "DEBUG")
   return(result)
 }
 
@@ -1201,8 +1178,6 @@ be_replicate <- function(data, alpha = 0.05, be_limits = c(0.8, 1.25),
 #' @param be_limits Bioequivalence limits (default c(0.8, 1.25))
 #' @return BE analysis results extracted from ANOVA
 extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8, 1.25), be_limits_per_param = NULL) {
-  
-  cat("🔗 Extracting bioequivalence results from ANOVA analysis...\n")
   
   # Helper: resolve BE limits for a specific parameter
   # Maps parameter names like lnCmax -> Cmax category, lnAUC0t -> AUC category
@@ -1237,15 +1212,14 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     stop("No log-transformed parameters found in ANOVA results. BE analysis requires log-transformed data.")
   }
   
-  cat(sprintf("📊 Using ANOVA results for %d log-transformed parameters: %s\n", 
-              length(log_params), paste(log_params, collapse = ", ")))
-  
+  bioeq_log(sprintf("Extracting BE results from ANOVA for %d log-transformed parameters: %s",
+                     length(log_params), paste(log_params, collapse = ", ")), "DEBUG")
+
   confidence_intervals <- list()
   anova_be_results <- list()
-  
+
   for (param in log_params) {
-    cat(sprintf("  Processing %s...\n", param))
-    
+
     # Wrap each parameter processing in error handling
     tryCatch({
       anova_result <- anova_results[[param]]
@@ -1259,32 +1233,32 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     
     # Validate extracted values
     if (is.na(mse) || is.null(mse) || mse <= 0) {
-      cat(sprintf("  ❌ Error: Invalid MSE (%s) for %s\n", mse, param))
+      bioeq_log(sprintf("Invalid MSE (%s) for %s - skipping", mse, param), "ERROR")
       next
     }
-    
+
     if (is.na(df) || is.null(df) || df <= 0) {
-      cat(sprintf("  ❌ Error: Invalid degrees of freedom (%s) for %s\n", df, param))
+      bioeq_log(sprintf("Invalid degrees of freedom (%s) for %s - skipping", df, param), "ERROR")
       next
     }
-    
+
     # Extract pre-calculated treatment difference from ANOVA results
     # This ensures consistent T/R ratio calculation
     treatment_diff <- anova_result$treatment_coef
-    
+
     # Check if treatment_diff is valid
     if (is.na(treatment_diff) || is.null(treatment_diff)) {
-      cat(sprintf("  ⚠️  Warning: Invalid treatment effect for %s\n", param))
+      bioeq_log(sprintf("Invalid treatment effect for %s - skipping", param), "WARNING")
       next
     }
-    
+
     # Use the pre-calculated standard error from ANOVA for imbalanced designs
     # This is more accurate than the simplified formula SE = sqrt(2 * MSE / n_subjects)
     treatment_se <- anova_result$treatment_se
-    
+
     if (is.na(treatment_se) || is.null(treatment_se)) {
-      cat(sprintf("  ⚠️  Warning: Invalid treatment SE for %s, using fallback calculation\n", param))
-      
+      bioeq_log(sprintf("Invalid treatment SE for %s - using fallback calculation", param), "WARNING")
+
       # Fallback: Calculate standard error for balanced design
       # Extract number of subjects from the data structure
       tryCatch({
@@ -1334,20 +1308,20 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
         # Validate n_subjects
         if (is.null(n_subjects) || is.na(n_subjects) || n_subjects <= 0) {
           n_subjects <- n_observations / 2
-          cat(sprintf("  ⚠️  Warning: Using fallback subject count for %s: %d\n", param, n_subjects))
+          bioeq_log(sprintf("Using fallback subject count for %s: %d", param, n_subjects), "WARNING")
         }
-        
+
       }, error = function(e) {
-        cat(sprintf("  ⚠️  Warning: Error extracting subject count for %s: %s\n", param, e$message))
         n_subjects <- n_observations / 2
-        cat(sprintf("  ⚠️  Using fallback subject count: %d\n", n_subjects))
+        bioeq_log(sprintf("Error extracting subject count for %s (%s) - using fallback: %d",
+                          param, e$message, n_subjects), "WARNING")
       })
-      
+
       # Fallback SE calculation (only accurate for balanced designs)
       treatment_se <- sqrt(2 * mse / n_subjects)
-      cat(sprintf("  ⚠️  Using fallback SE calculation: %f\n", treatment_se))
+      bioeq_log(sprintf("Using fallback SE calculation for %s: %f", param, treatment_se), "WARNING")
     } else {
-      cat(sprintf("  ✓ Using pre-calculated treatment SE from ANOVA: %f\n", treatment_se))
+      bioeq_log(sprintf("Using pre-calculated treatment SE from ANOVA for %s: %f", param, treatment_se), "DEBUG")
     }
     
     # Extract subject count for results reporting
@@ -1388,7 +1362,7 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     
     # Validate degrees of freedom
     if (is.na(df) || is.null(df) || df <= 0) {
-      cat(sprintf("  ❌ Error: Invalid degrees of freedom (%s) for %s\n", df, param))
+      bioeq_log(sprintf("Invalid degrees of freedom (%s) for %s - skipping", df, param), "ERROR")
       next
     }
     
@@ -1421,25 +1395,25 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
       }
     }
     
-    cat(sprintf("  📏 %s limits: %.2f%% - %.2f%%\n", param, lower_limit, upper_limit))
-    
+    bioeq_log(sprintf("%s limits: %.2f%% - %.2f%%", param, lower_limit, upper_limit), "DEBUG")
+
     if (is.na(ci_lower) || is.na(ci_upper) || is.infinite(ci_lower) || is.infinite(ci_upper)) {
-      cat(sprintf("  ⚠️  Warning: Invalid confidence interval values for %s - skipping BE evaluation\n", param))
+      bioeq_log(sprintf("Invalid confidence interval values for %s - skipping BE evaluation", param), "WARNING")
       within_limits <- FALSE
     } else {
       # Evaluate bioequivalence with robust error handling
       tryCatch({
         condition1 <- ci_lower >= lower_limit
         condition2 <- ci_upper <= upper_limit
-        
+
         if (is.na(condition1) || is.na(condition2)) {
-          cat(sprintf("  ⚠️  Warning: NA conditions in BE evaluation for %s\n", param))
+          bioeq_log(sprintf("NA conditions in BE evaluation for %s", param), "WARNING")
           within_limits <- FALSE
         } else {
           within_limits <- condition1 && condition2
         }
       }, error = function(e) {
-        cat(sprintf("  ❌ Error in BE evaluation for %s: %s\n", param, e$message))
+        bioeq_log(sprintf("Error in BE evaluation for %s: %s", param, e$message), "ERROR")
         within_limits <- FALSE
       })
     }
@@ -1470,12 +1444,12 @@ extract_be_from_anova <- function(anova_results, alpha = 0.05, be_limits = c(0.8
     # Store ANOVA-based results (point to original ANOVA results)
     anova_be_results[[param]] <- anova_result
     
-    cat(sprintf("  ✅ %s: %.1f%% (%.1f%% - %.1f%%) [%s]\n", 
-                param, point_estimate, ci_lower, ci_upper,
-                if(within_limits) "BE" else "Not BE"))
-    
+    bioeq_log(sprintf("%s: %.1f%% (%.1f%% - %.1f%%) [%s]",
+                       param, point_estimate, ci_lower, ci_upper,
+                       if (within_limits) "BE" else "Not BE"), "DEBUG")
+
     }, error = function(e) {
-      cat(sprintf("  ❌ Error in BE Analysis for %s: %s\n", param, e$message))
+      bioeq_log(sprintf("Error in BE Analysis for %s: %s", param, e$message), "ERROR")
       # Store error result
       confidence_intervals[[param]] <<- list(
         parameter = param,
@@ -1736,9 +1710,8 @@ calculate_within_subject_variability <- function(mixed_result, design_info) {
   sigma_wr <- sqrt(sigma2_res)
   cv_wr <- sqrt(exp(sigma2_res) - 1) * 100  # exact CV from log-scale variance
 
-  cat(sprintf("    Within-subject variance (sigma2_wR): %.6f\n", sigma2_res))
-  cat(sprintf("    Within-subject SD (sigma_wR):        %.6f\n", sigma_wr))
-  cat(sprintf("    Within-subject CV (CV_wR):           %.2f%%\n", cv_wr))
+  bioeq_log(sprintf("Within-subject variance (sigma2_wR)=%.6f, SD=%.6f, CV_wR=%.2f%%",
+                     sigma2_res, sigma_wr, cv_wr), "DEBUG")
 
   return(list(
     sigma2_wr = sigma2_res,
@@ -1786,9 +1759,8 @@ calculate_unscaled_ci <- function(mixed_result, alpha) {
   ci_lower       <- exp(ci_lower_log) * 100
   ci_upper       <- exp(ci_upper_log) * 100
 
-  cat(sprintf("    Treatment diff (log): %.6f  SE: %.6f  DF: %.1f\n",
-              treatment_diff, treatment_se, df_val))
-  cat(sprintf("    90%% CI: [%.4f%%, %.4f%%]\n", ci_lower, ci_upper))
+  bioeq_log(sprintf("Treatment diff (log)=%.6f SE=%.6f DF=%.1f -> 90%% CI [%.4f%%, %.4f%%]",
+                     treatment_diff, treatment_se, df_val, ci_lower, ci_upper), "DEBUG")
 
   return(list(
     point_estimate   = point_estimate,
@@ -1818,7 +1790,7 @@ calculate_unscaled_ci <- function(mixed_result, alpha) {
 calculate_scaled_ci <- function(mixed_result, variability, alpha) {
   # For ABE analysis type, always use unscaled limits regardless of CV
   # (scaling is only appropriate in RSABE/ABEL workflows)
-  cat("    Note: Scaling requested but ABE uses fixed limits — reverting to unscaled CI\n")
+  bioeq_log("Scaling requested but ABE uses fixed limits - reverting to unscaled CI", "DEBUG")
   calculate_unscaled_ci(mixed_result, alpha)
 }
 
@@ -1870,7 +1842,7 @@ validate_data_quality <- function(data, design, missing_data_method = "complete"
   data <- data[complete.cases(data[critical_cols]), ]
   
   if (missing_data_method != "complete") {
-    cat("ℹ️ Missing data method simplified to complete cases approach\n")
+    bioeq_log("Missing data method simplified to complete cases approach", "DEBUG")
   }
   
   # Validate subject consistency
@@ -1899,7 +1871,7 @@ validate_pk_parameters <- function(data, parameters) {
          paste(names(data), collapse = ", "))
   }
   
-  cat("Found PK parameters:", paste(pk_params, collapse = ", "), "\n")
+  bioeq_log(sprintf("Found PK parameters: %s", paste(pk_params, collapse = ", ")), "DEBUG")
   return(pk_params)
 }
 
@@ -1918,7 +1890,7 @@ prepare_parameter_data <- function(data, parameter) {
   # Convert parameter to numeric if needed
   param_values <- data[[parameter]]
   if (!is.numeric(param_values)) {
-    cat("  Converting", parameter, "to numeric...\n")
+    bioeq_log(sprintf("Converting %s to numeric", parameter), "DEBUG")
     param_values <- as.numeric(as.character(param_values))
     data[[parameter]] <- param_values
   }
@@ -1941,7 +1913,7 @@ prepare_parameter_data <- function(data, parameter) {
     param_data$Period <- as.factor(param_data$Period)
   }
   
-  cat("  Prepared", nrow(param_data), "observations for", parameter, "\n")
+  bioeq_log(sprintf("Prepared %d observations for %s", nrow(param_data), parameter), "DEBUG")
   return(param_data)
 }
 
@@ -2042,14 +2014,21 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
   valid_params <- valid_params[!is.na(valid_params) & !is.null(valid_params) & valid_params != ""]
   confidence_intervals <- confidence_intervals[valid_params]
   
-  cat("🔍 Evaluating bioequivalence for", length(confidence_intervals), "parameters...\n")
-  
+  # NOTE: every message in this function is DEBUG-level, not just the noisy
+  # ones - this function is called up to twice per BE run for the same
+  # parameters (see be_crossover_2x2x2()/be_replicate(), which both call it
+  # once directly AND once already inside extract_be_from_anova()), so at
+  # any visible log level its progress lines would print twice. The
+  # analysis's actual bioequivalence conclusion is reported once by
+  # print_be_analysis_summary() (R/analysis_summary.R), not here.
+  bioeq_log(sprintf("Evaluating bioequivalence for %d parameters", length(confidence_intervals)), "DEBUG")
+
   be_conclusions <- list()
-  
+
   # Handle BE limits - check if they're already in percentage or decimal format
   # Default to standard ABE limits if be_limits is null or invalid
   if (is.null(be_limits) || all(is.na(be_limits)) || length(be_limits) == 0) {
-    cat("⚠️ BE limits not provided or invalid. Using default ABE limits: 80.00% - 125.00%\n")
+    bioeq_log("BE limits not provided or invalid - using default ABE limits: 80.00% - 125.00%", "DEBUG")
     lower_limit <- 80.0
     upper_limit <- 125.0
   } else if (is.list(be_limits) && "lower" %in% names(be_limits)) {
@@ -2066,12 +2045,12 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
     upper_limit <- be_limits[2] * 100
   } else {
     # Fallback to default limits
-    cat("⚠️ Invalid BE limits format. Using default ABE limits: 80.00% - 125.00%\n")
+    bioeq_log("Invalid BE limits format - using default ABE limits: 80.00% - 125.00%", "DEBUG")
     lower_limit <- 80.0
     upper_limit <- 125.0
   }
-  
-  cat(sprintf("📏 BE limits: %.1f%% - %.1f%%\n", lower_limit, upper_limit))
+
+  bioeq_log(sprintf("BE limits: %.1f%% - %.1f%%", lower_limit, upper_limit), "DEBUG")
   
   for (param in names(confidence_intervals)) {
     ci <- confidence_intervals[[param]]
@@ -2100,73 +2079,72 @@ evaluate_bioequivalence <- function(confidence_intervals, be_limits) {
       ci_lower <- exp(ci$log_ci_lower) * 100  # Convert from log scale to percentage
       ci_upper <- exp(ci$log_ci_upper) * 100
       point_est <- exp(ci$log_point_estimate) * 100
-      cat(sprintf("  📊 Using log-scale CI values converted to %%: lower=%.2f, upper=%.2f\n", 
-                  ci_lower, ci_upper))
+      bioeq_log(sprintf("Using log-scale CI values converted to %%: lower=%.2f, upper=%.2f",
+                        ci_lower, ci_upper), "DEBUG")
     } else if (length(ci) >= 2 && is.numeric(ci)) {
       # Handle vector format
       ci_lower <- ci[1]
       ci_upper <- ci[2]
       point_est <- mean(c(ci_lower, ci_upper))
     } else {
-      cat(sprintf("  ⚠️ Unknown CI structure for %s\n", param))
-      cat(sprintf("  ⚠️ Available fields: %s\n", paste(names(ci), collapse = ", ")))
+      bioeq_log(sprintf("Unknown CI structure for %s - available fields: %s",
+                        param, paste(names(ci), collapse = ", ")), "DEBUG")
       be_conclusions[[param]] <- NA
       next
     }
-    
+
     # Validate CI values before BE evaluation
     if (is.null(ci_lower) || is.null(ci_upper) || is.na(ci_lower) || is.na(ci_upper)) {
-      cat(sprintf("  ⚠️ Invalid CI values for %s: lower=%s, upper=%s\n", 
-                  param, ci_lower, ci_upper))
+      bioeq_log(sprintf("Invalid CI values for %s: lower=%s, upper=%s",
+                        param, ci_lower, ci_upper), "DEBUG")
       be_conclusions[[param]] <- NA
       next
     }
-    
+
     # Evaluate bioequivalence with robust error handling
     # Validate all values before logical operations
     if (is.null(param_lower) || is.null(param_upper) || is.na(param_lower) || is.na(param_upper)) {
-      cat(sprintf("  ⚠️ Invalid BE limits for %s: lower=%s, upper=%s\n", 
-                  param, param_lower, param_upper))
+      bioeq_log(sprintf("Invalid BE limits for %s: lower=%s, upper=%s",
+                        param, param_lower, param_upper), "DEBUG")
       be_conclusions[[param]] <- NA
       next
     }
-    
+
     tryCatch({
       condition1 <- ci_lower >= param_lower
       condition2 <- ci_upper <= param_upper
-      
+
       if (is.na(condition1) || is.na(condition2)) {
-        cat(sprintf("  ⚠️ NA conditions in BE evaluation for %s\n", param))
+        bioeq_log(sprintf("NA conditions in BE evaluation for %s", param), "DEBUG")
         is_be <- FALSE
       } else {
         is_be <- condition1 && condition2
       }
-      
-      cat(sprintf("  ✅ %s: CI [%.1f%%, %.1f%%] vs Limits [%.1f%%, %.1f%%] → %s\n", 
-                  param, ci_lower, ci_upper, param_lower, param_upper,
-                  ifelse(is_be, "Bioequivalent", "Not Bioequivalent")))
-      
+
+      bioeq_log(sprintf("%s: CI [%.1f%%, %.1f%%] vs Limits [%.1f%%, %.1f%%] -> %s",
+                        param, ci_lower, ci_upper, param_lower, param_upper,
+                        ifelse(is_be, "Bioequivalent", "Not Bioequivalent")), "DEBUG")
+
     }, error = function(e) {
-      cat(sprintf("  ❌ Error in BE evaluation for %s: %s\n", param, e$message))
+      bioeq_log(sprintf("Error in BE evaluation for %s: %s", param, e$message), "DEBUG")
       is_be <- FALSE
     })
-    
+
     be_conclusions[[param]] <- is_be
-    
-    status <- ifelse(is_be, "✅ BIOEQUIVALENT", "❌ NOT BIOEQUIVALENT")
-    cat(sprintf("  %s: %.1f%% (%.1f%% - %.1f%%) %s\n", 
-                param, point_est, ci_lower, ci_upper, status))
+
+    status <- ifelse(is_be, "BIOEQUIVALENT", "NOT BIOEQUIVALENT")
+    bioeq_log(sprintf("%s: %.1f%% (%.1f%% - %.1f%%) %s",
+                      param, point_est, ci_lower, ci_upper, status), "DEBUG")
   }
-  
+
   # Summary
   valid_conclusions <- be_conclusions[!is.na(be_conclusions)]
   if (length(valid_conclusions) > 0) {
     be_count <- sum(unlist(valid_conclusions), na.rm = TRUE)
     total_count <- length(valid_conclusions)
-    cat(sprintf("📊 Summary: %d of %d parameters are bioequivalent\n", 
-                be_count, total_count))
+    bioeq_log(sprintf("Summary: %d of %d parameters are bioequivalent", be_count, total_count), "DEBUG")
   }
-  
+
   return(be_conclusions)
 }
 
@@ -2312,7 +2290,7 @@ detect_replicate_design <- function(data) {
   
   # PREFERRED METHOD: Use Sequence column if available
   if ("Sequence" %in% colnames(data)) {
-    cat("ℹ️  Using Sequence column for design detection (most accurate)\n")
+    bioeq_log("Using Sequence column for design detection (most accurate)", "DEBUG")
     
     # Extract unique sequences
     sequences <- unique(data$Sequence)
@@ -2450,7 +2428,7 @@ detect_replicate_design <- function(data) {
   }
   
   # FALLBACK METHOD: Infer from Period and Treatment columns
-  cat("ℹ️  Sequence column not found - inferring design from Period and Treatment\n")
+  bioeq_log("Sequence column not found - inferring design from Period and Treatment", "DEBUG")
   
   required_cols <- c("Period", "Treatment")
   if (!all(required_cols %in% colnames(data))) {
@@ -2462,7 +2440,7 @@ detect_replicate_design <- function(data) {
   use_sequence <- "Sequence" %in% colnames(data)
   
   if (use_sequence) {
-    cat("ℹ️  Using Sequence column for design detection\n")
+    bioeq_log("Using Sequence column for design detection", "DEBUG")
     # Extract pattern from Sequence column directly
     subjects <- unique(data$Subject)
     subject_patterns <- data.frame(
@@ -2500,7 +2478,7 @@ detect_replicate_design <- function(data) {
       stop("Data must contain either Sequence or Treatment column for design detection")
     }
     
-    cat("ℹ️  Using Treatment column to infer design (Sequence column preferred)\n")
+    bioeq_log("Using Treatment column to infer design (Sequence column preferred)", "DEBUG")
     
     subjects <- unique(data$Subject)
     subject_patterns <- data.frame(

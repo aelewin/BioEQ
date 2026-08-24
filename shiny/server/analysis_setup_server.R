@@ -178,7 +178,7 @@ output$detected_design <- renderUI({
       replicate_result <- tryCatch({
         detect_replicate_design(data)
       }, error = function(e) {
-        cat("[WARN] detect_replicate_design failed:", e$message, "\n")
+        bioeq_log(sprintf("detect_replicate_design failed: %s", e$message), "WARNING")
         NULL
       })
     }
@@ -540,11 +540,12 @@ output$debug_info <- renderUI({
 # Analysis execution
 observeEvent(input$run_analysis, {
   req(values$uploaded_data)
-  
+  .bioeq_t0 <- proc.time()[["elapsed"]]
+
   # Validate that at least one PK parameter is selected for ANOVA
   selected_primary <- input$primary_pk_params %||% c()
   selected_secondary <- input$secondary_pk_params %||% c()
-  
+
   if (length(selected_primary) == 0 && length(selected_secondary) == 0) {
     showNotification(
       "Please select at least one PK parameter for ANOVA analysis.",
@@ -647,7 +648,7 @@ observeEvent(input$run_analysis, {
       
       # Safety check - ensure we always have at least some parameters
       if (length(combined_params) == 0) {
-        cat("[WARNING] No PK parameters selected - using defaults\n")
+        bioeq_log("No PK parameters selected - using defaults", "WARNING")
         combined_params <- c("Cmax", "AUC0t", "AUC0inf")
       }
       
@@ -659,7 +660,7 @@ observeEvent(input$run_analysis, {
       manual_pAUC <- isTRUE(input$calculate_pAUC)
       auto_pAUC <- "pAUC" %in% c(input$primary_pk_params, input$secondary_pk_params)
       result <- manual_pAUC || auto_pAUC
-      cat(sprintf("🔧 pAUC Configuration: Manual=%s, Auto=%s, Final=%s\n", manual_pAUC, auto_pAUC, result))
+      bioeq_log(sprintf("pAUC Configuration: Manual=%s, Auto=%s, Final=%s", manual_pAUC, auto_pAUC, result), "DEBUG")
       result
     },
     pAUC_start = input$pAUC_start %||% 0,
@@ -680,28 +681,35 @@ observeEvent(input$run_analysis, {
   
   # Store configuration for results display
   values$analysis_config <- analysis_config
-  
+
+  # Console phase lines mirror this progress bar 1:1 (see bioeq_phase(),
+  # R/analysis_summary.R) so the console and the UI never diverge. Always 5:
+  # Validation / NCA / Carryover / ANOVA / BE assessment - Carryover always
+  # gets a line, even when not enabled (detail says so), rather than
+  # changing the total depending on what ran.
+  .n_phases <- 5L
+  .phase <- 0L
+
   # Show progress
   shinyjs::show("analysis_progress")
-  
+
   tryCatch({
     withProgress(message = 'Running bioequivalence analysis...', value = 0, {
-    
+
     incProgress(0.1, detail = "Validating data and configuration...")
-    Sys.sleep(0.5)
-    
+
     incProgress(0.2, detail = "Detecting study design...")
     if (analysis_config$study_design == "auto") {
       # Auto-detect design logic here
       data <- values$uploaded_data
-      
+
       # Use capitalized column names (Subject, Treatment) as per standardization
       n_treatments <- length(unique(data$Treatment))
-      
+
       # Count treatments per subject without dplyr
       treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
       is_crossover <- all(treatments_per_subject == n_treatments)
-      
+
       detected_design <- if (!is_crossover) {
         "parallel"
       } else {
@@ -720,13 +728,23 @@ observeEvent(input$run_analysis, {
         }
         if (n_p >= 4) "2x2x4" else if (n_p == 3) "2x2x3" else "2x2x2"
       }
-      
+
       analysis_config$detected_design <- detected_design
-      cat(sprintf("[INFO] Auto-detected design: %s (%d treatments, crossover=%s)\n",
-                  detected_design, n_treatments, is_crossover))
+      bioeq_log(sprintf("Auto-detected design: %s (%d treatments, crossover=%s)",
+                        detected_design, n_treatments, is_crossover), "DEBUG")
     }
-    Sys.sleep(0.5)
-    
+
+    # Header prints first (design, subjects, sequences, NCA/method config),
+    # THEN the phase lines start as one contiguous block below it - Validation
+    # is the first phase line, not printed earlier, so the reader sees the
+    # full run configuration before any phase ticks by, and the [1/5]..[5/5]
+    # list is never split across the header.
+    header_design_info <- tryCatch(detect_replicate_design(values$uploaded_data), error = function(e) NULL)
+    print_analysis_header(analysis_config, values$uploaded_data, header_design_info)
+
+    .phase <- .phase + 1L
+    bioeq_phase(.phase, .n_phases, "Validation", "ok")
+
     incProgress(0.3, detail = paste("Running NCA analysis using", analysis_config$auc_method, "method..."))
     # Here you would call the actual NCA functions from your R package
     # nca_results <- calculate_pk_parameters_batch(values$uploaded_data, analysis_config)
@@ -765,14 +783,14 @@ observeEvent(input$run_analysis, {
           
           # Carryover notification removed; summary is now only in Results view
         } # No pop-up for carryover detection
-        
-        Sys.sleep(0.5)
+
+        .phase <- .phase + 1L
+        bioeq_phase(.phase, .n_phases, "Carryover",
+                    sprintf("%d subject(s) flagged", nrow(carryover_results$flagged_subjects)))
       } else {
         # Data does not contain concentration-time data required for carryover detection
-        cat("ℹ️ Skipping carryover detection: Pre-calculated PK parameter data detected\n")
-        cat("ℹ️ Carryover detection requires Time and Concentration columns\n")
-        cat("ℹ️ Available columns:", paste(names(analysis_data), collapse = ", "), "\n")
-        
+        bioeq_log("Skipping carryover detection: pre-calculated PK parameter data detected (requires Time and Concentration columns)", "DEBUG")
+
         # Create a minimal carryover results object to indicate it was skipped
         values$carryover_results <- list(
           data = analysis_data,
@@ -786,9 +804,14 @@ observeEvent(input$run_analysis, {
           n_cleaned = nrow(analysis_data),
           n_excluded_subjects = 0
         )
+        .phase <- .phase + 1L
+        bioeq_phase(.phase, .n_phases, "Carryover", "skipped (pre-calculated PK data)")
       }
+    } else {
+      .phase <- .phase + 1L
+      bioeq_phase(.phase, .n_phases, "Carryover", "skipped (not enabled)")
     }
-    
+
     # Get the selected AUC method
     auc_method <- input$auc_method %||% "mixed"
     
@@ -804,13 +827,15 @@ observeEvent(input$run_analysis, {
     
     if (has_time && has_concentration && !has_pk_params) {
       # This is concentration-time data - perform NCA analysis
-      cat("📊 Detected concentration-time data - performing NCA analysis...\n")
-      
+      bioeq_log("Detected concentration-time data - performing NCA analysis", "DEBUG")
+
       # ── Handle missing data before NCA ──
       middle_method <- analysis_config$missing_data_middle %||% "complete"
       terminal_method <- analysis_config$missing_data_terminal %||% "complete"
-      cat(sprintf("🔄 Applying missing data handling: middle=%s, terminal=%s\n", middle_method, terminal_method))
-      
+
+      # handle_missing_data() (R/missing_data_handling.R) logs its own
+      # WARNING-level summary when it actually imputes/excludes anything -
+      # not duplicated here.
       missing_result <- handle_missing_data(
         data = analysis_data,
         middle_method = middle_method,
@@ -822,14 +847,6 @@ observeEvent(input$run_analysis, {
       )
       analysis_data <- missing_result$data
       values$missing_data_log <- missing_result$log
-      
-      if (nrow(missing_result$log) > 0) {
-        n_imputed <- sum(!missing_result$log$Method %in% c("removed", "unable"))
-        cat(sprintf("📋 Missing data: %d actions taken (%d imputed)\n", 
-                    nrow(missing_result$log), n_imputed))
-      } else {
-        cat("✅ No missing data detected\n")
-      }
       
       # "group" (dosing/facility cohort) is optional design metadata — carry it
       # through the NCA step like Subject/Treatment/Period/Sequence when present,
@@ -871,9 +888,11 @@ observeEvent(input$run_analysis, {
       
     } else if (has_pk_params && !has_time && !has_concentration) {
       # This is pre-calculated PK parameter data - format it as NCA results
-      cat("📊 Detected pre-calculated PK parameter data - skipping NCA analysis...\n")
-      cat("📊 Available PK parameters:", paste(names(analysis_data)[grepl(paste(pk_parameter_patterns, collapse = "|"), names(analysis_data), ignore.case = TRUE)], collapse = ", "), "\n")
-      
+      bioeq_log(sprintf("Detected pre-calculated PK parameter data - skipping NCA analysis (available: %s)",
+                        paste(names(analysis_data)[grepl(paste(pk_parameter_patterns, collapse = "|"),
+                                                          names(analysis_data), ignore.case = TRUE)], collapse = ", ")), "DEBUG")
+
+
       # Use the uploaded data directly as "NCA results"
       nca_results <- analysis_data
       
@@ -899,14 +918,14 @@ observeEvent(input$run_analysis, {
             param_values <- nca_results[[match_col]]
             if (is.numeric(param_values) && all(param_values > 0, na.rm = TRUE)) {
               nca_results[[ln_name]] <- log(param_values)
-              cat(sprintf("📊 Added log-transformed parameter: %s (from column '%s')\n", ln_name, match_col))
+              bioeq_log(sprintf("Added log-transformed parameter: %s (from column '%s')", ln_name, match_col), "DEBUG")
             } else if (!is.numeric(param_values)) {
-              cat(sprintf("⚠️ Skipping log transformation for %s: non-numeric data in '%s' (type: %s)\n",
-                          ln_name, match_col, class(param_values)[1]))
+              bioeq_log(sprintf("Skipping log transformation for %s: non-numeric data in '%s' (type: %s)",
+                                ln_name, match_col, class(param_values)[1]), "WARNING")
             } else {
               n_nonpos <- sum(param_values <= 0, na.rm = TRUE)
-              cat(sprintf("⚠️ Skipping log transformation for %s: %d non-positive values in '%s'\n",
-                          ln_name, n_nonpos, match_col))
+              bioeq_log(sprintf("Skipping log transformation for %s: %d non-positive values in '%s'",
+                                ln_name, n_nonpos, match_col), "WARNING")
             }
           }
         }
@@ -914,9 +933,9 @@ observeEvent(input$run_analysis, {
       
     } else {
       # Unclear data type - attempt NCA but handle gracefully
-      cat("⚠️ Uncertain data type - attempting NCA analysis...\n")
-      cat("⚠️ Has time:", has_time, "Has concentration:", has_concentration, "Has PK params:", has_pk_params, "\n")
-      
+      bioeq_log(sprintf("Uncertain data type - attempting NCA analysis (has_time=%s, has_concentration=%s, has_pk_params=%s)",
+                        has_time, has_concentration, has_pk_params), "WARNING")
+
       nca_results <- tryCatch({
         perform_nca_analysis(
           data = analysis_data,
@@ -931,14 +950,15 @@ observeEvent(input$run_analysis, {
           pAUC_end = analysis_config$pAUC_end
         )
       }, error = function(e) {
-        cat("❌ NCA analysis failed:", e$message, "\n")
-        cat("📊 Treating as pre-calculated PK data...\n")
+        bioeq_log(sprintf("NCA analysis failed: %s - treating as pre-calculated PK data", e$message), "ERROR")
         return(analysis_data)  # Use original data if NCA fails
       })
     }
-    
-    Sys.sleep(1.5)
-    
+
+    .phase <- .phase + 1L
+    bioeq_phase(.phase, .n_phases, "NCA",
+                sprintf("%d profiles", if (!is.null(nca_results)) nrow(nca_results) else 0L))
+
     incProgress(0.3, detail = "Performing ANOVA and bioequivalence assessment...")
     
     # Perform simple ANOVA analysis using lm() on selected parameters
@@ -964,7 +984,7 @@ observeEvent(input$run_analysis, {
       
       # Check if selected_params is empty
       if (length(selected_params) == 0) {
-        cat("[ERROR] No parameters selected for analysis!\n")
+        bioeq_log("No parameters selected for analysis", "ERROR")
         anova_results <- list(
           error = "No PK parameters were selected for ANOVA analysis. Please select at least one parameter in Step 2."
         )
@@ -1002,13 +1022,12 @@ observeEvent(input$run_analysis, {
           if (non_missing_count >= 4) {  # Need at least 4 observations for ANOVA
             numeric_params <- c(numeric_params, param)
           } else {
-            cat(sprintf("⚠️ Skipping %s: insufficient non-missing values (%d, need at least 4)\n", param, non_missing_count))
+            bioeq_log(sprintf("Skipping %s: insufficient non-missing values (%d, need at least 4)", param, non_missing_count), "WARNING")
           }
         } else {
-          cat(sprintf("⚠️ Skipping %s: non-numeric data (type: %s)\n", param, class(param_values)[1]))
-          if (!is.null(param_values) && length(param_values) > 0) {
-            cat(sprintf("  First few values: %s\n", paste(head(param_values, 3), collapse = ", ")))
-          }
+          bioeq_log(sprintf("Skipping %s: non-numeric data (type: %s, first values: %s)",
+                            param, class(param_values)[1],
+                            if (!is.null(param_values) && length(param_values) > 0) paste(head(param_values, 3), collapse = ", ") else "none"), "WARNING")
         }
       }
       
@@ -1037,16 +1056,15 @@ observeEvent(input$run_analysis, {
       if (length(numeric_params) > 0) {
 
         if (is_replicate_design && (is_abel_analysis || is_rsabe_analysis)) {
-          cat(sprintf("[INFO] 📊 Running ANOVA for replicate %s design (%d parameters): %s\n",
-                      analysis_config$be_analysis_type,
-                      length(numeric_params), paste(numeric_params, collapse = ", ")))
-          cat(sprintf("[INFO]    Non-eligible params (e.g. AUC0t under EMA) need ANOVA for fixed ABE CIs.\n"))
+          bioeq_log(sprintf(
+            "Running ANOVA for replicate %s design (%d parameters): %s - non-eligible params (e.g. AUC0t under EMA) need ANOVA for fixed ABE CIs",
+            analysis_config$be_analysis_type, length(numeric_params), paste(numeric_params, collapse = ", ")), "DEBUG")
         } else {
-          cat(sprintf("[INFO] 📊 Running ANOVA for %d parameters: %s\n", 
-                      length(numeric_params), paste(numeric_params, collapse = ", ")))
+          bioeq_log(sprintf("Running ANOVA for %d parameters: %s",
+                            length(numeric_params), paste(numeric_params, collapse = ", ")), "DEBUG")
         }
-        cat(sprintf("[INFO]    Model: %s, Design: %s\n", analysis_config$anova_model, detected_study_design))
-        
+        bioeq_log(sprintf("Model: %s, Design: %s", analysis_config$anova_model, detected_study_design), "DEBUG")
+
         tryCatch({
           
           # Use the ANOVA function with the selected model type and random effects
@@ -1063,17 +1081,15 @@ observeEvent(input$run_analysis, {
             alpha = anova_alpha
           )
           
-          cat(sprintf("[INFO] ✅ ANOVA completed for %d parameters\n", length(simple_anova_results)))
-          
           # Wrap results in expected structure for the UI
           anova_results <- list(
             anova_results = simple_anova_results,
             design = if (is_replicate_design && (is_abel_analysis || is_rsabe_analysis)) detected_study_design else "simple_anova",
             parameters = available_selected_params
           )
-          
+
         }, error = function(e) {
-          cat(sprintf("[ERROR] ❌ ANOVA failed: %s\n", e$message))
+          bioeq_log(sprintf("ANOVA failed: %s", e$message), "ERROR")
           anova_results <<- list(
             anova_results = list(),  # Empty list instead of error
             error = paste("ANOVA failed:", e$message)
@@ -1107,12 +1123,14 @@ observeEvent(input$run_analysis, {
     if (!is.null(anova_results)) {
       values$anova_results <- anova_results
     }
-    
-    Sys.sleep(1.5)
-    
+
+    .phase <- .phase + 1L
+    bioeq_phase(.phase, .n_phases, "ANOVA",
+                sprintf("%d parameters",
+                        length(if (exists("numeric_params")) numeric_params else character())))
+
     incProgress(0.1, detail = "Generating comprehensive results...")
-    Sys.sleep(0.5)
-    
+
     # For demonstration, create enhanced mock results that reflect the configuration
     values$analysis_complete <- TRUE
     
@@ -1167,7 +1185,7 @@ observeEvent(input$run_analysis, {
         NULL
       }
     }, error = function(e) {
-      cat(sprintf("[WARNING] Could not compute NCA summary statistics: %s\n", e$message))
+      bioeq_log(sprintf("Could not compute NCA summary statistics: %s", e$message), "WARNING")
       NULL
     })
     
@@ -1190,8 +1208,6 @@ observeEvent(input$run_analysis, {
     # PERFORM REAL BIOEQUIVALENCE ANALYSIS
     # =======================================================================
     
-    cat("🔬 Starting Bioequivalence Analysis...\n")
-    
     tryCatch({
       # Determine study design
       study_design <- analysis_config$detected_design %||% analysis_config$study_design
@@ -1213,15 +1229,13 @@ observeEvent(input$run_analysis, {
       if (values$data_type == "pk_parameters") {
         # PK parameter data: use uploaded data directly (already has Subject, Treatment, Period, Sequence, PK params)
         be_data <- values$uploaded_data
-        cat("📋 Using PK parameter data directly for BE analysis\n")
       } else if (is.data.frame(nca_results) && nrow(nca_results) > 0) {
         # Concentration-time data: use NCA results table directly as the BE input
         be_data <- nca_results
-        cat(sprintf("📋 Using NCA results directly for BE analysis (%d rows)\n", nrow(be_data)))
       } else {
         # Fallback: no NCA results — use uploaded data
         be_data <- values$uploaded_data
-        cat("📋 No NCA results — falling back to uploaded data for BE analysis\n")
+        bioeq_log("No NCA results - falling back to uploaded data for BE analysis", "WARNING")
       }
       
       # Ensure proper column names for BE analysis functions
@@ -1239,26 +1253,17 @@ observeEvent(input$run_analysis, {
         names(be_data)[names(be_data) == "sequence"] <- "Sequence"
       }
       
-      cat(sprintf("📋 BE Data structure: %d rows, %d cols\n", nrow(be_data), ncol(be_data)))
-      cat(sprintf("📋 Columns: %s\n", paste(names(be_data), collapse = ", ")))
-      cat(sprintf("📋 Unique subjects: %d\n", length(unique(be_data$Subject))))
-      
+      bioeq_log(sprintf("BE data: %d rows, %d cols, %d unique subjects (columns: %s)",
+                        nrow(be_data), ncol(be_data), length(unique(be_data$Subject)),
+                        paste(names(be_data), collapse = ", ")), "DEBUG")
+
       # NOTE: Previously we merged NCA results onto raw concentration-time rows here, which
       # caused a Cartesian explosion for replicate designs (joining on (Subject, Treatment)
       # multiplied every conc-time row by the count of NCA rows per pair). be_data is now
       # set above to either uploaded_data (PK data) or nca_results (concentration data),
       # so no further merging is required.
-      
-      # Validate parameter data before BE analysis
-      cat("🔍 Validating parameter data for BE analysis...\n")
-      cat(sprintf("📊 BE data final structure: %d rows, %d columns\n", nrow(be_data), ncol(be_data)))
-      cat(sprintf("📊 Final columns: %s\n", paste(names(be_data), collapse = ", ")))
-      
-      if (nrow(be_data) > 0) {
-        cat("🔍 Sample BE data rows:\n")
-        print(head(be_data[, names(be_data)[1:min(10, ncol(be_data))]], 3))
-      }
-      
+
+
       valid_params <- c()
       
       # Reconstruct the same parameter selection logic used for ANOVA
@@ -1287,59 +1292,33 @@ observeEvent(input$run_analysis, {
       expanded_params <- unique(expanded_params)
       selected_be_params <- intersect(expanded_params, names(be_data))
       
-      cat(sprintf("🔬 BE Analysis - User selected parameters: %s\n", paste(selected_params, collapse = ", ")))
-      cat(sprintf("🔬 BE Analysis - Expanded parameters: %s\n", paste(expanded_params, collapse = ", ")))
-      cat(sprintf("🔬 BE Analysis - Available expanded parameters: %s\n", paste(selected_be_params, collapse = ", ")))
-      
+      bioeq_log(sprintf(
+        "BE Analysis parameters - selected: %s | expanded: %s | available: %s",
+        paste(selected_params, collapse = ", "), paste(expanded_params, collapse = ", "),
+        paste(selected_be_params, collapse = ", ")), "DEBUG")
+
       for (param in selected_be_params) {
         if (param %in% names(be_data)) {
           param_values <- be_data[[param]]
-          
-          # Enhanced debugging
-          cat(sprintf("🔍 Parameter %s detailed analysis:\n", param))
-          cat(sprintf("  - Class: %s\n", class(param_values)))
-          cat(sprintf("  - Mode: %s\n", mode(param_values)))
-          cat(sprintf("  - Length: %d\n", length(param_values)))
-          
-          # Sample values
-          sample_vals <- head(param_values[!is.na(param_values)], 5)
-          cat(sprintf("  - Sample values: %s\n", paste(sample_vals, collapse = ", ")))
-          
-          non_na_count <- sum(!is.na(param_values))
-          numeric_count <- sum(is.numeric(param_values), na.rm = TRUE)
-          positive_count <- 0;
-          
-          cat(sprintf("📊 %s: %d total, %d non-NA, class=%s\n", 
-                      param, length(param_values), non_na_count, class(param_values)[1]))
-          
+
           # Convert to numeric if needed
           if (!is.numeric(param_values)) {
-            cat(sprintf("🔧 Converting %s to numeric (was %s)...\n", param, class(param_values)[1]))
             be_data[[param]] <- as.numeric(as.character(param_values))
             param_values <- be_data[[param]]
-            
-            # Report conversion results
-            new_non_na <- sum(!is.na(param_values))
-            cat(sprintf("  - After conversion: %d non-NA values\n", new_non_na))
           }
-          
-          # Check positive values
+
+          # Check if we have valid numeric data
           if (is.numeric(param_values)) {
-            positive_count <- sum(param_values > 0, na.rm = TRUE)
-            cat(sprintf("  - Positive values: %d\n", positive_count))
-            
-            # Check if we have valid numeric data
             if (sum(!is.na(param_values) & param_values > 0) >= 4) {
               valid_params <- c(valid_params, param)
-              cat(sprintf("✅ %s is valid for BE analysis\n", param))
             } else {
-              cat(sprintf("❌ %s has insufficient valid data for BE analysis\n", param))
+              bioeq_log(sprintf("%s has insufficient valid data for BE analysis", param), "WARNING")
             }
           } else {
-            cat(sprintf("❌ %s could not be converted to numeric\n", param))
+            bioeq_log(sprintf("%s could not be converted to numeric", param), "WARNING")
           }
         } else {
-          cat(sprintf("❌ %s not found in merged data\n", param))
+          bioeq_log(sprintf("%s not found in merged data", param), "WARNING")
         }
       }
       
@@ -1347,9 +1326,9 @@ observeEvent(input$run_analysis, {
         stop("No valid parameters found for BE analysis. Check NCA results and parameter names.")
       }
       
-      cat(sprintf("📊 Analyzing %s design with %d subjects, %d valid parameters\n", 
-                  study_design, length(unique(be_data$Subject)), length(valid_params)))
-      
+      bioeq_log(sprintf("Analyzing %s design with %d subjects, %d valid parameters",
+                        study_design, length(unique(be_data$Subject)), length(valid_params)), "DEBUG")
+
       # Use the new BE analysis routing system
       be_analysis_result <- perform_be_analysis_by_type(
         data = be_data,
@@ -1395,40 +1374,55 @@ observeEvent(input$run_analysis, {
           length(anova_results$anova_results) > 0) {
         values$anova_results <- anova_results
         values$be_results$anova_results <- anova_results
-        cat(sprintf("[INFO] ✅ ANOVA tab will display simple_anova results (%d parameters)\n",
-                    length(anova_results$anova_results)))
+        bioeq_log(sprintf("ANOVA tab will display simple_anova results (%d parameters)",
+                          length(anova_results$anova_results)), "DEBUG")
       } else if (!is.null(be_analysis_result$anova_results) &&
                  length(be_analysis_result$anova_results) > 0) {
         # Fallback: use whatever the BE engine returned (e.g. replicateBE-derived)
         values$anova_results <- be_analysis_result$anova_results
-        cat(sprintf("[INFO] ⚠️  Falling back to BE-engine ANOVA results (%s)\n",
-                    analysis_config$be_analysis_type))
+        bioeq_log(sprintf("Falling back to BE-engine ANOVA results (%s)", analysis_config$be_analysis_type), "WARNING")
       } else {
-        cat("[WARNING] ⚠️  No ANOVA results available from either source\n")
+        bioeq_log("No ANOVA results available from either source", "WARNING")
       }
-      
-      cat("✅ Bioequivalence Analysis Completed Successfully!\n")
-      
-      # Log results summary
-      if (!is.null(be_analysis_result$confidence_intervals)) {
-        cat("📋 Confidence Intervals Generated:\n")
-        for (param in names(be_analysis_result$confidence_intervals)) {
-          ci <- be_analysis_result$confidence_intervals[[param]]
-          cat(sprintf("  %s: %.2f%% [%.2f%%, %.2f%%]\n", 
-                      param, ci$point_estimate, ci$ci_lower, ci$ci_upper))
+
+      .phase <- .phase + 1L
+      bioeq_phase(.phase, .n_phases, "BE assessment",
+                  sprintf("%d parameters", length(be_analysis_result$confidence_intervals %||% list())))
+
+      # Best-effort Reference/Test intra-subject CV% for the summary's one
+      # line display. compute_reference_anova_variance() (R/simple_anova.R)
+      # requires Treatment coded as literal "R"/"T" (not "Reference"/"Test"),
+      # so recode a throwaway copy of be_data just for this - never touches
+      # be_data/be_analysis_result itself. This is a reporting nicety, not
+      # part of the analysis, so any failure here just means the summary
+      # falls back to its own pooled-MSE approximation - never surfaced as
+      # an analysis error.
+      ref_test_cv <- tryCatch({
+        first_param <- names(be_analysis_result$confidence_intervals)[1]
+        if (!is.null(first_param) && !is.null(be_data) &&
+            all(c("Treatment", first_param) %in% names(be_data))) {
+          rt_data <- be_data
+          rt_data$Treatment <- ifelse(rt_data$Treatment %in% c("Reference", "R"), "R",
+                                ifelse(rt_data$Treatment %in% c("Test", "T"), "T", rt_data$Treatment))
+          rv <- compute_reference_anova_variance(rt_data, first_param)
+          if (!is.null(rv$cv_wR) && !is.na(rv$cv_wR)) list(ref = rv$cv_wR, test = rv$cv_wT) else NULL
+        } else {
+          NULL
         }
-      }
-      
-      if (!is.null(be_analysis_result$be_conclusions)) {
-        be_count <- sum(unlist(be_analysis_result$be_conclusions), na.rm = TRUE)
-        total_count <- length(be_analysis_result$be_conclusions)
-        cat(sprintf("🎯 Bioequivalence: %d of %d parameters meet criteria\n", 
-                    be_count, total_count))
-      }
-      
+      }, error = function(e) NULL)
+
+      # The one user-facing report for this whole run - see
+      # R/analysis_summary.R for why this uses cat() rather than bioeq_log().
+      print_be_analysis_summary(
+        result      = be_analysis_result,
+        elapsed_sec = proc.time()[["elapsed"]] - .bioeq_t0,
+        config      = analysis_config,
+        ref_test_cv = ref_test_cv
+      )
+
     }, error = function(e) {
-      cat(sprintf("❌ Error in BE Analysis: %s\n", e$message))
-      
+      bioeq_log(sprintf("Error in BE Analysis: %s", e$message), "ERROR")
+
       # Create fallback mock results in case of error - PRESERVE ANOVA RESULTS
       values$be_results <- list(
         error = paste("BE Analysis failed:", e$message),
@@ -1456,7 +1450,7 @@ observeEvent(input$run_analysis, {
   
   }, error = function(e) {
     # Handle any unexpected errors during analysis
-    cat(sprintf("❌ Unexpected error during analysis: %s\n", e$message))
+    bioeq_log(sprintf("Unexpected error during analysis: %s", e$message), "ERROR")
     
     # Hide progress indicator
     shinyjs::hide("analysis_progress")

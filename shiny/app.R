@@ -173,6 +173,16 @@ tryCatch({
 .source_R("validation_runner.R")         # Black-box validation engine
 .source_R("anomaly_detection.R")         # Fraud / anomaly detection analytics
 .source_R("randomization.R")             # Randomization engine
+.source_R("analysis_summary.R")          # Console summary report + phase-line helper
+
+# Console diagnostics are routed through bioeq_log(..., "DEBUG") (R/bioeq_main.R)
+# and hidden at the default log_level ("INFO") - see bioeq_debug_on()/
+# bioeq_debug_off(). Set BIOEQ_LOG_LEVEL=DEBUG in the environment before
+# launching to bring them back without touching code, e.g. for a support
+# session: `BIOEQ_LOG_LEVEL=DEBUG R -e "shiny::runApp('shiny')"`.
+if (nzchar(Sys.getenv("BIOEQ_LOG_LEVEL"))) {
+  set_bioeq_config("log_level", toupper(Sys.getenv("BIOEQ_LOG_LEVEL")))
+}
 
 # Source report generation utilities
 source("utils/sas_style_report.R", local = TRUE)

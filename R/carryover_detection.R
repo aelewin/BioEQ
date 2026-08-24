@@ -18,10 +18,6 @@
 #' 
 detect_carryover <- function(data, threshold = 5, exclude_subjects = TRUE) {
   
-  cat("\n========================================\n")
-  cat("🔍 ICH M13A Carryover Detection\n")
-  cat("========================================\n")
-  
   # Standardize column names if needed (do this FIRST)
   # Handle multiple possible column name variations
   if ("subject" %in% names(data) && !"Subject" %in% names(data)) {
@@ -61,22 +57,16 @@ detect_carryover <- function(data, threshold = 5, exclude_subjects = TRUE) {
     names(data)[names(data) == "DV"] <- "Concentration"
   }
   
-  # Print available columns for debugging
-  cat("Available columns:", paste(names(data), collapse = ", "), "\n")
-  
+  bioeq_log(sprintf("Available columns: %s", paste(names(data), collapse = ", ")), "DEBUG")
+
   # Ensure required columns exist (after standardization)
   required_cols <- c("Subject", "Period", "Time", "Concentration")
   missing_cols <- setdiff(required_cols, names(data))
   if (length(missing_cols) > 0) {
-    cat("Missing columns:", paste(missing_cols, collapse = ", "), "\n")
-    cat("Available columns:", paste(names(data), collapse = ", "), "\n")
-    
     # Special handling for missing Period column
     if ("Period" %in% missing_cols) {
-      cat("⚠️  Period column is missing. Carryover detection requires multiple periods.\n")
-      cat("ℹ️  This appears to be single-period or parallel study data.\n")
-      cat("ℹ️  Carryover detection is not applicable for this study design.\n")
-      
+      bioeq_log("Period column is missing - carryover detection is not applicable for single-period/parallel study data", "DEBUG")
+
       return(list(
         data = data,
         carryover_summary = "Period column missing - carryover detection not applicable for single-period studies",
@@ -103,15 +93,14 @@ detect_carryover <- function(data, threshold = 5, exclude_subjects = TRUE) {
   subjects <- unique(data$Subject)
   periods <- sort(unique(data$Period))
   
-  cat(sprintf("📊 Analyzing %d subjects across %d periods\n", 
-              length(subjects), length(periods)))
-  cat(sprintf("⚠️  Carryover threshold: %.1f%% of Cmax\n\n", threshold))
-  
+  bioeq_log(sprintf("Analyzing %d subjects across %d periods, threshold %.1f%% of Cmax",
+                     length(subjects), length(periods), threshold), "DEBUG")
+
   # Only check Period 2 and higher (no carryover possible in Period 1)
   check_periods <- periods[periods > 1]
-  
+
   if (length(check_periods) == 0) {
-    cat("ℹ️  Single period study - no carryover assessment needed\n")
+    bioeq_log("Single period study - no carryover assessment needed", "DEBUG")
     return(list(
       data = data,
       carryover_summary = "Single period study - no carryover possible",
@@ -133,7 +122,7 @@ detect_carryover <- function(data, threshold = 5, exclude_subjects = TRUE) {
       predose_rows <- subj_period_data[subj_period_data$Time == 0, ]
       
       if (nrow(predose_rows) == 0) {
-        cat(sprintf("⚠️  Subject %s Period %d: No pre-dose sample found\n", subj, per))
+        bioeq_log(sprintf("Subject %s Period %d: no pre-dose sample found - skipping", subj, per), "WARNING")
         next
       }
       
@@ -157,7 +146,7 @@ detect_carryover <- function(data, threshold = 5, exclude_subjects = TRUE) {
       post_dose_data <- subj_period_data[subj_period_data$Time > 0, ]
       
       if (nrow(post_dose_data) == 0) {
-        cat(sprintf("⚠️  Subject %s Period %d: No post-dose samples\n", subj, per))
+        bioeq_log(sprintf("Subject %s Period %d: no post-dose samples - skipping", subj, per), "WARNING")
         next
       }
       
@@ -185,11 +174,8 @@ detect_carryover <- function(data, threshold = 5, exclude_subjects = TRUE) {
       # Track subjects with significant carryover
       if (carryover_detected) {
         subjects_with_carryover <- unique(c(subjects_with_carryover, subj))
-        cat(sprintf("❌ Subject %s Period %d: CARRYOVER DETECTED (%.2f%% of Cmax)\n", 
-                   subj, per, percent_of_cmax))
-      } else if (predose_conc > 0) {
-        cat(sprintf("✅ Subject %s Period %d: No carryover (%.2f%% of Cmax)\n", 
-                   subj, per, percent_of_cmax))
+        bioeq_log(sprintf("Subject %s Period %d: CARRYOVER DETECTED (%.2f%% of Cmax)",
+                          subj, per, percent_of_cmax), "WARNING")
       }
     }
   }
@@ -215,14 +201,13 @@ detect_carryover <- function(data, threshold = 5, exclude_subjects = TRUE) {
   
   # Prepare final data
   if (exclude_subjects && length(subjects_with_carryover) > 0) {
-    cat(sprintf("\n⚠️  Excluding %d subjects with carryover: %s\n", 
-               length(subjects_with_carryover), 
-               paste(subjects_with_carryover, collapse = ", ")))
-    
+    bioeq_log(sprintf("Excluding %d subjects with carryover: %s",
+                      length(subjects_with_carryover),
+                      paste(subjects_with_carryover, collapse = ", ")), "WARNING")
+
     cleaned_data <- data[!data$Subject %in% subjects_with_carryover, ]
-    
-    cat(sprintf("📊 Data reduced from %d to %d observations\n", 
-               nrow(data), nrow(cleaned_data)))
+
+    bioeq_log(sprintf("Data reduced from %d to %d observations", nrow(data), nrow(cleaned_data)), "DEBUG")
   } else {
     cleaned_data <- data
   }
@@ -239,10 +224,8 @@ detect_carryover <- function(data, threshold = 5, exclude_subjects = TRUE) {
            "None")
   )
   
-  cat("\n========================================\n")
-  cat(carryover_summary)
-  cat("\n========================================\n")
-  
+  bioeq_log(carryover_summary, "DEBUG")
+
   return(list(
     data = cleaned_data,
     carryover_summary = carryover_summary,

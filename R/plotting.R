@@ -421,7 +421,7 @@ create_individual_concentration_plot <- function(data, selected_subjects = NULL,
     return(p)
     
   }, error = function(e) {
-    cat("Error in create_individual_concentration_plot:", e$message, "\n")
+    bioeq_log(sprintf("Error in create_individual_concentration_plot: %s", e$message), "ERROR")
     stop(paste("Failed to create individual concentration plot:", e$message))
   })
 }
@@ -1074,9 +1074,10 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     ln_param <- paste0("ln", parameter)
     if (ln_param %in% names(data)) {
       param_name <- ln_param
-      cat("Using log-transformed parameter:", ln_param, "\n")
+      bioeq_log(sprintf("Using log-transformed parameter: %s", ln_param), "DEBUG")
     } else {
-      cat("Available columns:", paste(names(data), collapse = ", "), "\n")
+      bioeq_log(sprintf("Parameter not found: %s or %s - available columns: %s",
+                        parameter, ln_param, paste(names(data), collapse = ", ")), "ERROR")
       stop("Parameter not found: ", parameter, " or ", ln_param)
     }
   }
@@ -1090,7 +1091,7 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     # Get unique combinations (removes duplicate rows from concentration-time data)
     distinct(subject, treatment, .keep_all = TRUE)
   
-  cat("PK data after selecting unique combinations:", nrow(pk_data), "rows\n")
+  bioeq_log(sprintf("PK data after selecting unique combinations: %d rows", nrow(pk_data)), "DEBUG")
   
   # Convert to wide format: one row per subject with Test and Reference columns
   tr_data <- pk_data %>%
@@ -1101,8 +1102,8 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     ) %>%
     filter(!is.na(Test), !is.na(Reference))
   
-  cat("T/R data after reshaping:", nrow(tr_data), "subjects\n")
-  
+  bioeq_log(sprintf("T/R data after reshaping: %d subjects", nrow(tr_data)), "DEBUG")
+
   # Handle log-transformed data
   if (grepl("^ln", param_name)) {
     tr_data <- tr_data %>%
@@ -1111,11 +1112,11 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
         Ref_orig = exp(Reference),
         TR_Ratio = (Test_orig / Ref_orig) * 100
       )
-    cat("Used log-transformed data, converted to original scale\n")
+    bioeq_log("Used log-transformed data, converted to original scale", "DEBUG")
   } else {
     tr_data <- tr_data %>%
       mutate(TR_Ratio = (Test / Reference) * 100)
-    cat("Used original scale data\n")
+    bioeq_log("Used original scale data", "DEBUG")
   }
   
   # Apply subject ordering (preserve numerical ordering) - INCLUDE ALL SUBJECTS
@@ -1140,20 +1141,18 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     tr_data <- tr_data %>%
       arrange(match(subject_numeric, final_order))
     
-    cat("Final subject order:", paste(final_order, collapse = ", "), "\n")
-    cat("Subjects after ordering:", paste(tr_data$subject_numeric, collapse = ", "), "\n")
+    bioeq_log(sprintf("Final subject order: %s", paste(final_order, collapse = ", ")), "DEBUG")
   } else {
     # Default: order ALL subjects numerically
     tr_data <- tr_data %>%
       arrange(subject_numeric)
-    
-    cat("Subjects ordered numerically:", paste(tr_data$subject_numeric, collapse = ", "), "\n")
   }
-  
+
   # Add plotting position
   tr_data$plot_position <- 1:nrow(tr_data)
-  
-  cat("Final plot data:", nrow(tr_data), "subjects\n")
+
+  bioeq_log(sprintf("Final plot data: %d subjects (order: %s)",
+                    nrow(tr_data), paste(tr_data$subject_numeric, collapse = ", ")), "DEBUG")
   
   if (nrow(tr_data) == 0) {
     stop("No data available for plotting after filtering")
@@ -1187,7 +1186,7 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
       plot.title = element_text(hjust = 0.5)
     )
   
-  cat("Plot created successfully\n")
+  bioeq_log("Plot created successfully", "DEBUG")
   return(p)
 }
 

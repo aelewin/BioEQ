@@ -104,6 +104,26 @@ bioeq_log <- function(message, level = "INFO", use_emoji = NULL) {
   cat(prefix, message, "\n", sep = "")
 }
 
+#' Turn on DEBUG-level console logging
+#'
+#' The analysis pipeline routes internal diagnostics (column mappings, model
+#' fit internals, per-parameter variable checks, etc.) through bioeq_log(...,
+#' "DEBUG"), which is silent at the default log_level ("INFO"). Call this to
+#' bring those diagnostics back when troubleshooting; call bioeq_debug_off()
+#' to return to the quiet default.
+#' @export
+bioeq_debug_on <- function() {
+  set_bioeq_config("log_level", "DEBUG")
+  invisible(TRUE)
+}
+
+#' Turn off DEBUG-level console logging (back to the default)
+#' @export
+bioeq_debug_off <- function() {
+  set_bioeq_config("log_level", "INFO")
+  invisible(TRUE)
+}
+
 #' Progress Bar Helper
 #' @param total Total number of steps
 #' @param title Progress bar title
