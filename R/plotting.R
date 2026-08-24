@@ -473,29 +473,31 @@ plot_concentration_time_static <- function(data, log_scale = FALSE, individual =
   }
   
   if (mean_profile) {
+    # Group by NOMINAL time (see .derive_nominal_time()), not the exact
+    # recorded Time - actual-vs-planned sampling deviations otherwise
+    # fragment the mean into spurious near-duplicate points. Individual
+    # profiles above intentionally keep the exact actual Time.
+    nominal_map <- .derive_nominal_time(data$Time)
+    data$NominalTime <- unname(nominal_map[as.character(data$Time)])
+
     mean_data <- data %>%
-      group_by(Time, Treatment) %>%
+      group_by(NominalTime, Treatment) %>%
       summarise(
         Mean_Conc = mean(Concentration, na.rm = TRUE),
-        SE = sd(Concentration, na.rm = TRUE) / sqrt(n()),
         .groups = 'drop'
       )
-    
-    p <- p + geom_line(data = mean_data, aes(x = Time, y = Mean_Conc), linewidth = 1.2)
-    p <- p + geom_point(data = mean_data, aes(x = Time, y = Mean_Conc), size = 2)
-    p <- p + geom_errorbar(data = mean_data, 
-                          aes(x = Time, y = Mean_Conc, 
-                              ymin = Mean_Conc - SE, ymax = Mean_Conc + SE),
-                          width = 0.1, alpha = 0.7)
+
+    p <- p + geom_line(data = mean_data, aes(x = NominalTime, y = Mean_Conc), linewidth = 1.2)
+    p <- p + geom_point(data = mean_data, aes(x = NominalTime, y = Mean_Conc), size = 2)
   }
-  
+
   # Get user-specified units from global options if available
   concentration_label <- getOption("bioeq.concentration.label", "Concentration (ng/mL)")
   time_label <- getOption("bioeq.time.label", "Time (h)")
-  
+
   if (log_scale) {
     p <- p + scale_y_log10()
-    p <- p + labs(y = paste0(gsub(" \\(.*\\)", "", concentration_label), " (log scale)"))
+    p <- p + labs(y = paste0(gsub(" \\(.*\\)", "", concentration_label), " (natural log scale)"))
   } else {
     p <- p + labs(y = concentration_label)
   }
@@ -600,12 +602,18 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
   }
 
   if (mean_profile) {
-    # Mean profiles always by Treatment (T/R overall — all replicates pooled)
+    # Mean profiles always by Treatment (T/R overall — all replicates pooled).
+    # Group by NOMINAL time (see .derive_nominal_time()), not the exact
+    # recorded Time - actual-vs-planned sampling deviations otherwise
+    # fragment the mean into spurious near-duplicate points. Individual
+    # traces above intentionally keep the exact actual Time.
+    nominal_map <- .derive_nominal_time(data$Time)
+    data$NominalTime <- unname(nominal_map[as.character(data$Time)])
+
     mean_data <- data %>%
-      group_by(Time, Treatment) %>%
+      group_by(NominalTime, Treatment) %>%
       summarise(
         Mean_Conc = mean(Concentration, na.rm = TRUE),
-        SE        = sd(Concentration,   na.rm = TRUE) / sqrt(n()),
         N         = n(),
         .groups   = 'drop'
       )
@@ -616,15 +624,8 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
       if (is.na(color_val)) color_val <- "#1F78B4"
 
       p <- p %>% add_trace(
-        x = form_data$Time,
+        x = form_data$NominalTime,
         y = form_data$Mean_Conc,
-        error_y = list(
-          type      = "data",
-          array     = form_data$SE,
-          color     = color_val,
-          thickness = 2,
-          width     = 3
-        ),
         type = "scatter", mode = "lines+markers",
         line   = list(color = color_val, width = 3),
         marker = list(color = color_val, size  = 8),
@@ -647,8 +648,8 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
   concentration_label <- getOption("bioeq.concentration.label", "Concentration")
   time_label <- getOption("bioeq.time.label", "Time")
   
-  y_title <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (log scale)") else concentration_label
-  
+  y_title <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (natural log scale)") else concentration_label
+
   p <- p %>% layout(
     title = list(
       text = "Concentration-Time Profiles",
@@ -1377,6 +1378,192 @@ create_lambda_z_regression_plots <- function(conc_data, nca_subject_data,
       axis.title = element_text(size = 9),
       plot.margin = margin(5, 5, 5, 5)
     )
-  
+
   return(p)
+}
+
+# =============================================================================
+# PLOT EXPORT HELPERS (Exports & Reports "Plot Exports (PDF)" card)
+# =============================================================================
+
+#' Prepare uploaded concentration-time data for the static export plots below:
+#' standardizes column names, maps Treatment T/R -> Test/Reference (needed for
+#' BIOEQ_COLORS lookups), and derives a TreatmentPeriod (T1/T2/R1/R2) label
+#' for replicate designs (>2 periods). This mirrors, line-for-line, the
+#' preprocessing block inside shiny/server/plots_server.R's generate_all_plots()
+#' reactive - kept as a separate function here (rather than refactoring that
+#' reactive) so the export handlers can reuse it without touching the live
+#' interactive Plots tab.
+#' @keywords internal
+.prepare_plot_data_for_export <- function(conc_data) {
+  col_mapping <- list(
+    "Time" = c("time", "Time", "TIME"),
+    "Concentration" = c("concentration", "Concentration", "CONCENTRATION", "conc", "Conc"),
+    "Subject" = c("subject", "Subject", "SUBJECT", "subj", "Subj", "ID", "id"),
+    "Treatment" = c("treatment", "Treatment", "TREATMENT", "formulation", "FORMULATION", "trt", "Trt")
+  )
+  data <- conc_data
+  for (std_name in names(col_mapping)) {
+    found <- intersect(col_mapping[[std_name]], names(conc_data))
+    if (length(found) > 0) names(data)[names(data) == found[1]] <- std_name
+  }
+
+  if ("Treatment" %in% names(data)) {
+    data$Treatment <- ifelse(data$Treatment == "T", "Test",
+                       ifelse(data$Treatment == "R", "Reference", data$Treatment))
+  }
+
+  if ("Period" %in% names(data) && length(unique(data$Period)) > 2) {
+    if ("Sequence" %in% names(data)) {
+      tp_map <- data %>%
+        dplyr::distinct(Sequence, Treatment, Period) %>%
+        dplyr::arrange(Sequence, Treatment, as.numeric(Period)) %>%
+        dplyr::group_by(Sequence, Treatment) %>%
+        dplyr::mutate(rep_num = dplyr::row_number()) %>%
+        dplyr::ungroup() %>%
+        dplyr::mutate(TreatmentPeriod = paste0(ifelse(Treatment == "Test", "T", "R"), rep_num)) %>%
+        dplyr::select(Sequence, Treatment, Period, TreatmentPeriod)
+      data <- dplyr::left_join(data, tp_map, by = c("Sequence", "Treatment", "Period"))
+    } else {
+      tp_map <- data %>%
+        dplyr::distinct(Treatment, Period) %>%
+        dplyr::arrange(Treatment, as.numeric(Period)) %>%
+        dplyr::group_by(Treatment) %>%
+        dplyr::mutate(rep_num = dplyr::row_number()) %>%
+        dplyr::ungroup() %>%
+        dplyr::mutate(TreatmentPeriod = paste0(ifelse(Treatment == "Test", "T", "R"), rep_num)) %>%
+        dplyr::select(Treatment, Period, TreatmentPeriod)
+      data <- dplyr::left_join(data, tp_map, by = c("Treatment", "Period"))
+    }
+  }
+
+  data
+}
+
+#' Derive a "nominal time" for mean-profile grouping from a vector of actual
+#' recorded sampling times. Real BE data often has a handful of points where
+#' the recorded time is the ACTUAL draw time rather than the planned/nominal
+#' one (e.g. 1.267 instead of 1.25, 4.351 instead of 4.334) - grouping a mean
+#' profile by exact Time then fragments each nominal timepoint into several
+#' near-singleton groups, producing a jagged/spiky mean line. There is no
+#' separate planned-time column in BioEQ's schema, so this reconstructs the
+#' nominal schedule from the data itself: distinct times within `tol` of each
+#' other (default 0.05h = 3 min - comfortably above realistic actual-time
+#' deviations, comfortably below the tightest real nominal spacing seen in
+#' practice, e.g. 15 min) are merged into one cluster, and each cluster's
+#' representative nominal time is whichever exact value occurs most often
+#' across the dataset (the value the majority of subjects actually hit).
+#' @param time_values Numeric vector of recorded times (with duplicates)
+#' @param tol Merge tolerance in the same units as `time_values` (hours)
+#' @return named numeric vector: as.character(actual time) -> nominal time
+#' @keywords internal
+.derive_nominal_time <- function(time_values, tol = 0.05) {
+  time_values <- time_values[!is.na(time_values)]
+  freq <- table(time_values)
+  u <- sort(unique(time_values))
+  if (length(u) <= 1) return(setNames(u, as.character(u)))
+
+  cluster_id <- cumsum(c(1L, diff(u) > tol))
+  nominal_by_cluster <- vapply(split(u, cluster_id), function(vals) {
+    counts <- freq[as.character(vals)]
+    as.numeric(names(counts)[which.max(counts)])
+  }, numeric(1))
+
+  lookup <- nominal_by_cluster[as.character(cluster_id)]
+  setNames(unname(lookup), as.character(u))
+}
+
+#' Build one or two static mean concentration-time profile plots for export.
+#' Always returns a pooled Test-vs-Reference mean plot. If `data` carries a
+#' TreatmentPeriod column (added by .prepare_plot_data_for_export() for
+#' replicate designs), also returns a second plot split by T1/T2/R1/R2.
+#' Points are grouped by NOMINAL time (see .derive_nominal_time()), not the
+#' exact recorded Time, so that actual-vs-planned sampling deviations don't
+#' fragment the mean into spurious near-duplicate points. Individual subject
+#' profiles (plot_individual_profiles_paginated()) intentionally keep the
+#' exact actual Time - only the mean is nominal-time-binned. No error
+#' bars/CI are drawn - just the mean line, to keep the plot readable.
+#' @param data Concentration-time data, already run through
+#'   .prepare_plot_data_for_export()
+#' @param log_scale Logical, whether to use natural log scale for concentration
+#' @param nominal_tol Merge tolerance (hours) for deriving nominal time - see
+#'   .derive_nominal_time()
+#' @return list of 1-2 ggplot objects, each a full standalone page
+#' @export
+plot_mean_profiles_export <- function(data, log_scale = FALSE, nominal_tol = 0.05) {
+  concentration_label <- getOption("bioeq.concentration.label", "Concentration (ng/mL)")
+  time_label <- getOption("bioeq.time.label", "Time (h)")
+  y_lab <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (natural log scale)") else concentration_label
+
+  nominal_map <- .derive_nominal_time(data$Time, tol = nominal_tol)
+  data$NominalTime <- unname(nominal_map[as.character(data$Time)])
+
+  build_one <- function(group_col, title_suffix) {
+    mean_data <- data %>%
+      dplyr::group_by(.data[[group_col]], NominalTime) %>%
+      dplyr::summarise(
+        Mean_Conc = mean(Concentration, na.rm = TRUE),
+        .groups = "drop"
+      )
+    names(mean_data)[names(mean_data) == group_col] <- "Group"
+    color_vals <- BIOEQ_COLORS[intersect(names(BIOEQ_COLORS), unique(mean_data$Group))]
+
+    p <- ggplot(mean_data, aes(x = NominalTime, y = Mean_Conc, color = Group)) +
+      geom_line(linewidth = 1.2) +
+      geom_point(size = 2) +
+      scale_color_manual(values = color_vals, name = NULL) +
+      labs(x = time_label, y = y_lab,
+           title = paste("Mean Concentration-Time Profile", title_suffix)) +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            plot.margin = margin(t = 10, r = 10, b = 40, l = 10, unit = "pt"))
+    if (log_scale) p <- p + scale_y_log10()
+    p
+  }
+
+  plots <- list(build_one("Treatment", "(Test vs. Reference, all periods pooled)"))
+  if ("TreatmentPeriod" %in% names(data) && !all(is.na(data$TreatmentPeriod))) {
+    plots[[length(plots) + 1]] <- build_one("TreatmentPeriod", "(T1 / T2 / R1 / R2)")
+  }
+  plots
+}
+
+#' Build one full-page ggplot per subject (not faceted/grouped with other
+#' subjects onto a shared page). Colors by TreatmentPeriod (T1/T2/R1/R2) when
+#' present (replicate design), else by Treatment (Test/Reference). Individual
+#' profiles intentionally keep the exact actual Time (see
+#' plot_mean_profiles_export(), which bins the mean to nominal time instead).
+#' @param data Concentration-time data, already run through
+#'   .prepare_plot_data_for_export()
+#' @param log_scale Logical, whether to use natural log scale for concentration
+#' @return list of ggplot objects, one per subject, one subject per page
+#' @export
+plot_individual_profiles_paginated <- function(data, log_scale = FALSE) {
+  concentration_label <- getOption("bioeq.concentration.label", "Concentration (ng/mL)")
+  time_label <- getOption("bioeq.time.label", "Time (h)")
+  y_lab <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (natural log scale)") else concentration_label
+
+  has_tp <- "TreatmentPeriod" %in% names(data) && !all(is.na(data$TreatmentPeriod))
+  color_col <- if (has_tp) "TreatmentPeriod" else "Treatment"
+
+  subjects <- unique(data$Subject)
+  subj_sort_key <- suppressWarnings(as.numeric(as.character(subjects)))
+  subjects <- if (!anyNA(subj_sort_key)) subjects[order(subj_sort_key)] else sort(subjects)
+
+  lapply(subjects, function(subj) {
+    subj_data <- data[data$Subject == subj, ]
+    color_vals <- BIOEQ_COLORS[intersect(names(BIOEQ_COLORS), unique(subj_data[[color_col]]))]
+
+    p <- ggplot(subj_data, aes(x = Time, y = Concentration, color = .data[[color_col]])) +
+      geom_line(linewidth = 0.8) +
+      geom_point(size = 1.5) +
+      scale_color_manual(values = color_vals, name = NULL) +
+      labs(x = time_label, y = y_lab,
+           title = paste("Individual Subject Profile - Subject", subj)) +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            plot.margin = margin(t = 10, r = 10, b = 40, l = 10, unit = "pt"))
+    if (log_scale) p <- p + scale_y_log10()
+    p
+  })
 }

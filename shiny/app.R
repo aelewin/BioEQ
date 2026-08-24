@@ -1712,7 +1712,118 @@ server <- function(input, output, session) {
     }
   )
 
-  # ── 6. SAS-style Bioequivalence Analysis Report (HTML) ──
+  # ── 6. Missing Data Handling Log ──
+  output$download_missing_data_log <- downloadHandler(
+    filename = function() paste0("missing_data_log_", Sys.Date(), ".csv"),
+    content = function(file) {
+      log_df <- values$missing_data_log
+      if (is.null(log_df) || nrow(log_df) == 0) {
+        log_df <- data.frame(Note = "No missing/BLQ data points were imputed or removed in this analysis.",
+                             stringsAsFactors = FALSE)
+      }
+      meta <- build_metadata("Missing Data Handling Log")
+      meta <- c(meta,
+                paste0("Middle-Point Method: ", values$analysis_config$missing_data_middle %||% "Unknown"),
+                paste0("Terminal-Point Method: ", values$analysis_config$missing_data_terminal %||% "Unknown"))
+      write_export_csv(log_df, file, meta)
+      showNotification("Missing data log exported.", type = "message")
+    }
+  )
+
+  # ── 7. Carryover Detection Summary ──
+  output$download_carryover_summary <- downloadHandler(
+    filename = function() paste0("carryover_summary_", Sys.Date(), ".csv"),
+    content = function(file) {
+      co <- values$carryover_results
+      details_df <- co$carryover_details %||% co$carryover_data
+      if (is.null(details_df) || nrow(details_df) == 0) {
+        details_df <- data.frame(Note = "Carryover detection was not performed, or no periods were eligible for assessment (e.g. parallel design / no Period > 1 data).",
+                                 stringsAsFactors = FALSE)
+      }
+      meta <- build_metadata("Carryover Detection Summary")
+      meta <- c(meta,
+                paste0("Threshold (% of Cmax): ", values$analysis_config$carryover_threshold %||% "Unknown"),
+                paste0("Subjects Excluded: ", co$n_excluded_subjects %||% 0))
+      write_export_csv(details_df, file, meta)
+      showNotification("Carryover summary exported.", type = "message")
+    }
+  )
+
+  # ── 9. Concentration-Time Profile Plots (PDF) ──
+  # Mean profile page(s) (pooled T/R, plus T1/T2/R1/R2 for replicate designs),
+  # followed by one full page per individual subject - each plot gets its own
+  # page, nothing is combined onto a shared grid. Linear scale first, then the
+  # same set again on a natural log scale.
+  output$download_concentration_profiles_pdf <- downloadHandler(
+    filename = function() paste0("concentration_time_profiles_", Sys.Date(), ".pdf"),
+    content = function(file) {
+      req(values$uploaded_data)
+      raw <- values$uploaded_data
+      has_conc_time <- any(c("time", "Time", "TIME") %in% names(raw)) &&
+        any(c("concentration", "Concentration", "CONCENTRATION", "conc", "Conc") %in% names(raw))
+
+      grDevices::pdf(file, width = 11, height = 8.5)
+      on.exit(grDevices::dev.off(), add = TRUE)
+
+      if (!has_conc_time) {
+        plot.new()
+        text(0.5, 0.5, paste(
+          "Concentration-time profile plots are not available:",
+          "this analysis was run from pre-calculated PK parameters",
+          "(no raw concentration-time data to plot).", sep = "\n"))
+      } else {
+        plot_data <- .prepare_plot_data_for_export(raw)
+        for (log_scale in c(FALSE, TRUE)) {
+          for (p in plot_mean_profiles_export(plot_data, log_scale = log_scale)) print(p)
+          for (p in plot_individual_profiles_paginated(plot_data, log_scale = log_scale)) print(p)
+        }
+      }
+      showNotification("Concentration-time profile plots exported.", type = "message")
+    }
+  )
+
+  # ── 10. Lambda Z Regression Plots (PDF) ──
+  # Reuses create_lambda_z_regression_plots() verbatim - the exact function
+  # and data sources (raw uploaded_data + nca_results$subject_data) already
+  # driving the live "Lambda Z Regression" tab - paginated the same way.
+  output$download_lambda_z_plots_pdf <- downloadHandler(
+    filename = function() paste0("lambda_z_regression_plots_", Sys.Date(), ".pdf"),
+    content = function(file) {
+      req(values$nca_results, values$uploaded_data)
+      nca_res <- values$nca_results
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data)
+
+      grDevices::pdf(file, width = 11, height = 8.5)
+      on.exit(grDevices::dev.off(), add = TRUE)
+
+      if (is.null(subject_data) || !("lambda_z_terminal_times" %in% names(subject_data))) {
+        plot.new()
+        text(0.5, 0.5, "No lambda_z terminal-phase data available for this analysis.")
+      } else {
+        subject_data <- subject_data[order(suppressWarnings(as.numeric(as.character(subject_data$Subject)))), ]
+        subjects <- unique(as.character(subject_data$Subject))
+        per_page <- 8
+        n_pages <- max(1, ceiling(length(subjects) / per_page))
+        for (page in seq_len(n_pages)) {
+          start <- (page - 1) * per_page + 1
+          end <- min(page * per_page, length(subjects))
+          page_subjects <- subjects[start:end]
+          page_subject_data <- subject_data[subject_data$Subject %in% page_subjects, ]
+          p <- create_lambda_z_regression_plots(
+            conc_data = values$uploaded_data,
+            nca_subject_data = page_subject_data,
+            subjects = page_subjects,
+            ncol = 4
+          )
+          print(p)
+        }
+      }
+      showNotification("Lambda Z regression plots exported.", type = "message")
+    }
+  )
+
+  # ── 8. SAS-style Bioequivalence Analysis Report (HTML) ──
   output$download_sas_style_report <- downloadHandler(
     filename = function() paste0("BioEQ_BE_Report_", Sys.Date(), ".html"),
     content = function(file) {

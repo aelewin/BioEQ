@@ -260,6 +260,19 @@ outputOptions(output, "detected_design_type", suspendWhenHidden = FALSE)
 # perform_rsabe() (which does its own separate, internal auto-selection and
 # ignores this value). Using an unrecognized value here silently breaks that
 # ANOVA table instead of erroring.
+#
+# NOTE: this selectInput deliberately uses its OWN id
+# ("rsabe_anova_model_display"), NOT "anova_model" — it used to reuse
+# "anova_model" (the same id as the ABE/ABEL/parallel model pickers below),
+# with suspendWhenHidden = FALSE forcing it to render on every uploaded_data
+# change regardless of which be_analysis_type tab was actually active. That
+# silently overwrote input$anova_model with RSABE's auto-choice (e.g. "nlme"
+# for a full-replicate dataset) even while the user was on the ABE tab with
+# "Fixed Effects (lm)" visibly selected, so the ABE analysis actually ran
+# mixed-effects until the user manually re-touched the ABE dropdown. Giving
+# this its own id removes the collision; the RSABE-specific value is read out
+# explicitly (input$rsabe_anova_model_display) when assembling analysis_config
+# below, only when be_analysis_type == "RSABE".
 output$rsabe_anova_model_ui <- renderUI({
   rtype <- tryCatch({
     req(values$uploaded_data)
@@ -272,7 +285,7 @@ output$rsabe_anova_model_ui <- renderUI({
   } else {
     list("Fixed Effects (PROC GLM)" = "fixed")
   }
-  selectInput("anova_model", label = NULL, choices = choice, selected = choice[[1]])
+  selectInput("rsabe_anova_model_display", label = NULL, choices = choice, selected = choice[[1]])
 })
 outputOptions(output, "rsabe_anova_model_ui", suspendWhenHidden = FALSE)
 
@@ -588,7 +601,37 @@ observeEvent(input$run_analysis, {
     abel_eligible_params = input$abel_eligible_params %||% c("Cmax"),
     pk_parameters = all_pk_params,
     # ANOVA Configuration
-    anova_model = input$anova_model %||% "fixed",
+    # The "Analysis Model" picker is one of four different selectInputs
+    # depending on design/BE type (parallel-locked / ABE / ABEL / RSABE-
+    # auto), each on its OWN input id - never read input$anova_model here
+    # without checking which picker is actually the one on screen. This used
+    # to be a single shared "anova_model" id reused by all four, which meant
+    # whichever one last fired a change event (including ones the user never
+    # saw, e.g. RSABE's auto-selected value re-rendering on every data
+    # change) silently won, regardless of what was visibly selected. See the
+    # comment on output$rsabe_anova_model_ui above and on each selectInput in
+    # analysis_setup_ui.R's "Step 3: ANOVA Configuration" block.
+    anova_model = {
+      be_type <- input$be_analysis_type %||% "ABE"
+      is_parallel <- tryCatch({
+        req(values$uploaded_data)
+        data <- values$uploaded_data
+        treatments_per_subject <- data %>%
+          group_by(Subject) %>%
+          summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
+        !isTRUE(max(treatments_per_subject$n_treatments, na.rm = TRUE) >= 2)
+      }, error = function(e) FALSE)
+
+      if (is_parallel) {
+        input$anova_model_parallel %||% "fixed"
+      } else if (be_type == "RSABE") {
+        input$rsabe_anova_model_display %||% "fixed"
+      } else if (be_type == "ABEL") {
+        input$anova_model_abel %||% "fixed"
+      } else {
+        input$anova_model %||% "fixed"
+      }
+    },
     random_effects = input$random_effects %||% "(1|subject)",
     # Group Effects Configuration
     include_group_fixed = input$include_group_fixed %||% FALSE,

@@ -477,12 +477,19 @@ tagList(
               
               # ===============================================================
               # PARALLEL DESIGNS: Fixed effects only (all BE types)
+              # NOTE: own id (anova_model_parallel) - this used to reuse
+              # "anova_model" (same id as the ABEL picker below), which meant
+              # both selectInputs existed in the DOM at once and could
+              # silently overwrite each other's value when switching
+              # be_analysis_type without ever touching the visible dropdown.
+              # See the analysis_config$anova_model assembly in
+              # analysis_setup_server.R for how each id is read back out.
               # ===============================================================
               conditionalPanel(
                 condition = "output.study_design_detected && output.detected_design_type == 'parallel'",
                 div(
                   selectInput(
-                    "anova_model",
+                    "anova_model_parallel",
                     label = NULL,
                     choices = list("Fixed Effects (lm)" = "fixed"),
                     selected = "fixed"
@@ -495,6 +502,11 @@ tagList(
               
               # ===============================================================
               # ABE: All four ANOVA model options (our own simple_anova.R)
+              # Keeps the plain "anova_model" id (the Random Effects Structure
+              # and Group Effects conditionalPanels below key off
+              # input.anova_model and are both scoped to be_analysis_type ==
+              # 'ABE' already, so this is the only picker they should ever
+              # reflect).
               # ===============================================================
               conditionalPanel(
                 condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'ABE'",
@@ -517,11 +529,13 @@ tagList(
               # ===============================================================
               # ABEL: Maps to replicateBE Method A (fixed) or Method B (mixed)
               # method.B option: 1=Satterthwaite, 2=nlme/SAS, 3=Kenward-Roger
+              # NOTE: own id (anova_model_abel) - see the parallel-design
+              # panel's comment above for why this can't share "anova_model".
               # ===============================================================
               conditionalPanel(
                 condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'ABEL'",
                 selectInput(
-                  "anova_model",
+                  "anova_model_abel",
                   label = NULL,
                   choices = list(
                     "Method A — Fixed Effects (ANOVA)" = "fixed",

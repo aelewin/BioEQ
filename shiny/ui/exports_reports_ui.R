@@ -161,11 +161,66 @@ fluidPage(
                   "Original uploaded dataset as-is")
               )
             )
+          ),
+
+          fluidRow(
+            # Column 4: Data Handling
+            column(4,
+              div(class = "export-btn-group",
+                h6(icon("filter"), " Data Handling"),
+                downloadButton("download_missing_data_log",
+                  "Missing Data Log",
+                  class = "btn-outline-primary btn-sm export-btn"),
+                tags$small(class = "text-muted d-block", style = "margin: 2px 0 8px 0;",
+                  "Position-aware imputation/removal log (BLQ, middle, terminal)"),
+                downloadButton("download_carryover_summary",
+                  "Carryover Summary",
+                  class = "btn-outline-primary btn-sm export-btn"),
+                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
+                  "Pre-dose vs. Cmax per period, ICH M13A 5% threshold")
+              )
+            )
           )
         )
       )
     ),
-    
+
+    # ── Plot Exports (PDF) ──
+    fluidRow(
+      column(12,
+        div(class = "export-card",
+          h4(icon("chart-line"), " Plot Exports (PDF)"),
+          p(class = "subtitle",
+            "Download the same profile and regression plots shown in the Plots tab, as a printable PDF."),
+          fluidRow(
+            column(6,
+              div(class = "export-btn-group",
+                h6(icon("chart-area"), " Concentration-Time Profiles"),
+                downloadButton("download_concentration_profiles_pdf",
+                  "Concentration-Time Profiles (PDF)",
+                  class = "btn-outline-primary btn-sm export-btn"),
+                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
+                  "Mean profile(s) - Test vs. Reference, plus T1/T2/R1/R2 for replicate designs - ",
+                  "followed by one full page per individual subject. Linear scale, then the ",
+                  "same set again on a natural log scale.")
+              )
+            ),
+            column(6,
+              div(class = "export-btn-group",
+                h6(icon("chart-area"), " Lambda Z Regression"),
+                downloadButton("download_lambda_z_plots_pdf",
+                  "Lambda Z Regression Plots (PDF)",
+                  class = "btn-outline-primary btn-sm export-btn"),
+                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
+                  "Semi-log terminal-phase regression per subject, with the fitted line ",
+                  "and selected terminal points highlighted.")
+              )
+            )
+          )
+        )
+      )
+    ),
+
     # ── Reports ──
     fluidRow(
       column(12,

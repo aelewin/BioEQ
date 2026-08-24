@@ -619,28 +619,28 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
                       `data-toggle` = "tab", "Linear Scale")
               ),
               tags$li(role = "presentation",
-                tags$a(href = paste0("#", ns("conc_log_tab")), 
-                      `aria-controls` = "log", role = "tab", 
-                      `data-toggle` = "tab", "Log Scale")
+                tags$a(href = paste0("#", ns("conc_log_tab")),
+                      `aria-controls` = "log", role = "tab",
+                      `data-toggle` = "tab", "Natural Log Scale")
               )
             ),
             div(class = "tab-content",
-              div(role = "tabpanel", class = "tab-pane active", 
+              div(role = "tabpanel", class = "tab-pane active",
                   id = ns("conc_linear_tab"),
                   if (!is.null(plot_data$linear$plot) && is.null(plot_data$linear$error)) {
                     plotlyOutput(ns("conc_linear_plot"), height = "500px")
                   } else {
-                    div(class = "alert alert-warning", 
+                    div(class = "alert alert-warning",
                         "Linear scale plot not available")
                   }
               ),
-              div(role = "tabpanel", class = "tab-pane", 
+              div(role = "tabpanel", class = "tab-pane",
                   id = ns("conc_log_tab"),
                   if (!is.null(plot_data$log$plot) && is.null(plot_data$log$error)) {
                     plotlyOutput(ns("conc_log_plot"), height = "500px")
                   } else {
-                    div(class = "alert alert-warning", 
-                        "Log scale plot not available")
+                    div(class = "alert alert-warning",
+                        "Natural log scale plot not available")
                   }
               )
             )
