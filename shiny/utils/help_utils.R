@@ -62,11 +62,11 @@ help_texts <- list(
     tooltip = "Method for calculating area under the concentration-time curve",
     title = "AUC Calculation Methods",
     content = div(
+      p("AUC is computed via the ", tags$a(href = "https://cran.r-project.org/package=PKNCA", target = "_blank", "PKNCA"),
+        " package."),
       tags$ul(
-        tags$li(strong("Linear up/Log down:"), " Uses linear trapezoidal rule when concentration is increasing (C₂ ≥ C₁) and log trapezoidal rule when concentration is decreasing (C₂ < C₁). FDA-preferred method."),
-        tags$li(strong("Linear:"), " Uses linear trapezoidal rule throughout, regardless of whether concentrations are increasing or decreasing. EMA-preferred for regulatory submissions."),
-        tags$li(strong("Log:"), " Uses log trapezoidal rule for all consecutive data points where both concentrations are positive. Cannot be used when C₁ or C₂ equals zero."),
-        tags$li(strong("Linear/Log:"), " Uses linear rule up to Cmax (absorption phase), then log rule after Cmax (elimination phase). Suitable for drugs with first-order kinetics.")
+        tags$li(strong("Linear-up/Log-down (Mixed):"), " Uses linear trapezoidal rule when concentration is increasing (C₂ ≥ C₁) and log trapezoidal rule when concentration is decreasing (C₂ < C₁). The standard, FDA-preferred method for most oral/extravascular profiles."),
+        tags$li(strong("Linear:"), " Uses linear trapezoidal rule throughout, regardless of whether concentrations are increasing or decreasing.")
       )
     )
   ),
@@ -75,7 +75,9 @@ help_texts <- list(
     tooltip = "Method for determining terminal elimination rate constant",
     title = "Lambda_z Estimation Methods",
     content = div(
-      p("Lambda_z (λz) is the terminal elimination rate constant, crucial for calculating AUC₀-∞ and half-life. Different methods exist for selecting which data points to use in the log-linear regression:"),
+      p("Lambda_z (λz) is the terminal elimination rate constant, crucial for calculating AUC₀-∞ and half-life. It is estimated via the ",
+        tags$a(href = "https://cran.r-project.org/package=PKNCA", target = "_blank", "PKNCA"),
+        " package's log-linear regression; the methods below control which points enter that regression:"),
       tags$ul(
         tags$li(
           tags$strong("Manual (Fixed points):"), 
@@ -83,11 +85,7 @@ help_texts <- list(
         ),
         tags$li(
           tags$strong("ARS (Adjusted R-squared):"), 
-          " Automatically selects points by maximizing the adjusted R² of the log-linear regression. Starting from the last 3 non-zero concentrations, it iteratively adds earlier points as long as the adjusted R² improves. Balances goodness-of-fit with the number of points included."
-        ),
-        tags$li(
-          tags$strong("AIC (Akaike Information Criterion):"), 
-          " Uses information theory to select the optimal number of points. Minimizes AIC = n × ln(RSS/n) + 2k, where RSS is residual sum of squares, n is number of points, and k is number of parameters. Can be useful but may not always select the most pharmacologically relevant points."
+          " PKNCA's own best-fit curve-stripping algorithm: evaluates candidate terminal windows and selects the one maximizing adjusted R². Cmax and the absorption phase are excluded from consideration by default."
         ),
         tags$li(
           tags$strong("TTT (Two-Times-Tmax):"), 
@@ -98,7 +96,7 @@ help_texts <- list(
         style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
         tags$strong("Important Considerations:"), 
         tags$ul(style = "margin-bottom: 0; margin-top: 5px;",
-          tags$li("Cmax/Tmax points should be excluded from terminal phase selection"),
+          tags$li("Cmax/Tmax is excluded from terminal phase selection by ARS automatically; TTT and Manual exclude it by construction of the rule/point count you choose"),
           tags$li("Selection should be done blinded to treatment assignment"),
           tags$li("Apply the same method consistently across all subjects"),
           tags$li("Minimum of 3 points required for reliable estimation"),
@@ -306,16 +304,14 @@ help_texts <- list(
     tooltip = "Select the regulatory approach for ABEL",
     title = "ABEL Regulatory Approaches",
     content = div(
-      p("Different regulatory agencies use different approaches for Average Bioequivalence with Expanding Limits. Only the following are currently supported by the replicateBE package:"),
-      
+      p("Different regulatory agencies use different approaches for Average Bioequivalence with Expanding Limits."),
+
       tags$h6(tags$strong("EMA (European Medicines Agency)"), style = "margin-top: 15px;"),
       tags$ul(
         tags$li(tags$strong("Scaling with 50% cap")),
         tags$li("Limits expand based on reference variability (CV", tags$sub("wR"), ")"),
         tags$li("Maximum expanded limits: 69.84% - 143.19%"),
-        tags$li("Cap reached when CV", tags$sub("wR"), " ≈ 50%"),
-        tags$li("Limits rounded to 2 decimal places"),
-        tags$li("Point estimate must remain within 80.00% - 125.00%")
+        tags$li("Cap reached when CV", tags$sub("wR"), " ≈ 50%")
       ),
       
       div(
@@ -331,14 +327,23 @@ help_texts <- list(
         tags$li(tags$strong("Fixed widened limits: 75.00% - 133.33%")),
         tags$li("Limits do NOT scale with CV", tags$sub("wR")),
         tags$li("Applied when CV", tags$sub("wR"), " > 30%"),
-        tags$li("If CV", tags$sub("wR"), " ≤ 30%, standard 80-125% limits apply"),
-        tags$li("Point estimate must remain within 80.00% - 125.00%")
+        tags$li("If CV", tags$sub("wR"), " ≤ 30%, standard 80-125% limits apply")
       ),
-      
+
+      tags$h6(tags$strong("Health Canada"), style = "margin-top: 15px;"),
+      tags$ul(
+        tags$li(tags$strong("Scaling with 57.4% cap")),
+        tags$li("Limits expand based on reference variability (CV", tags$sub("wR"), "), same formula as EMA"),
+        tags$li("Maximum expanded limits: 66.7% - 150.0%"),
+        tags$li("Cap reached when CV", tags$sub("wR"), " ≈ 57.4%")
+      ),
+
       div(
-        style = "margin-top: 15px; padding: 10px; background-color: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 4px;",
-        tags$strong(icon("info-circle"), " Health Canada:"), br(),
-        "Cap at CVwR = 57.4% (limits: 66.7%–150.0%). Applied automatically when the Health Canada scope is selected."
+        style = "margin-top: 10px; padding: 10px; background-color: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 4px;",
+        tags$strong(icon("calculator"), " Health Canada Scaling Formula:"), br(),
+        "Expanded limits = 100 × exp(±k × s", tags$sub("wR"), ")", br(),
+        "where s", tags$sub("wR"), " = √(ln(CV", tags$sub("wR"), tags$sup("2"), " + 1))", br(),
+        "and k = 0.76 (same regulatory constant as EMA, wider cap)"
       )
     )
   ),
@@ -444,6 +449,10 @@ help_texts <- list(
     tooltip = "Select the RSABE statistical method",
     title = "RSABE Statistical Methods",
     content = div(
+      tags$p(tags$em("U.S. Food and Drug Administration (FDA), Center for Drug Evaluation and Research (CDER). "),
+             tags$em("Statistical Approaches to Establishing Bioequivalence. Guidance for Industry."),
+             " December 2022.",
+             style = "font-size: 0.85em; color: #555;"),
       tags$h6(tags$strong("FDA Linearized Scaled Criterion (Howe UCB)"), style = "margin-top: 10px;"),
       tags$p("Linearizes the scaled BE criterion \u03B7 = d\u00B2 \u2212 \u03B8\u00B2\u209B\u00B7s\u00B2wR and tests whether its ",
              "95% upper confidence bound (UCB) \u2264 0, using Howe\u2019s method for combining ",
@@ -469,10 +478,9 @@ help_texts <- list(
         style = "margin-top: 15px; padding: 10px; background-color: #e8f4fd; border-left: 3px solid #3498db; border-radius: 4px;",
         tags$strong("Common to both methods:"),
         tags$ul(style = "margin-bottom: 0; margin-top: 5px;",
-          tags$li("Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924"),
-          tags$li("Switching variability: s\u00B2", tags$sub("w0"), " = 0.0625 (CV", tags$sub("wR"), " \u2248 25.4%)"),
-          tags$li("FDA point estimate constraint: 80\u2013125%"),
-          tags$li("Variance estimated via Intra-Subject Contrasts (ISC)")
+          tags$li("Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924 (\u03C3\u2080 = 0.25, the regulatory criterion constant)"),
+          tags$li("Switching threshold: s", tags$sub("wR"), " \u2265 0.294 (CV", tags$sub("wR"), " \u2248 30%) triggers reference-scaling \u2014 distinct from \u03C3\u2080 above"),
+          tags$li("FDA point estimate constraint: 80\u2013125%")
         )
       )
     )

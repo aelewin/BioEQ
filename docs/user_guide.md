@@ -1,1362 +1,386 @@
-# BioEQ User Guide
+# BioEQ User Guide — Outline (Draft)
+
+> **Status: outline only.** This file is a scaffold for the next drafting pass, not a finished
+> guide. Every section below is one of three things:
+> - **Existing content carried over** from the previous guide, lightly noted where it needs a
+>   fact-check or update — quoted so nothing has to be re-found later.
+> - **No existing content** — a short scope note (what the section needs to cover, based on the
+>   live app).
+> - **Removed** — content that existed before but is dropped here, with a one-line reason, so it
+>   doesn't silently reappear.
+>
 
 ## Table of Contents
-1. [Introduction](#introduction)
-2. [Installation](#installation)
-3. [Quick Start](#quick-start)
-4. [Web Application](#web-application)
-5. [R Package Functions](#r-package-functions)
-6. [Data Requirements](#data-requirements)
-7. [Analysis Workflows](#analysis-workflows)
-8. [Plotting and Visualization](#plotting-and-visualization)
-9. [Study Planning](#study-planning)
-10. [Examples](#examples)
-11. [Troubleshooting](#troubleshooting)
-
-## Introduction
-
-BioEQ is a comprehensive bioequivalence and bioavailability analysis platform that provides both a modern web interface and powerful R functions. It includes proven algorithms modernized for R 4.4+ compatibility and enhanced with contemporary R practices.
-
-### Key Features
-- **Web Application**: Professional Shiny interface with drag-and-drop data upload
-- **Non-compartmental analysis (NCA)** with comprehensive PK parameter calculation
-- **Bioequivalence analysis** for 2x2x2 crossover, replicate, and parallel designs
-- **Statistical functions** for sample size calculation and power analysis
-- **Modern visualization** with interactive and static plotting options
-- **Data validation** and quality control features
-- **Report generation** in PDF, Word, and HTML formats
-- **Regulatory compliance** following FDA, EMA, and ICH guidelines
-
-### Two Ways to Use BioEQ
-
-1. **Web Application** - User-friendly interface for point-and-click analysis
-2. **R Package** - Programmatic access for advanced users and automation
-
-### Supported Study Designs
-- **2x2x2 crossover** (standard bioequivalence)
-- **2x2x4 replicate crossover** (for highly variable drugs)
-- **Parallel group design**
-- **Multiple period designs**
-
-### Regulatory Standards
-- FDA Guidance for Industry: Statistical Approaches to Establishing Bioequivalence
-- EMA Guideline on the Investigation of Bioequivalence
-- ICH M13A: Bioequivalence for Immediate-Release Solid Oral Dosage Forms
-
-## Installation
-
-### Prerequisites
-BioEQ requires R version 4.0 or higher and the following packages:
-
-```r
-# Required packages
-install.packages(c(
-  "shiny", "shinydashboard", "DT", "readr", "readxl",
-  "nlme", "ggplot2", "dplyr", "reshape2", 
-  "plotrix", "ICSNP", "coin", "gdata", "png"
-))
-
-# Optional packages for enhanced features
-install.packages(c(
-  "shinyjs", "shinycssloaders", "plotly", 
-  "rmarkdown", "knitr", "officer", "flextable"
-))
-```
-
-### Starting BioEQ
-
-#### Option 1: Web Application (Recommended)
-```r
-# Navigate to the BioEQ directory
-setwd("path/to/BioEQ")
-
-# Launch the Shiny web application
-shiny::runApp("shiny/app.R")
-```
-
-#### Option 2: R Package Functions
-```r
-# Load the R functions
-source("R/bioeq_main.R")
-init_bioeq()
-
-# View available functions
-help_bioeq()
-```
-
-## Quick Start
-
-### Web Application Quick Start
-
-1. **Launch the Application**
-```r
-shiny::runApp("shiny/app.R")
-```
-
-2. **Upload Your Data**
-   - Navigate to "Data Upload" tab
-   - Drag and drop your CSV/Excel file
-   - Or use the example data templates
-
-3. **Configure Analysis**
-   - Go to "Analysis Setup"
-   - Select study design (2x2x2, parallel, replicate)
-   - Choose PK parameters and analysis options
-
-4. **View Results**
-   - Click "Results" to see analysis output
-   - Interactive tables and plots
-   - Statistical summaries and conclusions
-
-5. **Export Reports**
-   - Generate PDF or Word reports
-   - Download data and plots
-
-### R Package Quick Start
-
-1. **Initialize BioEQ**
-```r
-source("R/bioeq_main.R")
-init_bioeq()
-```
-
-2. **Load Example Data**
-```r
-# Create a standard 2x2x2 crossover study
-example_data <- load_example_data("standard_2x2x2")
-print(example_data)
-```
-
-3. **Perform Analysis**
-```r
-# Extract PK parameters
-pk_data <- example_data$pk_parameters
-
-# Perform BE analysis
-be_results <- perform_be_analysis(pk_data, design = "2x2x2")
-print(be_results)
-```
-
-4. **Create Visualizations**
-```r
-# Concentration-time profiles
-conc_plot <- plot_concentration_time(example_data$concentration_data, log_scale = TRUE)
-print(conc_plot)
-```
-
-5. **Run Complete Demo**
-```r
-# Run comprehensive demo
-run_bioeq_demo("all")
-```
-
-## Web Application
-
-### Interface Overview
-
-The BioEQ web application provides a professional, user-friendly interface for bioequivalence analysis without requiring R programming knowledge.
-
-#### Main Navigation
-- **Data Upload** - Import and validate your data
-- **Analysis Setup** - Configure study parameters
-- **Results** - View analysis results and plots  
-- **Exports & Reports** - Generate and download reports
-- **Advanced Options** - Fine-tune analysis settings
-- **Validation** - Quality control and validation tools
-- **Help & Support** - Documentation and support
-
-### Data Upload Tab
-
-**Features:**
-- Drag-and-drop file upload
-- Support for CSV, Excel (.xlsx), and tab-delimited files
-- Real-time data validation and error checking
-- Data preview with interactive tables
-- Example data templates for download
-
-**Supported File Formats:**
-```
-Concentration Data: Subject, Treatment, Period, Time, Concentration
-PK Parameters: Subject, Treatment, Period, AUC0t, AUCinf, Cmax, Tmax
-```
-
-**Data Validation:**
-- Column name checking
-- Data type validation
-- Missing value detection
-- Outlier identification
-- Study design verification
-
-### Analysis Setup Tab
-
-**Configuration Options:**
-- **Study Design**: 2x2x2 crossover, parallel, replicate
-- **PK Parameters**: AUC0t, AUCinf, Cmax selection
-- **Statistical Settings**: Alpha level, BE limits
-- **Regulatory Standard**: FDA, EMA, ICH guidelines
-- **AUC Method**: Linear, log-linear, mixed methods
-- **Carryover Testing**: Enable/disable carryover detection
-
-**Advanced Options:**
-- Missing data handling strategies
-- Lambda-z estimation methods
-- Reference scaling for highly variable drugs
-- Custom bioequivalence limits
-
-### Results Tab
-
-**Analysis Output:**
-- **Summary Statistics**: Descriptive statistics by treatment
-- **ANOVA Results**: Statistical model output
-- **Bioequivalence Assessment**: 90% confidence intervals
-- **Conclusion**: Pass/fail determination with rationale
-
-**Interactive Visualizations:**
-- Concentration-time profiles (individual and mean)
-- PK parameter comparisons
-- Confidence interval plots
-- Diagnostic plots (residuals, normality)
-
-**Result Tables:**
-- Sortable and searchable data tables
-- Export individual tables to CSV/Excel
-- Statistical summaries with proper formatting
-
-### Exports & Reports Tab
-
-**Report Generation:**
-- **PDF Reports**: Comprehensive analysis reports
-- **Word Documents**: Editable report templates
-- **HTML Reports**: Interactive web-based reports
-
-**Data Export:**
-- Analysis results in CSV/Excel format
-- High-resolution plots (PNG, PDF, SVG)
-- R code for reproducibility
-- Complete analysis package (ZIP)
-
-**Report Contents:**
-- Study summary and design
-- Data characteristics and validation
-- Statistical analysis methodology
-- Results tables and figures
-- Bioequivalence conclusions
-- Regulatory compliance statement
-
-## R Package Functions
-
-### Main Analysis Functions
-
-#### `perform_be_analysis()`
-Main bioequivalence analysis function with auto-detection capabilities.
-
-```r
-be_results <- perform_be_analysis(
-  data = pk_data,                    # PK parameters data frame
-  design = "auto",                   # "2x2x2", "parallel", "replicate", "auto"
-  alpha = 0.05,                      # Significance level
-  be_limits = c(0.8, 1.25),         # Bioequivalence limits
-  parameters = c("AUC0t", "Cmax"),   # Parameters to analyze
-  regulatory_standard = "FDA"        # "FDA", "EMA", "ICH"
-)
-```
-
-#### `analyze_be_study()`
-Quick analysis wrapper for standard bioequivalence studies.
-
-```r
-results <- analyze_be_study(
-  data = your_data,
-  design = "2x2x2",
-  alpha = 0.05,
-  be_limits = c(0.8, 1.25)
-)
-```
-
-### Non-Compartmental Analysis Functions
-
-#### `calculate_nca()`
-Comprehensive NCA analysis from concentration-time data.
-
-```r
-nca_results <- calculate_nca(
-  data = conc_data,                  # Concentration-time data
-  method = "linear_log",             # AUC calculation method
-  lambda_z_method = "automatic"      # Terminal phase detection
-)
-```
-
-#### `calculate_auc_linear()`
-Calculate AUC using various trapezoidal methods.
-
-```r
-auc_value <- calculate_auc_linear(
-  time = time_points,
-  conc = concentrations,
-  method = "mixed"                   # "linear", "log", "mixed", "linear_log"
-)
-```
-
-#### `estimate_lambda_z()`
-Terminal elimination rate constant estimation.
-
-```r
-lambda_z <- estimate_lambda_z(
-  time = time_points,
-  conc = concentrations,
-  method = "automatic"               # "automatic", "manual", "adjusted_r2"
-)
-```
-
-### Statistical Functions
-
-#### `calculate_sample_size()`
-Sample size calculation for bioequivalence studies.
-
-```r
-sample_size <- calculate_sample_size(
-  cv = 0.25,                        # Coefficient of variation
-  power = 0.8,                      # Desired power
-  theta0 = 0.95,                    # Expected true ratio
-  alpha = 0.05,                     # Significance level
-  design = "2x2x2"                  # Study design
-)
-```
-
-#### `calculate_power()`
-Power analysis for existing study designs.
-
-```r
-power_result <- calculate_power(
-  n_per_group = 24,                 # Sample size per group
-  cv = 0.22,                        # Observed CV
-  theta0 = 0.95,                    # True ratio
-  alpha = 0.05
-)
-```
-
-### Data Handling Functions
-
-#### `validate_be_data()`
-Comprehensive data validation for bioequivalence studies.
-
-```r
-validation <- validate_be_data(
-  data = your_data,
-  design = "2x2x2",
-  required_columns = c("Subject", "Treatment", "AUC0t", "Cmax")
-)
-```
-
-#### `format_be_data()`
-Standardize data format for analysis.
-
-```r
-formatted_data <- format_be_data(
-  data = raw_data,
-  subject_col = "ID",
-  treatment_col = "Formulation"
-)
-```
-
-### Plotting Functions
-
-#### `plot_concentration_time()`
-Create concentration-time profile plots.
-
-```r
-ct_plot <- plot_concentration_time(
-  data = conc_data,
-  log_scale = TRUE,                 # Logarithmic y-axis
-  interactive = FALSE,              # Static or interactive plot
-  individual = TRUE,                # Show individual profiles
-  mean_profiles = TRUE              # Show mean profiles
-)
-```
-
-#### `plot_be_confidence_intervals()`
-Forest plot of bioequivalence confidence intervals.
-
-```r
-ci_plot <- plot_be_confidence_intervals(
-  be_results = analysis_results,
-  be_limits = c(0.8, 1.25),
-  parameters = c("AUC0t", "Cmax")
-)
-```
-
-### Utility Functions
-
-#### `load_example_data()`
-Load built-in example datasets.
-
-```r
-# Available datasets
-example_data <- load_example_data("standard_2x2x2")
-high_cv_data <- load_example_data("high_cv")
-parallel_data <- load_example_data("parallel")
-```
-
-#### `run_bioeq_demo()`
-Run interactive demonstrations.
-
-```r
-# Available demo types
-run_bioeq_demo("basic")            # Basic analysis workflow
-run_bioeq_demo("advanced")         # Advanced scenarios
-run_bioeq_demo("sample_size")      # Sample size calculations
-run_bioeq_demo("all")              # Complete demonstration
-```
-
-## Data Requirements
-
-### Concentration Data Format
-Required columns for concentration-time data:
-- `Subject`: Subject identifier (numeric or character)
-- `Period`: Study period (1, 2, 3, 4...)
-- `Formulation`: Treatment ("Test" or "Reference")
-- `Time`: Time point (numeric, same units throughout)
-- `Concentration`: Measured concentration (numeric, ≥ 0)
-
-Example:
-```r
-conc_data <- data.frame(
-  Subject = c(1, 1, 1, 2, 2, 2),
-  Period = c(1, 1, 1, 2, 2, 2),
-  Formulation = c("Test", "Test", "Test", "Reference", "Reference", "Reference"),
-  Time = c(0, 2, 4, 0, 2, 4),
-  Concentration = c(0, 100, 50, 0, 95, 48)
-)
-```
-
-### PK Parameters Data Format
-Required columns for bioequivalence analysis:
-- `Subject`: Subject identifier
-- `Period`: Study period
-- `Formulation`: Treatment ("Test" or "Reference")
-- `AUC0t`: AUC from time zero to last measurable concentration
-- `AUC0inf`: AUC from time zero to infinity (optional)
-- `Cmax`: Maximum observed concentration
-- `Tmax`: Time to maximum concentration (optional)
-
-## Analysis Workflows
-
-### Standard 2x2x2 Crossover Analysis
-
-1. **Data Preparation**
-```r
-# Validate your data
-validated_data <- validate_pk_data(your_pk_data)
-
-# Check for missing values and outliers
-summary(validated_data)
-```
-
-2. **Bioequivalence Analysis**
-```r
-# Perform complete BE analysis
-be_results <- perform_be_analysis(validated_data, design = "2x2x2")
-
-# View results summary
-summary(be_results)
-```
-
-3. **Results Interpretation**
-```r
-# Check confidence intervals
-ci_results <- be_results$confidence_intervals
-
-# Bioequivalence criteria (80-125% rule)
-for (param in names(ci_results)) {
-  ci <- ci_results[[param]]
-  is_be <- ci$ci_lower >= 80 && ci$ci_upper <= 125
-  cat(sprintf("%s: %s (%.1f%% - %.1f%%)\n", 
-              param, 
-              ifelse(is_be, "BIOEQUIVALENT", "NOT BIOEQUIVALENT"),
-              ci$ci_lower, ci$ci_upper))
-}
-```
-
-### Replicate Design Analysis
-
-```r
-# Generate replicate crossover data
-replicate_data <- load_example_data("replicate_2x2x4")
-
-# Analyze (when fully implemented)
-# be_results <- perform_be_analysis(replicate_data$pk_parameters, design = "replicate")
-```
-
-### High Variability Drug Analysis
-
-```r
-# Load high CV example
-high_cv_data <- load_example_data("high_cv")
-
-# Perform analysis
-be_results <- perform_be_analysis(high_cv_data$pk_parameters, design = "2x2x2")
-
-# For high CV drugs, consider widened limits or replicate design
-```
-
-## Plotting and Visualization
-
-BioEQ provides both static (ggplot2) and interactive (plotly) visualizations for comprehensive data exploration and presentation.
-
-### Concentration-Time Profiles
-
-#### Basic Concentration Plots
-```r
-# Simple concentration-time plot
-ct_plot <- plot_concentration_time(
-  data = conc_data,
-  log_scale = FALSE,
-  interactive = FALSE
-)
-print(ct_plot)
-
-# Log-scale with enhanced features
-ct_log <- plot_concentration_time(
-  data = conc_data,
-  log_scale = TRUE,
-  individual = TRUE,              # Show individual subject profiles
-  mean_profiles = TRUE,           # Overlay mean profiles
-  error_bars = "se",              # Standard error bars
-  interactive = TRUE              # Interactive plotly version
-)
-print(ct_log)
-```
-
-#### Individual Subject Profiles
-```r
-# Faceted individual profiles
-ind_plot <- plot_individual_profiles(
-  data = conc_data,
-  facet_wrap = TRUE,              # Separate panel per subject
-  treatments = c("Test", "Reference"),
-  log_scale = TRUE,
-  ncol = 4                        # Number of columns in facet
-)
-print(ind_plot)
-
-# Overlaid individual profiles
-overlay_plot <- plot_individual_profiles(
-  data = conc_data,
-  facet_wrap = FALSE,             # All on same panel
-  alpha = 0.3,                    # Transparency for overlapping lines
-  highlight_mean = TRUE
-)
-print(overlay_plot)
-```
-
-### Bioequivalence Visualization
-
-#### Confidence Interval Plots
-```r
-# Forest plot of confidence intervals
-ci_forest <- plot_be_confidence_intervals(
-  be_results = analysis_results,
-  be_limits = c(0.8, 1.25),
-  parameters = c("AUC0t", "AUCinf", "Cmax"),
-  style = "forest",               # Forest plot style
-  show_individual = TRUE          # Show individual ratios
-)
-print(ci_forest)
-
-# Horizontal bar plot
-ci_horizontal <- plot_be_confidence_intervals(
-  be_results = analysis_results,
-  style = "horizontal",
-  color_by_result = TRUE          # Color by pass/fail
-)
-print(ci_horizontal)
-```
-
-#### PK Parameter Comparisons
-```r
-# Box plots comparing treatments
-pk_box <- plot_pk_comparison(
-  data = pk_data,
-  parameters = c("AUC0t", "Cmax"),
-  plot_type = "boxplot",
-  log_scale = TRUE,
-  show_points = TRUE              # Overlay individual points
-)
-print(pk_box)
-
-# Violin plots with summary statistics
-pk_violin <- plot_pk_comparison(
-  data = pk_data,
-  plot_type = "violin",
-  add_median = TRUE,
-  add_quartiles = TRUE
-)
-print(pk_violin)
-
-# Paired scatter plots
-pk_scatter <- plot_pk_comparison(
-  data = pk_data,
-  plot_type = "paired_scatter",   # Test vs Reference scatter
-  add_identity_line = TRUE,
-  add_regression = TRUE
-)
-print(pk_scatter)
-```
-
-### Diagnostic Plots
-
-#### Statistical Diagnostics
-```r
-# Comprehensive diagnostic plot set
-diagnostics <- plot_be_diagnostics(
-  be_results = analysis_results,
-  include = c("residuals", "qq", "leverage", "influence")
-)
-
-# Individual diagnostic plots
-residual_plot <- diagnostics$residuals
-qq_plot <- diagnostics$qq_normal
-leverage_plot <- diagnostics$leverage
-```
-
-#### Data Quality Plots
-```r
-# Missing data patterns
-missing_plot <- plot_missing_data(
-  data = conc_data,
-  by_subject = TRUE,
-  by_time = TRUE
-)
-print(missing_plot)
-
-# Outlier detection
-outlier_plot <- plot_outliers(
-  data = pk_data,
-  method = "iqr",                 # IQR or z-score method
-  threshold = 3
-)
-print(outlier_plot)
-```
-
-### Study Planning Visualizations
-
-#### Sample Size Curves
-```r
-# Sample size vs CV relationship
-ss_curve <- plot_sample_size_curve(
-  cv_range = seq(0.1, 0.5, 0.01),
-  power = 0.8,
-  theta0 = c(0.90, 0.95, 1.0),    # Multiple scenarios
-  alpha = 0.05
-)
-print(ss_curve)
-
-# Power vs sample size
-power_curve <- plot_power_curve(
-  n_range = seq(10, 50, 2),
-  cv = c(0.2, 0.25, 0.3),         # Multiple CV scenarios
-  theta0 = 0.95
-)
-print(power_curve)
-```
-
-### Report-Quality Plots
-
-#### High-Resolution Export
-```r
-# Save plots for reports
-ggsave(
-  filename = "concentration_profiles.png",
-  plot = ct_plot,
-  width = 10, height = 6,
-  dpi = 300,                      # High resolution
-  units = "in"
-)
-
-# PDF for vector graphics
-ggsave(
-  filename = "be_confidence_intervals.pdf",
-  plot = ci_forest,
-  width = 8, height = 10
-)
-```
-
-#### Custom Themes
-```r
-# Apply professional theme
-library(ggplot2)
-
-professional_plot <- ct_plot +
-  theme_minimal() +
-  theme(
-    panel.grid.minor = element_blank(),
-    legend.position = "bottom",
-    text = element_text(size = 12),
-    plot.title = element_text(size = 14, face = "bold")
-  ) +
-  labs(
-    title = "Concentration-Time Profiles",
-    subtitle = "Test vs Reference Formulations",
-    caption = "Data: Example 2x2x2 Crossover Study"
-  )
-```
-
-### Interactive Features
-
-#### Plotly Integration
-```r
-# Convert ggplot to interactive plotly
-library(plotly)
-
-interactive_ct <- ggplotly(
-  ct_plot,
-  tooltip = c("x", "y", "colour", "text")
-)
-
-# Add custom hover information
-interactive_ct <- interactive_ct %>%
-  layout(
-    title = "Interactive Concentration-Time Profiles",
-    hovermode = "closest"
-  )
-
-  )
-
-# Display interactive plot
-interactive_ct
-```
-
-## Study Planning
-
-### Sample Size Calculation
-```r
-# Basic sample size calculation
-ss_result <- calculate_sample_size(
-  cv = 0.25,           # Coefficient of variation
-  power = 0.8,         # Desired power (80%)
-  theta0 = 0.95,       # Expected true ratio
-  alpha = 0.05         # Significance level
-)
-
-print(ss_result)
-cat("Required sample size:", ss_result$n_per_group, "per group
-")
-
-# Sample size for different scenarios
-cv_values <- c(0.15, 0.20, 0.25, 0.30, 0.35)
-sample_sizes <- sapply(cv_values, function(cv) {
-  calculate_sample_size(cv = cv, power = 0.8, theta0 = 0.95)$n_per_group
-})
-
-ss_table <- data.frame(CV = cv_values, Sample_Size = sample_sizes)
-print(ss_table)
-```
-
-### Power Analysis
-```r
-# Calculate power for existing study
-power_result <- calculate_power(
-  n_per_group = 24,    # Subjects per group
-  cv = 0.22,           # Observed CV
-  theta0 = 0.92,       # Assumed true ratio
-  alpha = 0.05
-)
-
-cat("Study power:", round(power_result$power * 100, 1), "%
-")
-
-# Power for multiple scenarios
-true_ratios <- seq(0.85, 1.15, 0.05)
-power_values <- sapply(true_ratios, function(ratio) {
-  calculate_power(n_per_group = 24, cv = 0.25, theta0 = ratio)$power
-})
-
-power_table <- data.frame(True_Ratio = true_ratios, Power = round(power_values, 3))
-print(power_table)
-```
-
-## Examples
-
-### Example 1: Complete 2x2x2 Analysis
-
-```r
-# Initialize BioEQ
-source("R/bioeq_main.R")
-init_bioeq()
-
-# Load example dataset
-cat("Loading example 2x2x2 crossover data...
-")
-example_data <- load_example_data("standard_2x2x2")
-
-# Examine data structure
-str(example_data$pk_parameters)
-head(example_data$concentration_data)
-
-# Perform bioequivalence analysis
-cat("Performing bioequivalence analysis...
-")
-be_results <- perform_be_analysis(
-  data = example_data$pk_parameters,
-  design = "2x2x2",
-  alpha = 0.05,
-  be_limits = c(0.8, 1.25),
-  parameters = c("AUC0t", "AUCinf", "Cmax")
-)
-
-# Display results
-print(be_results)
-
-# Create visualizations
-cat("Creating plots...
-")
-conc_plot <- plot_concentration_time(
-  data = example_data$concentration_data,
-  log_scale = TRUE,
-  individual = TRUE,
-  mean_profiles = TRUE
-)
-
-ci_plot <- plot_be_confidence_intervals(
-  be_results = be_results,
-  be_limits = c(0.8, 1.25)
-)
-
-# Display plots
-print(conc_plot)
-print(ci_plot)
-
-# Generate summary report
-cat("Analysis Summary:
-")
-cat("================
-")
-for (param in names(be_results$confidence_intervals)) {
-  ci <- be_results$confidence_intervals[[param]]
-  is_be <- ci$ci_lower >= 80 && ci$ci_upper <= 125
-  cat(sprintf("%s: %s (%.1f%% - %.1f%%)
-", 
-              param, 
-              ifelse(is_be, "BIOEQUIVALENT", "NOT BIOEQUIVALENT"),
-              ci$ci_lower, ci$ci_upper))
-}
-```
-
-### Example 2: NCA from Concentration Data
-
-```r
-# Load concentration-time data
-conc_data <- example_data$concentration_data
-
-# Perform NCA analysis
-nca_results <- calculate_nca(
-  data = conc_data,
-  method = "linear_log",
-  lambda_z_method = "automatic"
-)
-
-# Review NCA parameters
-print(nca_results$summary_stats)
-
-# Calculate individual AUC values
-subjects <- unique(conc_data$Subject)
-auc_results <- data.frame()
-
-for (subj in subjects[1:3]) {  # First 3 subjects as example
-  subj_data <- subset(conc_data, Subject == subj)
-  
-  for (trt in c("Test", "Reference")) {
-    trt_data <- subset(subj_data, Formulation == trt)
-    if (nrow(trt_data) > 1) {
-      auc <- calculate_auc_linear(trt_data$Time, trt_data$Concentration, method = "mixed")
-      auc_results <- rbind(auc_results, data.frame(
-        Subject = subj,
-        Treatment = trt,
-        AUC = auc
-      ))
-    }
-  }
-}
-
-print(auc_results)
-```
-
-### Example 3: Sample Size Planning
-
-```r
-# Planning a bioequivalence study
-cat("Sample Size Planning Example
-")
-cat("===========================
-")
-
-# Define study parameters
-target_power <- 0.8
-alpha_level <- 0.05
-expected_ratio <- 0.95
-cv_estimate <- 0.25
-
-# Calculate required sample size
-ss_result <- calculate_sample_size(
-  cv = cv_estimate,
-  power = target_power,
-  theta0 = expected_ratio,
-  alpha = alpha_level,
-  design = "2x2x2"
-)
-
-cat("Study Design: 2x2x2 Crossover
-")
-cat("Expected T/R Ratio:", expected_ratio, "
-")
-cat("Estimated CV:", cv_estimate * 100, "%
-")
-cat("Target Power:", target_power * 100, "%
-")
-cat("Alpha Level:", alpha_level, "
-")
-cat("Required Sample Size:", ss_result$n_per_group, "per group
-")
-cat("Total Subjects:", ss_result$n_per_group * 2, "
-")
-
-# Sensitivity analysis
-cat("
-Sensitivity Analysis:
-")
-cv_scenarios <- c(0.20, 0.25, 0.30, 0.35)
-for (cv in cv_scenarios) {
-  n <- calculate_sample_size(cv = cv, power = 0.8, theta0 = 0.95)$n_per_group
-  cat(sprintf("CV = %2.0f%%: n = %2d per group
-", cv * 100, n))
-}
-```
-
-### Example 4: High Variability Drug
-
-```r
-# Simulate high CV scenario
-high_cv_data <- load_example_data("high_cv")
-
-cat("High Variability Drug Analysis
-")
-cat("==============================
-")
-
-# Standard analysis
-standard_results <- perform_be_analysis(
-  data = high_cv_data$pk_parameters,
-  design = "2x2x2",
-  be_limits = c(0.8, 1.25)
-)
-
-cat("Standard BE limits (80-125%):
-")
-for (param in names(standard_results$confidence_intervals)) {
-  ci <- standard_results$confidence_intervals[[param]]
-  is_be <- ci$ci_lower >= 80 && ci$ci_upper <= 125
-  cat(sprintf("%s: %s (%.1f%% - %.1f%%)
-", 
-              param, 
-              ifelse(is_be, "PASS", "FAIL"),
-              ci$ci_lower, ci$ci_upper))
-}
-
-# Note: For highly variable drugs, consider:
-# 1. Replicate crossover design (2x2x4, 2x3x3)
-# 2. Reference-scaled average bioequivalence
-# 3. Widened BE limits for certain parameters
-cat("
-Consider replicate design for highly variable drugs
-")
-```
-
-## Troubleshooting
-
-### Common Issues and Solutions
-
-#### Data Upload Problems
-
-**Issue**: File upload fails or data not recognized
-```
-Solutions:
-1. Ensure file format is CSV, Excel (.xlsx), or tab-delimited
-2. Check that column names match expected format:
-   - Subject, Treatment, Period, Time, Concentration (for conc data)
-   - Subject, Treatment, Period, AUC0t, Cmax (for PK data)
-3. Verify no special characters in column names
-4. Check for empty rows or columns
-5. Ensure numeric data is properly formatted (no text in numeric columns)
-```
-
-**Issue**: Column validation errors
-```r
-# Check your data structure
-str(your_data)
-head(your_data)
-
-# Rename columns if needed
-names(your_data)[names(your_data) == "ID"] <- "Subject"
-names(your_data)[names(your_data) == "Formulation"] <- "Treatment"
-
-# Validate data
-validation_result <- validate_be_data(your_data, design = "2x2x2")
-print(validation_result)
-```
-
-#### Analysis Errors
-
-**Issue**: "Design detection failed" or "Invalid study design"
-```r
-# Manually specify design
-be_results <- perform_be_analysis(
-  data = your_pk_data,
-  design = "2x2x2",  # Don't use "auto"
-  alpha = 0.05
-)
-
-# Check data structure for design compatibility
-table(your_pk_data$Subject, your_pk_data$Treatment)
-```
-
-**Issue**: "Insufficient data for analysis"
-```r
-# Check for missing values
-summary(your_pk_data)
-
-# Remove subjects with incomplete data
-complete_subjects <- your_pk_data %>%
-  group_by(Subject) %>%
-  summarise(n_treatments = n_distinct(Treatment)) %>%
-  filter(n_treatments >= 2) %>%
-  pull(Subject)
-
-filtered_data <- your_pk_data[your_pk_data$Subject %in% complete_subjects, ]
-```
-
-**Issue**: "Lambda-z estimation failed"
-```r
-# Use manual lambda-z estimation
-lambda_z_result <- estimate_lambda_z(
-  time = time_points,
-  conc = concentrations,
-  method = "manual",
-  time_range = c(8, 24)  # Specify time range
-)
-
-# Or use adjusted R-squared method
-lambda_z_result <- estimate_lambda_z(
-  time = time_points,
-  conc = concentrations,
-  method = "adjusted_r2",
-  min_points = 3
-)
-```
-
-#### Plotting Issues
-
-**Issue**: Plots not displaying correctly
-```r
-# Check if required packages are installed
-if (!require("ggplot2")) install.packages("ggplot2")
-if (!require("plotly")) install.packages("plotly")
-
-# Create simple plot to test
-library(ggplot2)
-test_plot <- ggplot(mtcars, aes(x = wt, y = mpg)) + geom_point()
-print(test_plot)
-```
-
-**Issue**: Interactive plots not working
-```r
-# Check plotly installation
-if (!require("plotly")) {
-  install.packages("plotly")
-  library(plotly)
-}
-
-# Test interactive functionality
-library(plotly)
-p <- ggplot(mtcars, aes(x = wt, y = mpg)) + geom_point()
-ggplotly(p)
-```
-
-#### Performance Issues
-
-**Issue**: Slow analysis or memory errors
-```r
-# For large datasets, sample data for testing
-sample_data <- your_large_dataset[sample(nrow(your_large_dataset), 1000), ]
-
-# Increase memory limit (Windows)
-memory.limit(size = 8000)
-
-# Use data.table for large datasets
-library(data.table)
-dt_data <- as.data.table(your_data)
-```
-
-### Web Application Troubleshooting
-
-#### Browser Issues
-- **Recommended browsers**: Chrome, Firefox, Safari, Edge
-- **Clear browser cache** if interface appears broken
-- **Disable ad blockers** that might interfere with JavaScript
-- **Enable JavaScript** in browser settings
-
-#### File Upload Issues
-- **Maximum file size**: 100 MB (configurable)
-- **Supported formats**: CSV, Excel (.xlsx), tab-delimited
-- **Check file encoding**: UTF-8 recommended
-- **Remove special characters** from file names
-
-#### Analysis Timeout
-- **Default timeout**: 300 seconds
-- **For large datasets**: Consider subsetting data
-- **Check server resources** if self-hosting
-
-### Error Messages and Solutions
-
-| Error Message | Cause | Solution |
-|---------------|-------|----------|
-| "Column 'Subject' not found" | Missing required column | Rename or add Subject column |
-| "Design detection failed" | Ambiguous study design | Specify design explicitly |
-| "Insufficient data points" | Too few observations | Check data completeness |
-| "Lambda-z estimation failed" | Poor concentration profile | Use manual time range |
-| "ANOVA model failed" | Statistical model issues | Check data distribution |
-| "Memory allocation error" | Large dataset | Increase memory or subset data |
-| "Package not found" | Missing dependencies | Install required packages |
-
-### Getting Help
-
-#### Built-in Help
-```r
-# Function documentation
-help(perform_be_analysis)
-?calculate_nca
-
-# Package overview
-help_bioeq()
-
-# Run examples
-run_bioeq_demo("all")
-```
-
-#### Diagnostic Information
-```r
-# System information
-sessionInfo()
-
-# BioEQ configuration
-get_bioeq_config()
-
-# Test installation
-test_bioeq()
-```
-
-#### Support Resources
-- **GitHub Issues**: Report bugs and request features
-- **Documentation**: Comprehensive function reference
-- **Examples**: Built-in demonstration datasets
-- **Community**: User forums and discussions
-
-### Best Practices
-
-#### Data Preparation
-1. **Validate data early** using validation functions
-2. **Check for outliers** before analysis
-3. **Use consistent units** throughout study
-4. **Document data transformations** applied
-5. **Keep backup copies** of original data
-
-#### Analysis Workflow
-1. **Start with exploration** using demo functions
-2. **Validate assumptions** before formal analysis
-3. **Check diagnostic plots** for model appropriateness
-4. **Document analysis decisions** and rationale
-5. **Save intermediate results** for large studies
-
-#### Reporting
-1. **Use reproducible workflows** with R scripts
-2. **Include diagnostic information** in reports
-3. **Provide context** for bioequivalence decisions
-4. **Follow regulatory guidelines** for your jurisdiction
-5. **Archive analysis code** and data for future reference
+1. [Introduction](#1-introduction)
+2. [Installation & Launching](#2-installation--launching)
+3. [Interface Overview](#3-interface-overview)
+4. [Data Upload](#4-data-upload)
+5. [Analysis Setup](#5-analysis-setup)
+6. [Results](#6-results)
+7. [Plots](#7-plots)
+8. [Exports & Reports](#8-exports--reports)
+9. [Validation](#9-validation)
+10. [Anomaly Detection](#10-anomaly-detection)
+11. [Sample Size](#11-sample-size)
+12. [Randomization](#12-randomization)
+13. [Data Requirements](#13-data-requirements)
+14. [Troubleshooting](#14-troubleshooting)
+15. [Getting Help](#15-getting-help)
 
 ---
 
-*BioEQ User Guide - Comprehensive Bioequivalence Analysis Platform*  
-*Version 1.0.0 | Updated: December 2024*
-```
+## 1. Introduction
 
-## Study Planning
+**Existing content carried over** (fact-check the bullet list against current features before
+publishing — e.g. confirm report formats in §8 before repeating "PDF, Word" here):
 
-### Sample Size Calculation
-```r
-# Basic sample size calculation
-ss_result <- calculate_sample_size(
-  cv = 0.25,           # Coefficient of variation
-  power = 0.8,         # Desired power (80%)
-  theta0 = 0.95,       # Expected true ratio
-  alpha = 0.05         # Significance level
-)
+> BioEQ is a comprehensive bioequivalence and bioavailability analysis platform that provides a
+> modern web interface... It includes proven algorithms modernized for R 4.4+ compatibility and
+> enhanced with contemporary R practices.
+>
+> ### Key Features
+> - **Web Application**: Professional Shiny interface with drag-and-drop data upload
+> - **Non-compartmental analysis (NCA)** with comprehensive PK parameter calculation
+> - **Bioequivalence analysis** for 2x2x2 crossover, replicate, and parallel designs
+> - **Statistical functions** for sample size calculation and power analysis
+> - **Modern visualization** with interactive and static plotting options
+> - **Data validation** and quality control features
+> - **Regulatory compliance** following FDA, EMA, and ICH guidelines
+>
+> ### Supported Study Designs
+> - 2x2x2 crossover (standard bioequivalence)
+> - 2x2x4 / 2x2x3 replicate crossover (for highly variable drugs)
+> - Parallel group design
+>
+> ### Regulatory Standards
+> - FDA Guidance for Industry: Statistical Approaches to Establishing Bioequivalence
+> - EMA Guideline on the Investigation of Bioequivalence
+> - ICH M13A: Bioequivalence for Immediate-Release Solid Oral Dosage Forms
 
-print(ss_result)
-cat("Required sample size:", ss_result$n_per_group, "per group\n")
-```
+**Removed**: "Two Ways to Use BioEQ" (Web App vs. R Package) — the R-package mode is out of
+scope for this guide.
 
-### Power Analysis
-```r
-# Calculate power for existing study
-power_result <- calculate_power(
-  n_per_group = 24,    # Subjects per group
-  cv = 0.22,           # Observed CV
-  theta0 = 0.92,       # Assumed true ratio
-  alpha = 0.05
-)
-
-cat("Study power:", round(power_result$power * 100, 1), "%\n")
-```
-
-### Planning Different Scenarios
-```r
-# Scenario analysis
-scenarios <- data.frame(
-  CV = c(0.15, 0.20, 0.25, 0.30, 0.35),
-  SampleSize = numeric(5)
-)
-
-for (i in 1:nrow(scenarios)) {
-  ss <- calculate_sample_size(cv = scenarios$CV[i], power = 0.8)
-  scenarios$SampleSize[i] <- ss$n_per_group * 2  # Total sample size
-}
-
-print(scenarios)
-```
-
-## Examples
-
-### Example 1: Complete Bioequivalence Study
-```r
-# Run complete example
-source("examples/basic_be_analysis.R")
-```
-
-### Example 2: Sample Size Planning
-```r
-# Run sample size example
-source("examples/sample_size_calculation.R")
-```
-
-### Example 3: Failed Bioequivalence
-```r
-# Analyze a failed BE study
-failed_data <- load_example_data("failed_be")
-be_results <- perform_be_analysis(failed_data$pk_parameters, design = "2x2x2")
-
-# Results will show non-bioequivalence
-ci_plot <- plot_be_confidence_intervals(be_results)
-print(ci_plot)
-```
-
-### Example 4: Custom Data Analysis
-```r
-# Load your own data
-# your_data <- read.csv("your_study_data.csv")
-
-# Validate format
-# validated_data <- validate_pk_data(your_data)
-
-# Perform analysis
-# results <- perform_be_analysis(validated_data, design = "2x2x2")
-```
-
-## Troubleshooting
-
-### Common Issues
-
-#### "Error in source: cannot open file"
-- Ensure you're in the correct working directory
-- Use `setwd()` to navigate to the BioEQ folder
-- Use absolute paths if necessary
-
-#### "Package not found"
-- Install missing packages: `install.packages("package_name")`
-- Check R version compatibility
-
-#### "Invalid data format"
-- Verify column names match requirements
-- Check for missing or negative concentration values
-- Ensure Subject IDs are consistent across periods
-
-#### "ANOVA failed"
-- Check for sufficient data (minimum subjects per sequence)
-- Verify balanced design (equal subjects in each sequence)
-- Look for extreme outliers in PK parameters
-
-### Data Quality Checks
-```r
-# Validate your data before analysis
-validation_result <- validate_pk_data(your_data)
-
-# Check for issues
-summary(your_data)
-anyNA(your_data)
-
-# Look for outliers
-boxplot(log(AUC0t) ~ Formulation, data = your_data)
-boxplot(log(Cmax) ~ Formulation, data = your_data)
-```
-
-### Getting Help
-1. Check function documentation: `help(function_name)`
-2. Run built-in tests: `test_bioeq()`
-3. Use examples: `run_bioeq_demo("all")`
-4. Review error messages carefully
-
-### Performance Tips
-- For large datasets, consider subsetting data for initial exploration
-- Use appropriate time ranges for lambda_z estimation
-- Validate data quality before complex analyses
-- Save intermediate results for large studies
-
-## Advanced Topics
-
-### Custom Bioequivalence Limits
-```r
-# Narrow therapeutic index drugs (90-111%)
-be_results <- perform_be_analysis(pk_data, design = "2x2x2", be_limits = c(0.9, 1.11))
-
-# Highly variable drugs (75-133% with replicate design)
-# be_results <- perform_be_analysis(pk_data, design = "replicate", be_limits = c(0.75, 1.33))
-```
-
-### Multiple Endpoints
-```r
-# Analyze multiple PK parameters
-parameters <- c("AUC0t", "AUC0inf", "Cmax")
-for (param in parameters) {
-  if (param %in% names(be_results$confidence_intervals)) {
-    ci <- be_results$confidence_intervals[[param]]
-    cat(sprintf("%s: %.1f%% - %.1f%%\n", param, ci$ci_lower, ci$ci_upper))
-  }
-}
-```
-
-### Exporting Results
-```r
-# Extract key results for reporting
-results_summary <- data.frame(
-  Parameter = names(be_results$confidence_intervals),
-  Point_Estimate = sapply(be_results$confidence_intervals, function(x) x$point_estimate),
-  CI_Lower = sapply(be_results$confidence_intervals, function(x) x$ci_lower),
-  CI_Upper = sapply(be_results$confidence_intervals, function(x) x$ci_upper)
-)
-
-# Save to CSV
-write.csv(results_summary, "be_results.csv", row.names = FALSE)
-```
+**No existing content** — add a line naming the three BE methods the app actually implements
+(ABE, ABEL, RSABE) and where NTID (narrow therapeutic index) support fits in, since that's a
+real, distinguishing feature not mentioned anywhere in the old intro.
 
 ---
 
-*BioEQ User Guide - Modern Bioequivalence Analysis for R 4.4+*
+## 2. Installation & Launching
+
+**Removed**: the old package list (`plotrix`, `ICSNP`, `coin`, `gdata`, `png`) — confirmed unused
+by anything in the current app during the dead-code audit; don't resurrect it. "Option 2: R
+Package Functions" — out of scope.
+
+**Existing content carried over**, still accurate:
+> #### Option 1: Web Application (Recommended)
+> ```r
+> # Navigate to the BioEQ directory
+> setwd("path/to/BioEQ")
+>
+> # Launch the Shiny web application
+> shiny::runApp("shiny/app.R")
+> ```
+
+**Content ready** (below) — the package inventory. Generated by
+`scripts/generate_dependency_manifest.R` rather than typed by hand, so it cannot drift; re-run
+that script after any dependency change and paste its output here. Also mention
+`Rscript launch_app.R` and the `docs/INSTALLATION_GUIDE.md` beginner path — both exist and are
+current (confirmed in `README.md`) but were never cross-referenced from this guide.
+
+### 2.1 Requirements
+
+- **R 4.4.0 or newer.** This floor is set by the current CRAN builds of `MASS` and `Matrix`,
+  which both require R >= 4.4.0. On an older R the install will fail partway through;
+  `install_dependencies.R` checks the version up front and stops with a clear message.
+- **System libraries (macOS/Linux only).** A few packages compile against C libraries that are
+  not part of R. If these are missing, installation fails with errors such as
+  `fatal error: 'fribidi.h' file not found`. Install them *before* running the installer:
+  - **macOS (Homebrew):** `brew install fribidi harfbuzz freetype libpng jpeg-turbo libtiff webp`
+  - **Debian/Ubuntu:** `sudo apt-get install libfribidi-dev libharfbuzz-dev libfreetype6-dev libpng-dev libjpeg-dev libtiff5-dev libwebp-dev`
+  - **Windows:** none needed — CRAN ships pre-built binaries.
+
+  > ⚠️ **macOS/Homebrew caution:** if R itself was installed via Homebrew, `brew install` of these
+  > libraries can also **upgrade R** (R depends on several of them). An R upgrade changes the
+  > library path (e.g. `.../R/4.5/site-library` → `.../R/4.6/site-library`), leaving the new R with
+  > an empty package library until you re-run `install_dependencies.R`. Install the system
+  > libraries first, then install the R packages.
+
+### 2.2 Installing
+
+```r
+# From the BioEQ project root
+Rscript install_dependencies.R
+```
+
+This installs the 31 packages BioEQ loads directly; their supporting dependencies are pulled in
+automatically by `install.packages(dependencies = TRUE)`.
+
+### 2.3 Package inventory
+
+**148 packages total**, in four categories following R's package-priority convention.
+
+**1. Base R (9)** — ship with R; no installation required, no external maintainer:
+`graphics`, `grDevices`, `grid`, `methods`, `parallel`, `splines`, `stats`, `tools`, `utils`
+
+**2. Recommended (6)** — ship with every R distribution; maintained by the R Core Team:
+`boot`, `lattice`, `MASS`, `Matrix`, `nlme`, `nnet`
+
+> `nlme` belongs to **two** categories: it is Recommended-priority *and* is called directly by
+> BioEQ (`nlme::lme()`, the mixed-effects ANOVA option). Treat it as both when risk-assessing.
+
+**3. Intended for Use (30)** — loaded directly by BioEQ code:
+
+| Purpose | Packages |
+|---|---|
+| Shiny UI | `shiny`, `shinydashboard`, `bslib`, `shinyjs`, `DT`, `shinycssloaders`, `htmltools` |
+| Data I/O | `readr`, `readxl`, `writexl`, `zip` |
+| Data manipulation | `dplyr`, `tidyr`, `rlang` |
+| Plotting | `ggplot2`, `plotly`, `htmlwidgets` |
+| Statistics / BE | `nlme`, `lme4`, `lmerTest`, `emmeans`, `replicateBE`, `PowerTOST` |
+| Non-compartmental analysis | `PKNCA` |
+| Anomaly detection | `dtw` |
+| Reporting | `rmarkdown`, `knitr`, `officer`, `flextable` |
+| Utilities | `digest`, `progress` |
+
+**4. Imports / back-end (103)** — installed automatically to support the above. These are not
+called by BioEQ directly; they are the dependencies of the packages in category 3:
+
+`askpass`, `backports`, `base64enc`, `bit`, `bit64`, `broom`, `cachem`, `cellranger`,
+`checkmate`, `cli`, `clipr`, `colorspace`, `commonmark`, `cowplot`, `cpp11`, `crayon`,
+`crosstalk`, `cubature`, `curl`, `data.table`, `Deriv`, `doBy`, `estimability`, `evaluate`,
+`farver`, `fastmap`, `fontawesome`, `fontBitstreamVera`, `fontLiberation`, `fontquiver`,
+`forecast`, `fracdiff`, `fs`, `gdtools`, `generics`, `glue`, `gtable`, `highr`, `hms`, `httpuv`,
+`httr`, `isoband`, `jquerylib`, `jsonlite`, `labeling`, `later`, `lazyeval`, `lifecycle`,
+`lmtest`, `magrittr`, `memoise`, `mime`, `minqa`, `modelr`, `mvtnorm`, `nloptr`, `numDeriv`,
+`openssl`, `otel`, `pbkrtest`, `pillar`, `pkgconfig`, `prettyunits`, `promises`, `proxy`,
+`purrr`, `R6`, `ragg`, `rappdirs`, `rbibutils`, `RColorBrewer`, `Rcpp`, `RcppArmadillo`,
+`RcppEigen`, `Rdpack`, `reformulas`, `rematch`, `S7`, `sass`, `scales`, `sourcetools`, `stringi`,
+`stringr`, `sys`, `systemfonts`, `textshaping`, `tibble`, `tidyselect`, `timeDate`, `tinytex`,
+`tzdb`, `urca`, `utf8`, `uuid`, `vctrs`, `viridisLite`, `vroom`, `withr`, `xfun`, `xml2`,
+`xtable`, `yaml`, `zoo`
+
+> Note: `pbkrtest` (Kenward-Roger denominator df) and `scales` appear here rather than in
+> category 3 — neither is called directly by BioEQ. `pbkrtest` is a hard dependency of
+> `replicateBE`, and `scales` of `ggplot2`, so both are always installed automatically.
+
+### 2.4 Version baseline
+
+The tested version of every package is recorded by
+`scripts/generate_dependency_manifest.R`. Run it to produce the current baseline for
+qualification or risk-assessment records:
+
+```r
+Rscript scripts/generate_dependency_manifest.R
+```
+
+Alongside the inventory it also reports the R version used, flags any package declared in
+`install_dependencies.R` that is no longer actually required ("phantoms"), and confirms the
+highest R version demanded anywhere in the dependency tree.
+
+---
+
+## 3. Interface Overview
+
+
+**No existing content.** The real top-level navigation, audited from `shiny/app.R`'s sidebar
+(in order): Data Upload, Analysis Setup, Results, Plots, Exports & Reports, Validation, Anomaly
+Detection, Sample Size, Randomization, Help & Support. This section should be a short map of
+those ten, each linking to its own section below — nothing more; the detail belongs in each
+tab's own section.
+
+---
+
+## 4. Data Upload
+
+**Existing content carried over** (partially accurate — verify against the real two-path flow
+before publishing: the app supports **both** raw concentration-time data **and**
+pre-calculated PK parameters as upload types, which the old text doesn't distinguish):
+
+> **Features:**
+> - Drag-and-drop file upload
+> - Support for CSV, Excel (.xlsx), and tab-delimited files
+> - Real-time data validation and error checking
+> - Data preview with interactive tables
+>
+> **Data Validation:**
+> - Column name checking
+> - Data type validation
+> - Missing value detection
+> - Study design verification
+
+**No existing content** — the real flow has more steps than this ever described: upload →
+column-mapping wizard (auto-detected, user-adjustable, including explicit Test/Reference
+treatment-value mapping — a step the old doc never mentioned but that materially affects results
+if set backwards) → confirm mapping → data summary/verification → continue to Analysis Setup.
+Also cover the Help-tab "Data Templates" downloads (CSV/Excel starter templates, added this
+session) as the answer to "what if I don't have a file yet."
+
+---
+
+## 5. Analysis Setup
+
+**No existing content** — needs to be written fresh as three subsections matching the real UI:
+
+### 5.1 Step 1: NCA Analysis Setup
+Scope: AUC calculation method, Lambda_z estimation method (incl. point-count selection), optional
+pAUC, missing-data handling (middle vs. terminal points), carryover detection (ICH M13A).
+
+### 5.2 Step 2: BE Statistical Analysis
+Scope: the three analysis types — ABE, ABEL (Average BE with Expanding Limits), RSABE
+(Reference-Scaled ABE) — and what distinguishes them; for ABEL, the eligible-parameters checkbox
+and CVwR cap; for RSABE, the method choice; parallel-design handling.
+
+### 5.3 Step 3: ANOVA Configuration
+Scope: Fixed Effects vs. Mixed Effects model choice, random-effects/group-effects structure,
+primary vs. secondary PK parameter selection, alpha level, and the NTID (narrow therapeutic
+index) toggle — none of which the old guide covered at all.
+
+---
+
+## 6. Results
+
+> **Analysis Output:**
+> - Summary Statistics, ANOVA Results, Bioequivalence Assessment (90% CI), Conclusion
+>
+> **Interactive Visualizations:**
+> - Concentration-time profiles, PK parameter comparisons, confidence interval plots, diagnostic
+>   plots
+
+**No existing content** — needs to be split into the 5 real sub-tabs, each gets its own
+subsection:
+
+### 6.1 BE Evaluation
+### 6.2 NCA Results
+### 6.3 Individual T vs R
+### 6.4 Descriptive Statistics
+### 6.5 ANOVA Results
+
+### 6.6 Interpreting Your Results
+**Existing placeholder** 
+> Draft source content (per-PK-parameter meaning, what the ANOVA Treatment/Subject/Period/
+> Sequence effects indicate, FDA/EMA/ICH acceptance criteria, plain-language BE conclusion
+> summaries, and study-design tradeoffs) already exists in
+> [`docs/user_manual_content/interpretation_guide_content.R`](user_manual_content/interpretation_guide_content.R) —
+> written as R/htmltools fragments for an earlier, never-shipped in-app help panel. Turn that
+> into prose for this section rather than starting from scratch.
+
+---
+
+## 7. Plots
+
+**No existing content** — needs to be written fresh as the 5 real sub-tabs:
+
+### 7.1 All Subject Profiles
+### 7.2 Individual Subject Profiles
+### 7.3 Cumulative T/R Ratio
+### 7.4 Individual T/R Ratio
+### 7.5 Lambda Z Regression
+
+---
+
+## 8. Exports & Reports
+
+> **Report Contents**:
+> - Study summary and design, data characteristics and validation, statistical analysis
+>   methodology, results tables and figures, bioequivalence conclusions - Needs expansion for othe exports available
+
+---
+
+## 9. Validation
+
+**No existing content** Scope:
+explain the two-track validation framing (NCA validated against Phoenix WinNonlin); ANOVA/BE validated against SAS PROC GLM/MIXED/TTEST via
+literature-consensus reference values and the `replicateBE` package), the Coverage Map, and how
+to read a validation run's PASS/FAIL output.
+
+---
+
+## 10. Anomaly Detection
+
+**No existing content** —
+
+### 10.1 Data Selection
+### 10.2 Pairwise Comparison
+Scope: the four comparison batteries (Overlapping duplicates, Scaled duplicates, Time-shifted
+duplicates, Dynamic pattern match), what each metric means (Lin's CCC, FDA f2, SaToWIB
+regression, DTW distance/lag, cross-correlation), and the disclaimer that scores are diagnostic
+only, not proof of fabrication. Source material exists in this session's work — see
+`bioeq-dead-code-audit-2026-08` memory for the citations (Fuglsang, Lin 1989, FDA dissolution
+guidance) to draw from.
+### 10.3 Trend Analysis
+### 10.4 Distribution Checks
+### 10.5 ISPR Comparison
+Note: this tab is a documented "Coming Soon" stub in the live UI — say so plainly rather than
+describing unbuilt functionality as if it works.
+### 10.6 Export
+
+---
+
+## 11. Sample Size
+
+**No existing content** — needs to cover the real tab: Study Parameters, the CV Back-Calculator,
+the Sample Size Result panel, and the Power Curve visualization. Also mention the
+dropout-rate-adjustment feature (rounds additional-subjects-needed up to the next multiple of the
+design's group count) — a real feature with no prior documentation anywhere.
+
+---
+
+## 12. Randomization
+
+**No existing content** — Subsections, matching the real UI:
+
+### 12.1 Generate Schedule
+Scope: design parameters, block/stratified randomization options, seed handling, and the three
+result views — Per Subject, Per Period (Long), Balance Check (the latter two added this session).
+### 12.2 Verify Schedule
+Scope: re-entering a prior audit record's parameters to deterministically regenerate and confirm
+a schedule.
+### 12.3 Report
+
+---
+
+## 13. Data Requirements
+
+Fix before publishing:
+
+> Required columns for concentration-time data:
+> - `Subject`: Subject identifier (numeric or character)
+> - `Period`: Study period (1, 2, 3, 4...)
+> - `Time`: Time point (numeric, same units throughout)
+> - `Concentration`: Measured concentration (numeric, ≥ 0)
+>
+> Required columns for pre-calculated PK parameters:
+> - `Subject`, `Period`, `Treatment`, `AUC0t`, `AUC0inf` (optional), `Cmax`, `Tmax` (optional)
+
+---
+
+## 14. Troubleshooting
+
+**Existing content carried over**, browser/upload advice is generic and still fine — verify the
+specific numbers before publishing (file-size limit, timeout) rather than trust the old figures
+as-is:
+
+> #### Browser Issues
+> - Recommended browsers: Chrome, Firefox, Safari, Edge
+> - Clear browser cache if interface appears broken
+> - Enable JavaScript in browser settings
+>
+> #### File Upload Issues
+> - *(old doc claimed "Maximum file size: 100 MB" — the actual Data Upload UI states 50MB;
+>   confirm the current real limit before publishing rather than carrying either number over
+>   unverified)*
+
+**No existing content** — the error-message table is worth rebuilding, but sourced from real
+`validate()`/`stop()` messages actually thrown by the Shiny server code (grep
+`shiny/server/*.R` for `showNotification`/`stop(`/`validate(need(` calls) rather than the old
+table's unverified guesses.
+
+---
+
+## 15. Getting Help
+
+**No existing content specific to the app.** Scope for this section: the app's
+own Help & Support tab (Getting Started steps, Data Format Requirements, Quick Links — Download
+Example Data, Data Templates, User Manual/Video Tutorials placeholders, Contact Support) — point
+readers there rather than to a console function reference.

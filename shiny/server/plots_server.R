@@ -46,7 +46,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         temp_dir_path <<- file.path(tempdir(), "bioeq_plots", session$token)
         plot_values$temp_dir <- temp_dir_path
         dir.create(plot_values$temp_dir, recursive = TRUE, showWarnings = FALSE)
-        cat("Created temp directory:", plot_values$temp_dir, "\n")
+        bioeq_log(sprintf("Created temp directory: %s", plot_values$temp_dir), "DEBUG")
       }
     })
     
@@ -84,7 +84,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           plot_values$last_analysis_hash != current_hash ||
           !plot_values$plots_cached) {
         
-        cat("Generating plots for new analysis...\n")
+        bioeq_log("Generating plots for new analysis", "DEBUG")
         generate_all_plots()
         plot_values$last_analysis_hash <- current_hash
         plot_values$plots_cached <- TRUE
@@ -95,13 +95,12 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     generate_all_plots <- function() {
       req(be_results(), nca_results(), uploaded_data())
       
-      cat("Starting plot generation...\n")
-      
+      bioeq_log("Starting plot generation", "DEBUG")
+
       plot_objects <- list()
       
       # Generate concentration-time plots
       tryCatch({
-        cat("Generating concentration-time plots...\n")
         conc_data <- uploaded_data()
         
         # Get user-specified units from validation result
@@ -140,26 +139,23 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             if (length(found_col) > 0) {
               # Rename the first found column to the standard name
               names(standardized_data)[names(standardized_data) == found_col[1]] <- std_name
-              cat("Mapped column", found_col[1], "to", std_name, "\n")
+              bioeq_log(sprintf("Mapped column %s to %s", found_col[1], std_name), "DEBUG")
             }
           }
-          
+
           # Map treatment values: T -> Test, R -> Reference for proper coloring
           if ("Treatment" %in% names(standardized_data)) {
-            cat("Original formulation values:", paste(unique(standardized_data$Treatment), collapse = ", "), "\n")
             standardized_data$Treatment <- ifelse(
               standardized_data$Treatment == "T", "Test",
               ifelse(standardized_data$Treatment == "R", "Reference",
                      standardized_data$Treatment)
             )
-            cat("Mapped formulation values:", paste(unique(standardized_data$Treatment), collapse = ", "), "\n")
           }
 
           # For replicate designs (>2 periods): create TreatmentPeriod label (T1/T2/R1/R2)
           # Uses per-sequence period ranking so e.g. RTRT period-4 T is always T2
           if ("Period" %in% names(standardized_data) &&
               length(unique(standardized_data$Period)) > 2) {
-            cat("Replicate design: creating TreatmentPeriod labels...\n")
             if ("Sequence" %in% names(standardized_data)) {
               tp_map <- standardized_data %>%
                 dplyr::distinct(Sequence, Treatment, Period) %>%
@@ -191,11 +187,11 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
                 by = c("Treatment", "Period")
               )
             }
-            cat("TreatmentPeriod values:",
-                paste(sort(unique(standardized_data$TreatmentPeriod)), collapse = ", "), "\n")
+            bioeq_log(sprintf("Replicate design - TreatmentPeriod values: %s",
+                              paste(sort(unique(standardized_data$TreatmentPeriod)), collapse = ", ")), "DEBUG")
           }
-          
-          cat("Standardized columns:", paste(names(standardized_data), collapse = ", "), "\n")
+
+          bioeq_log(sprintf("Standardized columns: %s", paste(names(standardized_data), collapse = ", ")), "DEBUG")
         } else {
           standardized_data <- NULL
         }
@@ -207,48 +203,46 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           interactive = TRUE
         )
         
-        cat("Linear plot result - error:", conc_linear$error, "plot is null:", is.null(conc_linear$plot), "\n")
-        
+        if (!is.null(conc_linear$error)) {
+          bioeq_log(sprintf("Linear concentration-time plot error: %s", conc_linear$error), "WARNING")
+        }
+
         # Log scale plot
         conc_log <- shiny_plot_concentration_time(
           data = standardized_data,
           log_scale = TRUE,
           interactive = TRUE
         )
-        
-        cat("Log plot result - error:", conc_log$error, "plot is null:", is.null(conc_log$plot), "\n")
-        
+
+        if (!is.null(conc_log$error)) {
+          bioeq_log(sprintf("Natural log concentration-time plot error: %s", conc_log$error), "WARNING")
+        }
+
         plot_objects$concentration <- list(
           linear = conc_linear,
           log = conc_log
         )
-        
-        cat("✓ Concentration-time plots generated\n")
+
       }, error = function(e) {
-        cat("✗ Error generating concentration-time plots:", e$message, "\n")
+        bioeq_log(sprintf("Error generating concentration-time plots: %s", e$message), "ERROR")
         plot_objects$concentration <- list(error = e$message)
       })
       
       # Prepare individual subjects plot data (placeholder for user selection)
       tryCatch({
-        cat("Preparing individual subjects plot data...\n")
-        
         # Store data with replicate flag for the individual-subject plot UI
         plot_objects$individual_subjects <- list(
           data         = standardized_data,
           is_replicate = "TreatmentPeriod" %in% names(standardized_data),
           error        = NULL
         )
-        
-        cat("✓ Individual subjects plot data prepared\n")
       }, error = function(e) {
-        cat("✗ Error preparing individual subjects plot data:", e$message, "\n")
+        bioeq_log(sprintf("Error preparing individual subjects plot data: %s", e$message), "ERROR")
         plot_objects$individual_subjects <- list(error = e$message)
       })
-      
+
       # Generate PK parameter boxplots
       tryCatch({
-        cat("Generating PK boxplots...\n")
         # Use BE results data which contains merged PK parameters with formulation info
         be_data <- be_results()
         
@@ -275,42 +269,41 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         )
         
         plot_objects$pk_boxplots <- pk_boxplots
-        
-        cat("✓ PK boxplots generated\n")
+
       }, error = function(e) {
-        cat("✗ Error generating PK boxplots:", e$message, "\n")
+        bioeq_log(sprintf("Error generating PK boxplots: %s", e$message), "ERROR")
         plot_objects$pk_boxplots <- list(error = e$message)
       })
-      
+
       # Generate BE confidence interval plot
       tryCatch({
-        cat("Generating BE confidence intervals...\n")
         be_data <- be_results()
-        
+
         # Filter BE results to only include user-selected primary PK parameters
         if (!is.null(analysis_config()) && !is.null(analysis_config()$selected_pk_params)) {
           selected_params <- analysis_config()$selected_pk_params
-          cat("Selected PK parameters for BE plot:", paste(selected_params, collapse = ", "), "\n")
-          
+
           # Filter the confidence intervals to only include selected parameters
           if (!is.null(be_data$confidence_intervals)) {
             # Get primary parameters (exclude log-transformed versions for cleaner display)
             primary_params <- intersect(selected_params, names(be_data$confidence_intervals))
-            cat("Available BE parameters:", paste(names(be_data$confidence_intervals), collapse = ", "), "\n")
-            cat("Filtered to primary parameters:", paste(primary_params, collapse = ", "), "\n")
-            
+            bioeq_log(sprintf(
+              "BE CI plot: selected=%s, available=%s, filtered=%s",
+              paste(selected_params, collapse = ", "),
+              paste(names(be_data$confidence_intervals), collapse = ", "),
+              paste(primary_params, collapse = ", ")), "DEBUG")
+
             # Check if we have any parameters after filtering
             if (length(primary_params) > 0) {
               # Create filtered BE results object
               filtered_be_data <- be_data
               filtered_be_data$confidence_intervals <- be_data$confidence_intervals[primary_params]
-              
+
               be_ci_plot <- shiny_plot_be_confidence_intervals(
                 be_results = filtered_be_data,
                 interactive = TRUE
               )
             } else {
-              cat("No matching parameters found after filtering\n")
               # Fall back to using all available parameters
               be_ci_plot <- shiny_plot_be_confidence_intervals(
                 be_results = be_data,
@@ -318,93 +311,86 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
               )
             }
           } else {
-            cat("No confidence intervals available in BE results\n")
             be_ci_plot <- list(plot = NULL, error = "No confidence intervals available")
           }
         } else {
-          cat("No analysis config or selected params available, using all parameters\n")
           be_ci_plot <- shiny_plot_be_confidence_intervals(
             be_results = be_data,
             interactive = TRUE
           )
         }
-        
+
         plot_objects$be_ci <- be_ci_plot
-        
-        cat("✓ BE confidence intervals generated\n")
+
       }, error = function(e) {
-        cat("✗ Error generating BE confidence intervals:", e$message, "\n")
+        bioeq_log(sprintf("Error generating BE confidence intervals: %s", e$message), "ERROR")
         plot_objects$be_ci <- list(error = e$message)
       })
       
       # Setup cumulative bioequivalence analysis (data preparation only)
       tryCatch({
-        cat("Setting up cumulative bioequivalence analysis...\n")
         be_data <- be_results()
         config <- analysis_config()
         nca_data <- nca_results()
-        
+
         # Get the selected ANOVA method and PK parameters
         anova_method <- if (!is.null(config) && !is.null(config$anova_model)) {
           config$anova_model
         } else {
           "fixed"
         }
-        
+
         selected_params <- if (!is.null(config) && !is.null(config$selected_pk_params)) {
           config$selected_pk_params
         } else {
           c("Cmax", "AUC0t", "AUC0inf")
         }
-        
+
         # Detect study design
         study_design <- if (!is.null(config) && !is.null(config$study_design)) {
           config$study_design
         } else {
           "2x2x2"  # Default assumption
         }
-        
-        cat("Using ANOVA method:", anova_method, "for cumulative analysis\n")
-        cat("Selected parameters:", paste(selected_params, collapse = ", "), "\n")
-        cat("Study design:", study_design, "\n")
-        
+
         # Try different data sources for cumulative analysis
         pk_data <- NULL
-        
+        pk_data_source <- NULL
+
         # For ABEL analysis, use NCA results directly (they contain Subject, Treatment, Period, PK params)
         if (!is.null(nca_data)) {
           if ("subject_data" %in% names(nca_data)) {
             pk_data <- nca_data$subject_data
-            cat("Using subject_data from NCA results\n")
+            pk_data_source <- "nca_results$subject_data"
           } else if ("nca_results" %in% names(nca_data)) {
             pk_data <- nca_data$nca_results
-            cat("Using nca_results from NCA results\n")
+            pk_data_source <- "nca_results$nca_results"
           } else if (is.data.frame(nca_data)) {
             pk_data <- nca_data
-            cat("Using NCA results data frame directly\n")
+            pk_data_source <- "nca_results (data.frame)"
           }
         }
-        
+
         # Fallback: try BE results (for older analysis types)
         if (is.null(pk_data) && !is.null(be_data)) {
-          cat("BE results structure:", paste(names(be_data), collapse = ", "), "\n")
-          
           if ("merged_data" %in% names(be_data)) {
             pk_data <- be_data$merged_data
-            cat("Using merged_data from BE results\n")
+            pk_data_source <- "be_results$merged_data"
           } else if ("pk_parameters" %in% names(be_data)) {
             pk_data <- be_data$pk_parameters
-            cat("Using pk_parameters from BE results\n")
+            pk_data_source <- "be_results$pk_parameters"
           } else if ("data" %in% names(be_data)) {
             pk_data <- be_data$data
-            cat("Using data from BE results\n")
+            pk_data_source <- "be_results$data"
           }
         }
-        
+
         if (!is.null(pk_data) && nrow(pk_data) > 0) {
-          cat("Found PK data with", nrow(pk_data), "rows and", ncol(pk_data), "columns\n")
-          cat("Available columns:", paste(names(pk_data), collapse = ", "), "\n")
-          
+          bioeq_log(sprintf(
+            "Cumulative BE setup: method=%s, parameters=%s, design=%s, source=%s (%d rows, %d cols)",
+            anova_method, paste(selected_params, collapse = ", "), study_design,
+            pk_data_source, nrow(pk_data), ncol(pk_data)), "DEBUG")
+
           # Setup cumulative analysis data using the new approach
           cumulative_setup <- generate_cumulative_be_plots(
             data = pk_data,
@@ -414,22 +400,20 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             interactive = TRUE,
             study_design = study_design
           )
-          
+
           plot_objects$cumulative_be <- cumulative_setup
-          cat("✓ Cumulative bioequivalence analysis setup complete\n")
         } else {
-          cat("No suitable PK data found for cumulative analysis\n")
+          bioeq_log("No suitable PK data found for cumulative analysis", "WARNING")
           plot_objects$cumulative_be <- list(error = "No PK data available for cumulative analysis")
         }
-        
+
       }, error = function(e) {
-        cat("✗ Error setting up cumulative bioequivalence analysis:", e$message, "\n")
+        bioeq_log(sprintf("Error setting up cumulative bioequivalence analysis: %s", e$message), "ERROR")
         plot_objects$cumulative_be <- list(error = paste("Setup error:", e$message))
       })
-      
+
       # Store plot objects
       plot_values$plot_objects <- plot_objects
-      cat("All plots generation complete\n")
     }
     
     # Individual plot output handlers for each tab
@@ -619,63 +603,33 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
                       `data-toggle` = "tab", "Linear Scale")
               ),
               tags$li(role = "presentation",
-                tags$a(href = paste0("#", ns("conc_log_tab")), 
-                      `aria-controls` = "log", role = "tab", 
-                      `data-toggle` = "tab", "Log Scale")
+                tags$a(href = paste0("#", ns("conc_log_tab")),
+                      `aria-controls` = "log", role = "tab",
+                      `data-toggle` = "tab", "Natural Log Scale")
               )
             ),
             div(class = "tab-content",
-              div(role = "tabpanel", class = "tab-pane active", 
+              div(role = "tabpanel", class = "tab-pane active",
                   id = ns("conc_linear_tab"),
                   if (!is.null(plot_data$linear$plot) && is.null(plot_data$linear$error)) {
                     plotlyOutput(ns("conc_linear_plot"), height = "500px")
                   } else {
-                    div(class = "alert alert-warning", 
+                    div(class = "alert alert-warning",
                         "Linear scale plot not available")
                   }
               ),
-              div(role = "tabpanel", class = "tab-pane", 
+              div(role = "tabpanel", class = "tab-pane",
                   id = ns("conc_log_tab"),
                   if (!is.null(plot_data$log$plot) && is.null(plot_data$log$error)) {
                     plotlyOutput(ns("conc_log_plot"), height = "500px")
                   } else {
-                    div(class = "alert alert-warning", 
-                        "Log scale plot not available")
+                    div(class = "alert alert-warning",
+                        "Natural log scale plot not available")
                   }
               )
             )
           )
         )
-      )
-    }
-    
-    # Create simple plot card
-    create_simple_plot_card <- function(plot_data, title, icon_name) {
-      output_id <- paste0(gsub("[^a-zA-Z0-9]", "_", tolower(title)), "_plot")
-      
-      div(class = "plot-card",
-        div(class = "plot-card-body",
-          div(class = "mb-3",
-            p(get_plot_description(title),
-              style = "color: var(--neutral-600); font-size: 14px; margin-bottom: 15px;")
-          ),
-          
-          if (!is.null(plot_data$plot) && is.null(plot_data$error)) {
-            plotlyOutput(ns(output_id), height = "500px")
-          } else {
-            div(class = "alert alert-warning", 
-                paste(title, "not available"))
-          }
-        )
-      )
-    }
-    
-    # Get plot description for info display
-    get_plot_description <- function(title) {
-      switch(title,
-        "PK Parameter Boxplots" = "Distribution of pharmacokinetic parameters by treatment group.",
-        "Individual T/R Ratio" = "90% confidence intervals for bioequivalence ratios.",
-        "Interactive visualization of analysis results."
       )
     }
     
@@ -956,25 +910,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         }
       }
       
-      # PK boxplots
-      pk_data <- plot_values$plot_objects$pk_boxplots
-      if (!is.null(pk_data)) {
-        if (!is.null(pk_data$plot) && is.null(pk_data$error)) {
-          output$pk_parameter_boxplots_plot <- renderPlotly({
-            pk_data$plot
-          })
-        }
-      }
-      
-      # BE confidence intervals
-      be_data <- plot_values$plot_objects$be_ci
-      if (!is.null(be_data)) {
-        if (!is.null(be_data$plot) && is.null(be_data$error)) {
-          output$bioequivalence_assessment_plot <- renderPlotly({
-            be_data$plot
-          })
-        }
-      }
     })
     
     # Auto-generate individual T/R ratio plot when data becomes available
@@ -1012,10 +947,10 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             interactive_plot
           })
           
-          cat("Initial simple T/R ratio plot created for", default_param, "\n")
-          
+          bioeq_log(sprintf("Initial simple T/R ratio plot created for %s", default_param), "DEBUG")
+
         }, error = function(e) {
-          cat("Error creating initial individual T/R ratio plot:", e$message, "\n")
+          bioeq_log(sprintf("Error creating initial individual T/R ratio plot: %s", e$message), "ERROR")
         })
       }
     })
@@ -1062,11 +997,11 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
               cumulative_plot
             })
             
-            cat("Initial cumulative T/R ratio plot created for", default_param, "\n")
+            bioeq_log(sprintf("Initial cumulative T/R ratio plot created for %s", default_param), "DEBUG")
           }
-          
+
         }, error = function(e) {
-          cat("Error creating initial cumulative T/R ratio plot:", e$message, "\n")
+          bioeq_log(sprintf("Error creating initial cumulative T/R ratio plot: %s", e$message), "ERROR")
         })
       }
     })
@@ -1165,9 +1100,9 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           }
         )
         
-        cat(sprintf("Running cumulative analysis for %s with subject order: %s\n", 
-                   input$cumulative_parameter, paste(subject_order, collapse = ", ")))
-        
+        bioeq_log(sprintf("Running cumulative analysis for %s with subject order: %s",
+                         input$cumulative_parameter, paste(subject_order, collapse = ", ")), "DEBUG")
+
         # Perform progressive analysis
         progressive_results <- perform_progressive_be_analysis(
           data = cumulative_setup$analysis_data,
@@ -1203,7 +1138,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
             )
           })
           
-          cat("Cumulative analysis completed successfully\n")
           showNotification("Cumulative analysis completed", type = "message")
           
         } else {
@@ -1216,7 +1150,7 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
         }
         
       }, error = function(e) {
-        cat("Error in cumulative analysis:", e$message, "\n")
+        bioeq_log(sprintf("Error in cumulative analysis: %s", e$message), "ERROR")
         
         output$cumulative_status <- renderUI({
           div(class = "alert alert-danger",
@@ -1277,9 +1211,9 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           }
         )
         
-        cat(sprintf("Creating simple T/R ratio plot for %s with subject order: %s\n", 
-                   input$individual_tr_parameter, paste(subject_order, collapse = ", ")))
-        
+        bioeq_log(sprintf("Creating simple T/R ratio plot for %s with subject order: %s",
+                         input$individual_tr_parameter, paste(subject_order, collapse = ", ")), "DEBUG")
+
         # Create simple T/R ratio plot
         tr_plot <- create_simple_tr_plot(
           data = cumulative_setup$analysis_data,
@@ -1296,12 +1230,11 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
           interactive_plot
         })
         
-        cat("Individual T/R ratio plot updated successfully\n")
         showNotification("Individual T/R ratio plot updated", type = "message")
-        
+
       }, error = function(e) {
-        cat("Error creating individual T/R ratio plot:", e$message, "\n")
-        
+        bioeq_log(sprintf("Error creating individual T/R ratio plot: %s", e$message), "ERROR")
+
         showNotification(paste("Plot error:", e$message), type = "error")
         
         # Show error in plot area
@@ -1391,11 +1324,10 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
 
         output$individual_subjects_plot <- renderPlotly({ plot_obj })
 
-        cat("Individual subjects plot updated for",
-            length(all_selected_subjects), "subjects\n")
+        bioeq_log(sprintf("Individual subjects plot updated for %d subjects", length(all_selected_subjects)), "DEBUG")
 
       }, error = function(e) {
-        cat("Error creating individual subjects plot:", e$message, "\n")
+        bioeq_log(sprintf("Error creating individual subjects plot: %s", e$message), "ERROR")
         showNotification(paste("Error creating plot:", e$message), type = "error")
       })
     })
@@ -1404,7 +1336,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     session$onSessionEnded(function() {
       if (!is.null(temp_dir_path) && dir.exists(temp_dir_path)) {
         unlink(temp_dir_path, recursive = TRUE)
-        cat("Cleaned up temp directory:", temp_dir_path, "\n")
       }
     })
     
@@ -1416,7 +1347,6 @@ plots_server <- function(id, be_results, nca_results, analysis_config, uploaded_
     lambda_z_method_names <- c(
       "manual" = "Manual (Fixed Points)",
       "ars" = "ARS (Adjusted R-Squared)",
-      "aic" = "AIC (Akaike Information Criterion)",
       "ttt" = "TTT (Two-Times-Tmax)"
     )
     

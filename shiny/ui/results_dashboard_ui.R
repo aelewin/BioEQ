@@ -393,25 +393,8 @@ results_dashboard_ui <- function(id) {
             )
           ),
 
-          # Summary Statistics Tab — one descriptive table per product
-          # (per period for replicate designs).
-          tabPanel(tags$span(icon("calculator"), " Summary Statistics"),
-            value = "pk_comparison",
-            br(),
-            fluidRow(
-              column(12,
-                h4("Descriptive Statistics by Treatment"),
-                p("Arithmetic descriptive statistics for each PK parameter, ",
-                  "shown as a separate table per product (split by period ",
-                  "for replicate designs)."),
-                br(),
-                uiOutput(ns("summary_stats_tables"))
-              )
-            )
-          ),
-
           # T vs R Tab
-          tabPanel(tags$span(icon("balance-scale"), " T vs R"),
+          tabPanel(tags$span(icon("balance-scale"), " Individual T vs R"),
             value = "be_analysis",
             br(),
             fluidRow(
@@ -460,6 +443,28 @@ results_dashboard_ui <- function(id) {
                   h5("Individual T/R Ratios"),
                   DT::dataTableOutput(ns("be_comp_individual_table"))
                 )
+              )
+            )
+          ),
+
+          # Descriptive Statistics Tab — one descriptive table per group,
+          # grouped by whichever breakdown the user selects.
+          tabPanel(tags$span(icon("calculator"), " Descriptive Statistics"),
+            value = "pk_comparison",
+            br(),
+            fluidRow(
+              column(12,
+                h4("Descriptive Statistics"),
+                p("Arithmetic descriptive statistics for each PK parameter, ",
+                  "shown as a separate table per group."),
+                fluidRow(
+                  column(4,
+                    tags$label("Group by:", style = "font-weight: 600;"),
+                    uiOutput(ns("summary_stats_group_by_ui"))
+                  )
+                ),
+                br(),
+                uiOutput(ns("summary_stats_tables"))
               )
             )
           ),

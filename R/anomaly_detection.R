@@ -183,11 +183,6 @@ pairwise_pearson_shape <- function(M, normalize_by = c("cmax", "auc")) {
   .pair_corr(Mn, method = "pearson", colname = "shape_pearson")
 }
 
-#' Spearman rank correlation on raw profiles
-pairwise_spearman <- function(M) {
-  .pair_corr(M, method = "spearman", colname = "spearman")
-}
-
 .pair_corr <- function(M, method, colname) {
   out <- .pair_skeleton(M)
   pi  <- .pair_indices(nrow(M))
@@ -299,137 +294,6 @@ pairwise_crosscorr <- function(M) {
   out
 }
 
-# =============================================================================
-# Combine all pairwise methods into one ranked table
-# =============================================================================
-
-#' Run the full pairwise battery and merge into one data frame
-run_pairwise_battery <- function(M, methods = c("satowib", "ccc", "f2",
-                                                  "shape_pearson", "spearman",
-                                                  "derivative", "dtw",
-                                                  "crosscorr")) {
-  base <- .pair_skeleton(M)
-
-  if ("satowib" %in% methods) {
-    s <- pairwise_satowib(M); base <- merge(base, s, by = c("id1", "id2"))
-  }
-  if ("ccc" %in% methods) {
-    s <- pairwise_ccc(M); base <- merge(base, s, by = c("id1", "id2"))
-  }
-  if ("f2" %in% methods) {
-    s <- pairwise_f2(M); base <- merge(base, s, by = c("id1", "id2"))
-  }
-  if ("shape_pearson" %in% methods) {
-    s <- pairwise_pearson_shape(M); base <- merge(base, s, by = c("id1", "id2"))
-  }
-  if ("spearman" %in% methods) {
-    s <- pairwise_spearman(M); base <- merge(base, s, by = c("id1", "id2"))
-  }
-  if ("derivative" %in% methods) {
-    s <- pairwise_derivative(M); base <- merge(base, s, by = c("id1", "id2"))
-  }
-  if ("dtw" %in% methods) {
-    s <- pairwise_dtw(M); base <- merge(base, s, by = c("id1", "id2"))
-  }
-  if ("crosscorr" %in% methods) {
-    s <- pairwise_crosscorr(M); base <- merge(base, s, by = c("id1", "id2"))
-  }
-  base
-}
-
-# =============================================================================
-# Section 9: Ranking, aggregation, and pair classification
-# =============================================================================
-
-#' Compute aggregate Borda rank across selected metrics
-#'
-#' For each metric, smaller "suspicion" = more anomalous, so the rank direction
-#' must be specified per metric. We convert each metric to a uniform 0-1
-#' "suspicion score" where 1 = most suspicious, then average them.
-aggregate_pair_ranks <- function(pair_df,
-                                  directions = NULL) {
-  # Per-metric direction map. Each entry says how to convert a metric value
-  # into a "suspicion score" (higher = more suspicious) BEFORE min-max scaling.
-  #   "high"     : raw value (high = suspicious)
-  #   "low"      : -value   (low  = suspicious)
-  #   "near_one" : -|value - 1| (close to 1 = suspicious; e.g. SaToWIB slope)
-  dir_map <- c(
-    slope              = "near_one",
-    r2                 = "high",
-    residual           = "low",
-    ccc                = "high",
-    f2                 = "high",
-    shape_pearson      = "high",
-    spearman           = "high",
-    derivative_pearson = "high",
-    dtw_distance       = "low",
-    xcorr_peak         = "high"
-  )
-  metrics <- intersect(names(dir_map), names(pair_df))
-  if (length(metrics) == 0) {
-    pair_df$consensus_score <- NA_real_
-    return(pair_df)
-  }
-  scores <- sapply(metrics, function(m) {
-    x <- pair_df[[m]]
-    sus <- switch(dir_map[[m]],
-      "high"     = x,
-      "low"      = -x,
-      "near_one" = -abs(x - 1),
-      x
-    )
-    finite <- is.finite(sus)
-    if (sum(finite) < 2) return(rep(NA_real_, length(x)))
-    rng <- range(sus[finite])
-    if (diff(rng) == 0) return(rep(0.5, length(x)))
-    out <- rep(NA_real_, length(x))
-    out[finite] <- (sus[finite] - rng[1]) / diff(rng)
-    out
-  })
-  if (is.null(dim(scores))) scores <- matrix(scores, nrow = nrow(pair_df))
-  pair_df$consensus_score <- rowMeans(scores, na.rm = TRUE)
-  pair_df$consensus_score[is.nan(pair_df$consensus_score)] <- NA_real_
-  pair_df <- pair_df[order(-pair_df$consensus_score), , drop = FALSE]
-  pair_df
-}
-
-#' Tier and classify a pairwise result row
-#'
-#' Tier 1 = multi-method consensus (>=0.85 score)
-#' Tier 2 = single strong signal (>=0.70)
-#' Tier 3 = borderline (>=0.55)
-classify_pairs <- function(pair_df,
-                            tier1_cutoff = 0.85,
-                            tier2_cutoff = 0.70,
-                            tier3_cutoff = 0.55) {
-  if (!"consensus_score" %in% names(pair_df)) {
-    pair_df$tier <- NA_character_
-    pair_df$pattern <- NA_character_
-    return(pair_df)
-  }
-  pair_df$tier <- with(pair_df, ifelse(
-    !is.finite(consensus_score), NA_character_,
-    ifelse(consensus_score >= tier1_cutoff, "Tier 1",
-    ifelse(consensus_score >= tier2_cutoff, "Tier 2",
-    ifelse(consensus_score >= tier3_cutoff, "Tier 3", "—")))
-  ))
-
-  # Pattern classification heuristics
-  ccc <- pair_df$ccc            %||% rep(NA_real_, nrow(pair_df))
-  slope <- pair_df$slope        %||% rep(NA_real_, nrow(pair_df))
-  shape <- pair_df$shape_pearson %||% rep(NA_real_, nrow(pair_df))
-  dtw_d <- pair_df$dtw_distance %||% rep(NA_real_, nrow(pair_df))
-  dtw_l <- pair_df$dtw_lag      %||% rep(NA_real_, nrow(pair_df))
-
-  pattern <- rep("—", nrow(pair_df))
-  pattern[is.finite(ccc) & ccc > 0.95 & is.finite(slope) & abs(slope - 1) < 0.10] <- "Duplicate"
-  pattern[is.finite(ccc) & ccc < 0.85 & is.finite(slope) & abs(slope - 1) >= 0.15 &
-          (pair_df$r2 %||% rep(NA_real_, nrow(pair_df))) > 0.90] <- "Dilution / Scaling"
-  pattern[is.finite(shape) & shape > 0.95 & is.finite(ccc) & ccc < 0.85 & pattern == "—"] <- "Shape-only match"
-  pattern[is.finite(dtw_l) & abs(dtw_l) >= 1 & is.finite(dtw_d) & dtw_d < quantile(dtw_d, 0.10, na.rm = TRUE) & pattern == "—"] <- "Time-shifted match"
-  pair_df$pattern <- pattern
-  pair_df
-}
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
@@ -442,16 +306,6 @@ classify_pairs <- function(pair_df,
 # and returns the ranked pair table. Keep these separate from
 # aggregate_pair_ranks so each analysis has cutoffs tuned to its pattern.
 
-# Min-max scale a vector in [0,1]; flat / all-NA returns 0.5
-.scale01 <- function(x) {
-  ok <- is.finite(x)
-  if (sum(ok) < 2) return(rep(NA_real_, length(x)))
-  rng <- range(x[ok])
-  if (diff(rng) == 0) return(ifelse(ok, 0.5, NA_real_))
-  out <- rep(NA_real_, length(x))
-  out[ok] <- (x[ok] - rng[1]) / diff(rng)
-  out
-}
 
 #' Overlapping-duplicate battery
 #'
@@ -488,14 +342,22 @@ run_scaled_battery <- function(M) {
 #' because many normal PK profiles share the same rise/fall shape and produce
 #' high correlations at lag ±1 by coincidence.
 #'
-#' Gates:
+#' Gates (on the cross-correlation columns, unchanged):
 #'   - |xcorr_lag|  >= 1   (best alignment is NOT at zero shift)
 #'   - xcorr_peak   > 0    (positive correlation at that lag)
 #'   - shift_r2     >= 0.90 (post-alignment values truly agree)
 #' Sorted by shift_r2 descending — the strongest aligned-copy match wins.
+#'
+#' dtw_distance/dtw_lag (pairwise_dtw()) are merged in as supporting evidence
+#' only — Dynamic Time Warping finds the best nonlinear alignment rather than
+#' a single integer lag, so a small dtw_distance corroborating a qualifying
+#' xcorr-based match is a stronger signal than either metric alone. They do
+#' not affect the gate above and are NA for the same 0 rows the gate excludes,
+#' since a table row only survives when its (gated) shift_r2 is non-NA.
 run_lag_battery <- function(M) {
   base <- .pair_skeleton(M)
   base <- merge(base, pairwise_crosscorr(M), by = c("id1", "id2"))
+  base <- merge(base, pairwise_dtw(M),       by = c("id1", "id2"))
 
   valid <- !is.na(base$xcorr_lag) & abs(base$xcorr_lag) >= 1 &
            !is.na(base$xcorr_peak) & base$xcorr_peak > 0 &
@@ -519,36 +381,6 @@ run_dynamics_battery <- function(M) {
   base <- merge(base, pairwise_pearson_shape(M), by = c("id1", "id2"))
   base <- merge(base, pairwise_ccc(M),           by = c("id1", "id2"))
   base[order(-base$derivative_pearson, na.last = TRUE), , drop = FALSE]
-}
-
-# =============================================================================
-# Section 5: Multivariate methods
-# =============================================================================
-
-#' PCA of profile matrix (rows = profiles)
-compute_profile_pca <- function(M, scale. = TRUE) {
-  Mc <- M
-  Mc[!is.finite(Mc)] <- 0
-  zero_var <- apply(Mc, 2, function(x) stats::var(x) == 0)
-  Mc <- Mc[, !zero_var, drop = FALSE]
-  if (ncol(Mc) < 2) return(NULL)
-  pc <- stats::prcomp(Mc, scale. = scale.)
-  list(scores = as.data.frame(pc$x), sdev = pc$sdev,
-       var_explained = pc$sdev^2 / sum(pc$sdev^2))
-}
-
-#' Hierarchical clustering on a chosen distance + linkage
-compute_profile_hclust <- function(M,
-                                    distance = c("euclidean", "correlation"),
-                                    linkage = "ward.D2") {
-  distance <- match.arg(distance)
-  Mc <- M; Mc[!is.finite(Mc)] <- 0
-  d <- if (distance == "correlation") {
-    stats::as.dist(1 - suppressWarnings(stats::cor(t(Mc))))
-  } else {
-    stats::dist(Mc, method = "euclidean")
-  }
-  stats::hclust(d, method = linkage)
 }
 
 # =============================================================================

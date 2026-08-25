@@ -18,6 +18,26 @@ setwd("/Users/tristanchiappetti/Workspace/BioEQ")
 val_dir  <- "validation"
 out_file <- "R/validation_embedded.RData"
 
+# read.csv()'s type-guessing (type.convert) silently coerces a column to
+# logical if every value in it happens to look like a logical literal - most
+# notably a Treatment column that is "T" for every row (a single-arm
+# synthetic profile), or any column that is entirely blank/NA. Once that
+# happens the original text is UNRECOVERABLE after the fact - as.character()
+# on the resulting logical gives "TRUE"/"FALSE", not "T"/"F". The only correct
+# fix is to prevent the coercion at read time via colClasses, for both
+# dataset and expected-results CSVs. Never include Period/Time/Concentration/
+# expected_value/tolerance_value here - those must stay numeric for
+# downstream comparisons and arithmetic.
+.CATEGORICAL_COLS <- c("Subject", "Sequence", "Treatment",
+                       "subject", "treatment", "parameter", "scope",
+                       "tolerance_type", "unit", "reference_source", "notes")
+.read_validation_csv <- function(path, ...) {
+  header <- names(utils::read.csv(path, nrows = 0, check.names = FALSE))
+  col_classes <- setNames(rep(NA_character_, length(header)), header)
+  col_classes[intersect(.CATEGORICAL_COLS, header)] <- "character"
+  utils::read.csv(path, stringsAsFactors = FALSE, colClasses = col_classes, ...)
+}
+
 cat("Reading manifest ...\n")
 manifest <- utils::read.csv(file.path(val_dir, "manifest.csv"),
                              stringsAsFactors = FALSE, comment.char = "")
@@ -42,7 +62,7 @@ for (i in seq_len(nrow(manifest))) {
     cat(sprintf("  SKIP (no file): %s -> %s\n", id, path))
     next
   }
-  datasets[[id]] <- utils::read.csv(path, stringsAsFactors = FALSE)
+  datasets[[id]] <- .read_validation_csv(path)
   cat(sprintf("  dataset: %-40s (%d rows)\n", id, nrow(datasets[[id]])))
 }
 
@@ -58,7 +78,7 @@ for (i in seq_len(nrow(manifest))) {
     next
   }
   df <- tryCatch(
-    utils::read.csv(path, stringsAsFactors = FALSE, comment.char = "#"),
+    .read_validation_csv(path, comment.char = "#"),
     error = function(e) NULL
   )
   if (!is.null(df) && nrow(df) > 0) {

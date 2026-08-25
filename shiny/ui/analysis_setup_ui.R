@@ -121,10 +121,8 @@ tagList(
                   "auc_method",
                   label = NULL,
                   choices = list(
-                    "Linear up/Log down (Mixed)" = "mixed",
-                    "Linear trapezoidal" = "linear",
-                    "Log trapezoidal" = "log",
-                    "Linear/Log trapezoidal" = "linear_log"
+                    "Linear-up/Log-down (Mixed)" = "mixed",
+                    "Linear trapezoidal" = "linear"
                   ),
                   selected = "mixed"
                 ),
@@ -139,7 +137,6 @@ tagList(
                   choices = list(
                     "Manual (Fixed points)" = "manual",
                     "ARS (Adjusted R-squared)" = "ars",
-                    "AIC (Akaike Information Criterion)" = "aic",
                     "TTT (Two-Times-Tmax)" = "ttt"
                   ),
                   selected = "ttt"
@@ -343,8 +340,8 @@ tagList(
                 label = NULL,
                 choices = list(
                   "Average Bioequivalence (ABE)" = "ABE",
-                  "Reference-Scaled Average BE (RSABE)" = "RSABE", 
-                  "Average BE with Expanding Limits (ABEL)" = "ABEL"
+                  "Average BE with Expanding Limits (ABEL)" = "ABEL",
+                  "Reference-Scaled Average BE (RSABE)" = "RSABE"
                 ),
                 selected = "ABE",
                 inline = FALSE
@@ -395,14 +392,6 @@ tagList(
                   ),
                   selected = "fda_linearized",
                   inline = FALSE
-                ),
-                div(style = "padding: 10px; background-color: #e3f2fd; border-left: 3px solid #1976d2; border-radius: 4px; margin-top: 10px;",
-                  tags$small(style = "color: #1565c0;",
-                    icon("info-circle"), " ",
-                    "RSABE uses intra-subject contrasts (ISC) for variance estimation. ",
-                    "Requires replicate design (2\u00D72\u00D73 or 2\u00D72\u00D74). ",
-                    "Parameters with CV", tags$sub("wR"), " \u2264 ~25.4% use standard ABE limits."
-                  )
                 )
               ),
               
@@ -488,12 +477,19 @@ tagList(
               
               # ===============================================================
               # PARALLEL DESIGNS: Fixed effects only (all BE types)
+              # NOTE: own id (anova_model_parallel) - this used to reuse
+              # "anova_model" (same id as the ABEL picker below), which meant
+              # both selectInputs existed in the DOM at once and could
+              # silently overwrite each other's value when switching
+              # be_analysis_type without ever touching the visible dropdown.
+              # See the analysis_config$anova_model assembly in
+              # analysis_setup_server.R for how each id is read back out.
               # ===============================================================
               conditionalPanel(
                 condition = "output.study_design_detected && output.detected_design_type == 'parallel'",
                 div(
                   selectInput(
-                    "anova_model",
+                    "anova_model_parallel",
                     label = NULL,
                     choices = list("Fixed Effects (lm)" = "fixed"),
                     selected = "fixed"
@@ -506,6 +502,11 @@ tagList(
               
               # ===============================================================
               # ABE: All four ANOVA model options (our own simple_anova.R)
+              # Keeps the plain "anova_model" id (the Random Effects Structure
+              # and Group Effects conditionalPanels below key off
+              # input.anova_model and are both scoped to be_analysis_type ==
+              # 'ABE' already, so this is the only picker they should ever
+              # reflect).
               # ===============================================================
               conditionalPanel(
                 condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'ABE'",
@@ -528,11 +529,13 @@ tagList(
               # ===============================================================
               # ABEL: Maps to replicateBE Method A (fixed) or Method B (mixed)
               # method.B option: 1=Satterthwaite, 2=nlme/SAS, 3=Kenward-Roger
+              # NOTE: own id (anova_model_abel) - see the parallel-design
+              # panel's comment above for why this can't share "anova_model".
               # ===============================================================
               conditionalPanel(
                 condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'ABEL'",
                 selectInput(
-                  "anova_model",
+                  "anova_model_abel",
                   label = NULL,
                   choices = list(
                     "Method A — Fixed Effects (ANOVA)" = "fixed",
@@ -551,28 +554,24 @@ tagList(
               ),
               
               # ===============================================================
-              # RSABE: Fixed or nlme only (our own rsabe_analysis.R)
+              # RSABE: model auto-selected by replicate design (not user-
+              # editable). See R/rsabe_analysis.R::perform_rsabe().
               # ===============================================================
               conditionalPanel(
                 condition = "(!output.study_design_detected || output.detected_design_type != 'parallel') && input.be_analysis_type == 'RSABE'",
-                selectInput(
-                  "anova_model",
-                  label = NULL,
-                  choices = list(
-                    "Fixed Effects (lm)" = "fixed",
-                    "Mixed Effects - nlme (REML)" = "nlme"
-                  ),
-                  selected = "fixed"
-                ),
+                uiOutput("rsabe_anova_model_ui"),
                 div(style = "font-size: 11px; color: #666; margin-top: 5px;",
-                  "RSABE uses Fixed Effects or nlme for treatment effect estimation. ",
-                  "Within-reference variance (s\u00B2wR) is always computed via individual subject contrasts (ISC)."
+                  "(Partial replicate requires Fixed Effects; full replicate requires Mixed Effects.)"
                 )
               ),
               
               # ===============================================================
               # RANDOM EFFECTS — only for ABE with mixed models
               # (ABEL uses replicateBE's built-in (1|subject); RSABE uses nlme's built-in (1|subject))
+              # Subject-as-random-intercept is the only structure used in standard
+              # regulatory BE mixed models (FDA/EMA 2x2 crossover); random-slope
+              # and period-nested variants are not part of the standard BE
+              # specification, so they are not offered here.
               # ===============================================================
               conditionalPanel(
                 condition = "input.anova_model != 'fixed' && input.be_analysis_type == 'ABE'",
@@ -582,52 +581,53 @@ tagList(
                     "random_effects",
                     label = NULL,
                     choices = list(
-                      "Random Intercept: (1|subject)" = "(1|subject)",
-                      "Random Intercept: (1|subject/period)" = "(1|subject/period)",
-                      "Random Slope: (treatment|subject)" = "(treatment|subject)",
-                      "Random Intercept + Slope: (1 + treatment|subject)" = "(1 + treatment|subject)"
+                      "Random Intercept: (1|subject)" = "(1|subject)"
                     ),
                     selected = "(1|subject)"
                   ),
                   div(style = "font-size: 11px; color: #666; margin-top: 5px;",
-                    "For most bioequivalence studies, '(1|subject)' is appropriate."
-                  ),
-                  
-                  # Group as random effect option (only for ABE mixed models)
-                  conditionalPanel(
-                    condition = "output.groups_detected",
-                    div(style = "margin-top: 10px; padding: 10px; background-color: #fff3cd; border-radius: 5px; border-left: 3px solid #ffc107;",
-                      h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #856404;"),
-                      checkboxInput(
-                        "include_group_random",
-                        "Include Group as Random Effect",
-                        value = FALSE
-                      ),
-                      div(style = "font-size: 11px; color: #856404; margin-top: 5px;",
-                        "Groups detected in data. Check to include group-to-group variability in mixed-effects model."
-                      )
-                    )
+                    "Subject as a random intercept — (1|subject) — is the standard random-effects structure for a bioequivalence mixed model."
                   )
                 )
               ),
-              
-              # Group effects for fixed models (ABE only — ABEL/RSABE handle their own models)
+
+              # ===============================================================
+              # GROUP EFFECTS — one consolidated panel for all four ANOVA model
+              # types and both parallel and 2x2x2 crossover designs (ABE only;
+              # ABEL/RSABE handle their own models; 2x2x3/2x2x4 replicate designs
+              # not yet supported — output.is_non_replicate_design gates that).
+              # Group is always a FIXED effect ("Model II" per the "Group Effect"
+              # article at bebac.at / ICH M13A's final guideline — the article
+              # explicitly argues against treating group as random). There is
+              # deliberately no "as random effect" option.
+              # ===============================================================
               conditionalPanel(
-                condition = "input.anova_model == 'fixed' && output.groups_detected && input.be_analysis_type == 'ABE'",
+                condition = "output.groups_detected && output.is_non_replicate_design && input.be_analysis_type == 'ABE'",
                 div(style = "margin-top: 10px; padding: 10px; background-color: #d1ecf1; border-radius: 5px; border-left: 3px solid #17a2b8;",
                   h6("Group Effects", style = "margin-bottom: 5px; font-weight: bold; color: #0c5460;"),
                   checkboxInput(
-                    "include_group_fixed",
-                    "Include Group as Fixed Effect",
+                    "include_group",
+                    "Include Group in Model",
                     value = TRUE
                   ),
-                  checkboxInput(
-                    "include_group_treatment_interaction",
-                    "Include Group \u00D7 Treatment Interaction",
-                    value = FALSE
-                  ),
                   div(style = "font-size: 11px; color: #0c5460; margin-top: 5px;",
-                    "Groups detected in data. Including group effects accounts for between-group variability."
+                    "Groups detected in data. Adds Group as a fixed effect (“Model II”) — Group, Sequence × Group, and Period nested within Group for crossover designs; Group alongside Treatment for parallel designs — per ICH M13A’s guidance for multi-group BE studies. This is the model used to determine bioequivalence."
+                  ),
+                  conditionalPanel(
+                    condition = "input.include_group",
+                    div(style = "margin-top: 10px; padding-top: 10px; border-top: 1px dashed #99d3e0;",
+                      checkboxInput(
+                        "include_group_treatment_interaction",
+                        "Test Group × Treatment Interaction (supportive analysis only)",
+                        value = FALSE
+                      ),
+                      div(style = "font-size: 11px; color: #0c5460; margin-top: 5px;",
+                        icon("triangle-exclamation"), " Reported as a separate diagnostic — ",
+                        tags$b("never used to determine bioequivalence"), ". Per ICH M13A, Group × Treatment ",
+                        "must stay out of the model that determines BE; this only evaluates whether the treatment ",
+                        "effect looks heterogeneous across groups."
+                      )
+                    )
                   )
                 )
               )

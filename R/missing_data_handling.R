@@ -27,7 +27,7 @@ handle_missing_data <- function(data, middle_method = "complete",
                                time_col = "Time", conc_col = "Concentration",
                                period_col = "Period") {
   
-  cat(sprintf("\U0001f504 Handling missing data — middle: %s, terminal: %s\n", middle_method, terminal_method))
+  bioeq_log(sprintf("Handling missing data - middle: %s, terminal: %s", middle_method, terminal_method), "DEBUG")
   
   # Validate input
   required_cols <- c(group_cols, time_col, conc_col)
@@ -86,14 +86,14 @@ handle_missing_data <- function(data, middle_method = "complete",
   }
   
   if (blq_count > 0) {
-    cat(sprintf("\U2705 Set %d BLQ values to 0\n", blq_count))
+    bioeq_log(sprintf("Set %d BLQ values to 0", blq_count), "DEBUG")
   }
   
   # ── Step 2: Handle NA concentrations with position-aware methods ──
   na_mask <- is.na(data[[conc_col]])
   
   if (!any(na_mask)) {
-    cat("\U2705 No missing concentration values detected\n")
+    bioeq_log("No missing concentration values detected", "DEBUG")
   } else {
     # Split by subject-treatment group to classify positions
     data_grouped <- split(data, do.call(paste, c(data[group_cols], sep = "_")))
@@ -215,8 +215,8 @@ handle_missing_data <- function(data, middle_method = "complete",
     
     n_imputed <- sum(imputation_log$Method %in% c("interpolation", "locf", "locf_fallback"), na.rm = TRUE)
     n_removed <- sum(imputation_log$Method == "removed", na.rm = TRUE)
-    cat(sprintf("\U2705 Missing data handled: %d imputed, %d excluded across %d profiles\n",
-                n_imputed, n_removed, length(data_grouped)))
+    bioeq_log(sprintf("Missing data handled: %d imputed, %d excluded across %d profiles",
+                      n_imputed, n_removed, length(data_grouped)), "WARNING")
   }
   
   return(list(
@@ -225,101 +225,3 @@ handle_missing_data <- function(data, middle_method = "complete",
   ))
 }
 
-#' Validate Missing Data Handling Results
-#'
-#' @param original_data Original data before handling
-#' @param processed_data Data after missing data handling
-#' @param method Method used for handling
-#' @param conc_col Name of concentration column
-#' @return Summary of changes made
-validate_missing_data_handling <- function(original_data, processed_data, method,
-                                          conc_col = "Concentration") {
-  
-  original_missing <- sum(is.na(original_data[[conc_col]]))
-  processed_missing <- sum(is.na(processed_data[[conc_col]]))
-  
-  cat(sprintf("\n\U0001f4cb Missing Data Handling Summary (%s):\n", method))
-  cat(sprintf("  Original missing values: %d\n", original_missing))
-  cat(sprintf("  Processed missing values: %d\n", processed_missing))
-  cat(sprintf("  Original rows: %d\n", nrow(original_data)))
-  cat(sprintf("  Processed rows: %d\n", nrow(processed_data)))
-  
-  if (method == "complete") {
-    cat(sprintf("  Rows removed: %d\n", nrow(original_data) - nrow(processed_data)))
-  }
-  
-  return(list(
-    method = method,
-    original_missing = original_missing,
-    processed_missing = processed_missing,
-    original_rows = nrow(original_data),
-    processed_rows = nrow(processed_data)
-  ))
-}
-
-#' Check Data Completeness for NCA
-#'
-#' @param data Concentration-time data
-#' @param group_cols Grouping columns
-#' @param time_col Time column name
-#' @param conc_col Concentration column name
-#' @return List with completeness statistics and per-point missing detail
-check_data_completeness <- function(data, group_cols = c("Subject", "Treatment"),
-                                  time_col = "Time", conc_col = "Concentration",
-                                  period_col = "Period") {
-  
-  has_period <- period_col %in% names(data)
-  
-  # Identify each missing point with full context
-  missing_detail <- NULL
-  na_mask <- is.na(data[[conc_col]])
-  
-  if (any(na_mask)) {
-    missing_rows <- data[na_mask, , drop = FALSE]
-    missing_detail <- data.frame(
-      Subject = as.character(missing_rows[[group_cols[1]]]),
-      Treatment = as.character(missing_rows[[group_cols[2]]]),
-      Period = if (has_period) as.character(missing_rows[[period_col]]) else "",
-      Time = as.numeric(missing_rows[[time_col]]),
-      stringsAsFactors = FALSE
-    )
-  }
-  
-  # Group-level completeness
-  data$group_id <- do.call(paste, c(data[group_cols], sep = "_"))
-  unique_groups <- unique(data$group_id)
-  
-  completeness_by_group <- do.call(rbind, lapply(unique_groups, function(g) {
-    grp <- data[data$group_id == g, ]
-    data.frame(
-      group_id = g,
-      total_points = nrow(grp),
-      missing_points = sum(is.na(grp[[conc_col]])),
-      complete_points = sum(!is.na(grp[[conc_col]])),
-      completeness_pct = round(100 * sum(!is.na(grp[[conc_col]])) / nrow(grp), 1),
-      stringsAsFactors = FALSE
-    )
-  }))
-  
-  overall_stats <- list(
-    total_profiles = length(unique_groups),
-    overall_completeness = round(100 * sum(!na_mask) / nrow(data), 1),
-    profiles_with_missing = sum(completeness_by_group$missing_points > 0),
-    total_missing = sum(na_mask),
-    min_completeness = min(completeness_by_group$completeness_pct),
-    max_completeness = max(completeness_by_group$completeness_pct)
-  )
-  
-  cat(sprintf("\U0001f4ca Data Completeness Summary:\n"))
-  cat(sprintf("  Total profiles: %d\n", overall_stats$total_profiles))
-  cat(sprintf("  Overall completeness: %.1f%%\n", overall_stats$overall_completeness))
-  cat(sprintf("  Profiles with missing data: %d\n", overall_stats$profiles_with_missing))
-  cat(sprintf("  Completeness range: %.1f%% - %.1f%%\n", 
-              overall_stats$min_completeness, overall_stats$max_completeness))
-  
-  return(list(
-    overall = overall_stats,
-    by_profile = completeness_by_group,
-    missing_detail = missing_detail
-  ))
-}

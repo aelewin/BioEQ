@@ -77,7 +77,7 @@ tagList(
         
         numericInput(
           "ss_theta0",
-          label = "Assumed T/R Ratio (\u03b80)",
+          label = "Assumed T/R Ratio (\u0394)",
           value = 0.95,
           min = 0.50,
           max = 1.50,
@@ -92,7 +92,16 @@ tagList(
           max = 0.99,
           step = 0.05
         ),
-        
+
+        numericInput(
+          "ss_dropout_pct",
+          label = "Anticipated Dropout Rate (%)",
+          value = 0,
+          min = 0,
+          max = 50,
+          step = 1
+        ),
+
         # Collapsible advanced options
         tags$details(
           tags$summary(
@@ -224,8 +233,17 @@ tagList(
         solidHeader = TRUE,
         width = 12,
         icon = icon("table"),
-        
-        uiOutput("ss_result_display")
+
+        uiOutput("ss_result_display"),
+        conditionalPanel(
+          condition = "output.ss_has_result",
+          div(style = "margin-top: 12px; text-align: right;",
+            downloadButton("ss_download_report",
+              label = "Download Report (HTML)",
+              icon = icon("file-code"),
+              class = "btn-outline-success btn-sm")
+          )
+        )
       ),
       
       # Power Curve box

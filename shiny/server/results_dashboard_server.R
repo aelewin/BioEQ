@@ -1,11 +1,6 @@
 # Results Dashboard Server Module
 # Comprehensive results processing and rendering
 
-# Source dashboard utilities and interpretation guides
-source("utils/dashboard_utils.R", local = TRUE)
-source("utils/interpretation_guides.R", local = TRUE)
-source("utils/report_generation.R", local = TRUE)
-
 #' Convert log-transformed parameter names to display names
 #' 
 #' @param log_param_name Log-transformed parameter name (e.g., "lnCmax")
@@ -219,31 +214,473 @@ calculate_pk_comparison <- function(nca_data, param_name) {
   ))
 }
 
+# =============================================================================
+# Shared SAS PROC GLM-style ANOVA output builders
+# =============================================================================
+# These render the same set of tables SAS produces for a crossover BE ANOVA
+# (Type III SS breakdown, the Subject(Sequence)-as-error-term Sequence test,
+# and Least Squares Means) from the fields build_crossover_anova_tables() /
+# compute_lsmeans_ci() (R/simple_anova.R) attach to param_result — used
+# identically by ABE, ABEL, and RSABE's ANOVA Results display so all three
+# analysis types show the same structure for the same underlying model.
+
+# Generic Source/DF/SS/MS/F/Pr(>F) table renderer, keyed by rownames.
+.render_anova_source_table <- function(df, header_class = "table-primary") {
+  tags$table(class = "table table-striped table-hover table-sm",
+    tags$thead(class = header_class,
+      tags$tr(tags$th("Source"), lapply(names(df), function(col) tags$th(col)))
+    ),
+    tags$tbody(
+      lapply(seq_len(nrow(df)), function(i) {
+        tags$tr(
+          tags$td(style = "font-weight: bold;", rownames(df)[i]),
+          lapply(seq_len(ncol(df)), function(j) {
+            val <- df[i, j]
+            col_name <- names(df)[j]
+            formatted <- if (is.numeric(val) && !is.na(val)) {
+              if (col_name %in% c("Pr(>F)", "p-value", "Pr(>|t|)")) format.pval(val, digits = 4)
+              else if (col_name %in% c("Df", "NumDF", "DenDF", "numDF", "denDF", "npar")) as.character(round(val))
+              else if (col_name %in% c("Sum Sq", "Mean Sq")) sprintf("%.4f", val)
+              else if (col_name %in% c("F value", "F-value")) sprintf("%.2f", val)
+              else sprintf("%.4f", val)
+            } else if (is.na(val)) "" else as.character(val)
+            tags$td(formatted)
+          })
+        )
+      })
+    )
+  )
+}
+
+# Card: SAS PROC GLM's own first two output tables for a fixed-effects model —
+# the overall Model/Error/Corrected Total F-test, plus the R-Square/Coeff Var/
+# Root MSE/Mean line. Computed generically from `param_result$model` (an `lm`
+# object) and its `anova()` table, so it works identically for ABE, ABEL, and
+# RSABE's fixed-effects fit without needing separately precomputed fields.
+# Returns NULL for mixed-effects models (nlme::lme's anova() has no Sum Sq/
+# Residual row to build this from — SAS PROC MIXED doesn't print this table
+# either; see the Type 3 Tests of Fixed Effects table instead).
+render_model_summary_card <- function(param_result, param_name) {
+  at <- tryCatch(as.data.frame(param_result$anova), error = function(e) NULL)
+  if (is.null(at) || !"Df" %in% names(at) || !"Sum Sq" %in% names(at)) return(NULL)
+
+  n_rows <- nrow(at)
+  err_df <- at$Df[n_rows]
+  err_ss <- at$`Sum Sq`[n_rows]
+  mdl_df <- sum(at$Df[-n_rows], na.rm = TRUE)
+  mdl_ss <- sum(at$`Sum Sq`[-n_rows], na.rm = TRUE)
+  tot_df <- mdl_df + err_df
+  tot_ss <- mdl_ss + err_ss
+  mdl_ms <- if (mdl_df > 0) mdl_ss / mdl_df else NA
+  err_ms <- if (err_df > 0) err_ss / err_df else NA
+  f_val  <- if (!is.na(mdl_ms) && !is.na(err_ms) && err_ms > 0) mdl_ms / err_ms else NA
+  p_val  <- if (!is.na(f_val) && mdl_df > 0 && err_df > 0) pf(f_val, mdl_df, err_df, lower.tail = FALSE) else NA
+
+  # R-Square / Coeff Var / Root MSE / Mean — derived from the same model/anova
+  # table (mean(fitted(model)) == mean(response) for an OLS fit with intercept).
+  r_squared  <- if (!is.na(tot_ss) && tot_ss > 0) mdl_ss / tot_ss else NA
+  root_mse   <- if (!is.na(err_ms) && err_ms >= 0) sqrt(err_ms) else NA
+  param_mean <- tryCatch(mean(fitted(param_result$model), na.rm = TRUE), error = function(e) NA_real_)
+  cv_percent <- if (!is.na(root_mse) && !is.na(param_mean) && param_mean != 0) (root_mse / param_mean) * 100 else NA
+
+  fmt_num <- function(x, d = 4) if (is.na(x)) "" else sprintf(paste0("%.", d, "f"), x)
+
+  div(class = "card mb-3",
+    div(class = "card-header",
+      h6(class = "card-title mb-0", icon("table"), sprintf(" Dependent Variable: %s", param_name))
+    ),
+    div(class = "card-body",
+      div(class = "table-responsive",
+        tags$table(class = "table table-striped table-sm",
+          tags$thead(class = "table-primary",
+            tags$tr(
+              tags$th("Source"), tags$th("DF", style = "text-align: right;"),
+              tags$th("Sum of Squares", style = "text-align: right;"),
+              tags$th("Mean Square", style = "text-align: right;"),
+              tags$th("F Value", style = "text-align: right;"),
+              tags$th("Pr > F", style = "text-align: right;")
+            )
+          ),
+          tags$tbody(
+            tags$tr(
+              tags$td(strong("Model")),
+              tags$td(mdl_df, style = "text-align: right;"),
+              tags$td(fmt_num(mdl_ss), style = "text-align: right;"),
+              tags$td(fmt_num(mdl_ms, 6), style = "text-align: right;"),
+              tags$td(fmt_num(f_val, 2), style = "text-align: right;"),
+              tags$td(if (is.na(p_val)) "" else format.pval(p_val, digits = 4), style = "text-align: right;")
+            ),
+            tags$tr(
+              tags$td(strong("Error")),
+              tags$td(err_df, style = "text-align: right;"),
+              tags$td(fmt_num(err_ss), style = "text-align: right;"),
+              tags$td(fmt_num(err_ms, 6), style = "text-align: right;"),
+              tags$td(""), tags$td("")
+            ),
+            tags$tr(
+              tags$td(strong("Corrected Total")),
+              tags$td(tot_df, style = "text-align: right;"),
+              tags$td(fmt_num(tot_ss), style = "text-align: right;"),
+              tags$td(""), tags$td(""), tags$td("")
+            )
+          )
+        )
+      ),
+      div(class = "table-responsive mt-2",
+        tags$table(class = "table table-sm table-bordered",
+          tags$thead(class = "table-light",
+            tags$tr(
+              tags$th("R-Square", style = "text-align: center;"),
+              tags$th("Coeff Var", style = "text-align: center;"),
+              tags$th("Root MSE", style = "text-align: center;"),
+              tags$th(sprintf("%s Mean", param_name), style = "text-align: center;")
+            )
+          ),
+          tags$tbody(
+            tags$tr(
+              tags$td(if (!is.na(r_squared)) sprintf("%.6f", r_squared) else "—", style = "text-align: center;"),
+              tags$td(if (!is.na(cv_percent)) sprintf("%.4f", cv_percent) else "—", style = "text-align: center;"),
+              tags$td(if (!is.na(root_mse)) sprintf("%.6f", root_mse) else "—", style = "text-align: center;"),
+              tags$td(if (!is.na(param_mean)) sprintf("%.6f", param_mean) else "—", style = "text-align: center;")
+            )
+          )
+        )
+      )
+    )
+  )
+}
+
+# Card: "Analysis of Variance (Type III SS)" — Sequence/Subject(Sequence)/
+# Period/Treatment/Residual, all tested against Residual MS (SAS PROC GLM
+# default). Requires `param_result$anova_comprehensive` (built by
+# build_crossover_anova_tables()).
+render_type3_anova_card <- function(param_result) {
+  comp_df <- param_result$anova_comprehensive
+  if (is.null(comp_df)) return(NULL)
+  tryCatch({
+    df <- comp_df[, setdiff(names(comp_df), "Source"), drop = FALSE]
+    div(class = "card mb-3",
+      div(class = "card-header",
+        h6(class = "card-title mb-0", icon("table"), " Analysis of Variance (Type III SS)")
+      ),
+      div(class = "card-body",
+        div(class = "table-responsive", .render_anova_source_table(df))
+      )
+    )
+  }, error = function(e) NULL)
+}
+
+# Card: "Type 3 Tests of Fixed Effects" — the mixed-model (PROC MIXED)
+# equivalent of the Type III SS card above. render_type3_anova_card() only
+# fires for the fixed-effects fit (anova_comprehensive is built from an lm()
+# model's SS decomposition, which a mixed model doesn't have); this is the
+# card that was missing for Method B / mixed-effects results, leaving Method
+# B's display short of Method A's. Requires `param_result$type3_ss`, an
+# `anova(lme_model, type = "marginal")` object — numDF/denDF/F-value/p-value
+# per fixed effect (Intercept, Sequence, Period, Treatment).
+render_type3_marginal_card <- function(param_result) {
+  t3 <- param_result$type3_ss
+  if (is.null(t3)) return(NULL)
+  tryCatch({
+    df <- as.data.frame(t3)
+    div(class = "card mb-3",
+      div(class = "card-header",
+        h6(class = "card-title mb-0", icon("table"), " Type 3 Tests of Fixed Effects")
+      ),
+      div(class = "card-body",
+        p(style = "font-size: 0.85em; color: #6c757d; margin-bottom: 10px;",
+          "Marginal (Type III) F-tests for each fixed effect from the mixed-effects model — the PROC MIXED equivalent of the Type III SS table shown for Fixed Effects (Method A)."),
+        div(class = "table-responsive", .render_anova_source_table(df))
+      )
+    )
+  }, error = function(e) NULL)
+}
+
+# Card: "Tests of Hypotheses Using the Type III MS for Subject(Sequence) as an
+# Error Term" — the Sequence effect (and, when Group is included, the Group
+# effect — both are between-subject factors tested against the same
+# Subject(Group x Sequence) error term) re-tested against the between-subject MS
+# instead of Residual MS (the standard, correct significance test for these
+# effects in a crossover design). Loops over every entry in
+# `param_result$subj_seq_analysis$hypothesis_tests` (built by
+# build_crossover_anova_tables() in R/simple_anova.R) rather than assuming only
+# "seq" is present, so the table gains a Group row automatically when Group is
+# in the model — the title still says "Subject(Sequence)" for the plain case;
+# when Group is present it becomes "Subject(Group x Sequence)" to match.
+render_seq_subj_test_card <- function(param_result) {
+  ssa <- param_result$subj_seq_analysis
+  tests <- tryCatch(ssa$hypothesis_tests, error = function(e) NULL)
+  if (is.null(tests) || length(tests) == 0) return(NULL)
+
+  label_for <- function(key) switch(key, seq = "Sequence", grp = "Group", key)
+  # Preserve a stable, meaningful order (Group before Sequence, matching the
+  # comprehensive Type III table's row order) rather than list-insertion order.
+  ordered_keys <- intersect(c("grp", "seq"), names(tests))
+  rows <- lapply(ordered_keys, function(key) {
+    t <- tests[[key]]
+    if (is.null(t) || is.null(t$f_value) || is.na(t$f_value)) return(NULL)
+    tags$tr(
+      tags$td(style = "font-weight: bold;", label_for(key)),
+      tags$td(as.character(t$df), style = "text-align: right;"),
+      tags$td(sprintf("%.6f", t$ss), style = "text-align: right;"),
+      tags$td(sprintf("%.6f", t$ms), style = "text-align: right;"),
+      tags$td(sprintf("%.2f", t$f_value), style = "text-align: right;"),
+      tags$td(format.pval(t$p_value, digits = 4), style = "text-align: right;")
+    )
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (length(rows) == 0) return(NULL)
+
+  error_term_label <- if ("grp" %in% names(tests)) "Subject(Group x Sequence)" else "Subject(Sequence)"
+
+  div(class = "card mb-3",
+    div(class = "card-header",
+      h6(class = "card-title mb-0", icon("table"),
+         sprintf(" Tests of Hypotheses Using the Type III MS for %s as an Error Term", error_term_label))
+    ),
+    div(class = "card-body",
+      div(class = "table-responsive",
+        tags$table(class = "table table-striped table-hover table-sm",
+          tags$thead(class = "table-info",
+            tags$tr(
+              tags$th("Source"), tags$th("DF", style = "text-align: right;"),
+              tags$th("Type III SS", style = "text-align: right;"),
+              tags$th("Mean Square", style = "text-align: right;"),
+              tags$th("F Value", style = "text-align: right;"),
+              tags$th("Pr > F", style = "text-align: right;")
+            )
+          ),
+          tags$tbody(rows)
+        )
+      )
+    )
+  )
+}
+
+# Card: Group x Treatment interaction — supportive/exploratory analysis only.
+# Requires `param_result$group_treatment_interaction`
+# (compute_group_treatment_interaction() in R/simple_anova.R), populated only
+# when the user opted into the "Test Group x Treatment Interaction" checkbox.
+# Deliberately styled/worded to make it unmistakable that this test is NOT part
+# of the model that determined bioequivalence — per ICH M13A's final guideline,
+# Group x Treatment must stay out of the BE-determining model and is reported
+# only as a supportive analysis.
+render_group_treatment_interaction_card <- function(param_result) {
+  gt <- param_result$group_treatment_interaction
+  if (is.null(gt) || is.null(gt$f) || is.na(gt$f)) return(NULL)
+  div(class = "card mb-3", style = "border-left: 4px solid #ffc107;",
+    div(class = "card-header", style = "background-color: #fff3cd;",
+      h6(class = "card-title mb-0", icon("triangle-exclamation"),
+         " Group × Treatment Interaction — Supportive Analysis")
+    ),
+    div(class = "card-body",
+      p(style = "font-size: 0.85em; color: #856404; margin-bottom: 10px;",
+        tags$b("Not used to determine bioequivalence."), " Per ICH M13A's final guideline, the ",
+        "Group × Treatment interaction term is excluded from the model that determines BE (it would ",
+        "bias the treatment effect); it is evaluated here only to check whether the treatment effect looks ",
+        "heterogeneous across groups. Tested against the ", tags$code(gt$error_term), " mean square."),
+      div(class = "table-responsive",
+        tags$table(class = "table table-striped table-hover table-sm",
+          tags$thead(class = "table-warning",
+            tags$tr(
+              tags$th("Source"), tags$th("DF (num, den)", style = "text-align: right;"),
+              tags$th("Type III SS", style = "text-align: right;"),
+              tags$th("Mean Square", style = "text-align: right;"),
+              tags$th("F Value", style = "text-align: right;"),
+              tags$th("Pr > F", style = "text-align: right;")
+            )
+          ),
+          tags$tbody(
+            tags$tr(
+              tags$td(style = "font-weight: bold;", "Group × Treatment"),
+              tags$td(sprintf("%s, %s", gt$df1, gt$df2), style = "text-align: right;"),
+              tags$td(sprintf("%.6f", gt$ss), style = "text-align: right;"),
+              tags$td(sprintf("%.6f", gt$ms), style = "text-align: right;"),
+              tags$td(sprintf("%.2f", gt$f), style = "text-align: right;"),
+              tags$td(format.pval(gt$p, digits = 4), style = "text-align: right;")
+            )
+          )
+        )
+      )
+    )
+  )
+}
+
+# Cards: the three SAS "Least Squares Means" tables for the Treatment (FORM)
+# effect — (1) LSMean per level + H0:LSMean1=LSMean2 p-value, (2) LSMean per
+# level + CI, (3) difference between the two LSMeans + CI on the difference.
+# Requires `param_result$lsmeans_result` (compute_lsmeans_ci()); also needs
+# treatment_coef/treatment_se/residual_df for table 3 (identical to the
+# Parameter Estimates card's T-R contrast, shown here in SAS's own layout).
+render_lsmeans_cards <- function(param_result, param_name) {
+  lsm <- param_result$lsmeans_result
+  if (is.null(lsm)) return(NULL)
+
+  tcoef <- param_result$treatment_coef %||% NA
+  tse   <- param_result$treatment_se   %||% NA
+  tdf   <- param_result$residual_df    %||% lsm$df_ref %||% NA
+  has_diff <- !is.na(tcoef) && !is.na(tse) && !is.na(tdf) && tdf > 0
+  if (has_diff) {
+    t_crit <- qt(1 - (1 - lsm$level) / 2, tdf)
+    diff_lo <- tcoef - t_crit * tse
+    diff_hi <- tcoef + t_crit * tse
+    tval    <- tcoef / tse
+    pval    <- 2 * pt(abs(tval), tdf, lower.tail = FALSE)
+  }
+  ci_pct <- sprintf("%.0f%%", lsm$level * 100)
+
+  div(class = "card mb-3",
+    div(class = "card-header",
+      h6(class = "card-title mb-0", icon("balance-scale"), " Least Squares Means")
+    ),
+    div(class = "card-body",
+      h6(class = "text-muted", sprintf("%s LSMEAN", param_name)),
+      div(class = "table-responsive mb-3",
+        tags$table(class = "table table-sm table-bordered",
+          tags$thead(class = "table-light",
+            tags$tr(tags$th("FORM"), tags$th("LSMEAN", style = "text-align: right;"),
+                    tags$th("H0:LSMean1=LSMean2 Pr > |t|", style = "text-align: right;"))
+          ),
+          tags$tbody(
+            tags$tr(tags$td(strong(lsm$test_level)),
+                    tags$td(sprintf("%.6f", lsm$lsmean_test_log), style = "text-align: right;"),
+                    tags$td(if (has_diff) format.pval(pval, digits = 4) else "", style = "text-align: right;")),
+            tags$tr(tags$td(strong(lsm$ref_level)),
+                    tags$td(sprintf("%.6f", lsm$lsmean_ref_log), style = "text-align: right;"),
+                    tags$td(""))
+          )
+        )
+      ),
+      div(class = "table-responsive mb-3",
+        tags$table(class = "table table-sm table-bordered",
+          tags$thead(class = "table-light",
+            tags$tr(tags$th("FORM"), tags$th("LSMEAN", style = "text-align: right;"),
+                    tags$th(sprintf("%s Confidence Limits", ci_pct), colspan = "2", style = "text-align: center;"))
+          ),
+          tags$tbody(
+            tags$tr(tags$td(strong(lsm$test_level)),
+                    tags$td(sprintf("%.6f", lsm$lsmean_test_log), style = "text-align: right;"),
+                    tags$td(sprintf("%.6f", lsm$ci_lower_test_log), style = "text-align: right;"),
+                    tags$td(sprintf("%.6f", lsm$ci_upper_test_log), style = "text-align: right;")),
+            tags$tr(tags$td(strong(lsm$ref_level)),
+                    tags$td(sprintf("%.6f", lsm$lsmean_ref_log), style = "text-align: right;"),
+                    tags$td(sprintf("%.6f", lsm$ci_lower_ref_log), style = "text-align: right;"),
+                    tags$td(sprintf("%.6f", lsm$ci_upper_ref_log), style = "text-align: right;"))
+          )
+        )
+      ),
+      if (has_diff) {
+        tagList(
+          h6(class = "text-muted", "Least Squares Means for Effect FORM"),
+          div(class = "table-responsive",
+            tags$table(class = "table table-sm table-bordered",
+              tags$thead(class = "table-light",
+                tags$tr(
+                  tags$th("i"), tags$th("j"),
+                  tags$th("Difference Between Means", style = "text-align: right;"),
+                  tags$th(sprintf("%s CL for LSMean(i)-LSMean(j)", ci_pct), colspan = "2", style = "text-align: center;")
+                )
+              ),
+              tags$tbody(
+                tags$tr(
+                  tags$td("1"), tags$td("2"),
+                  tags$td(sprintf("%.6f", tcoef), style = "text-align: right;"),
+                  tags$td(sprintf("%.6f", diff_lo), style = "text-align: right;"),
+                  tags$td(sprintf("%.6f", diff_hi), style = "text-align: right;")
+                )
+              )
+            )
+          ),
+          tags$p(class = "text-muted mb-0", style = "font-size: 0.8em; margin-top: 6px;",
+            sprintf("i = %s, j = %s.", lsm$test_level, lsm$ref_level))
+        )
+      }
+    )
+  )
+}
+
+# Card: SAS-style "Parameter Estimates" — the Test-Reference contrast alone
+# (Estimate/Standard Error/t Value/Pr > |t|), matching SAS PROC GLM's own
+# 4-column layout; the difference's CI is shown in the LSMeans card above.
+render_parameter_estimates_card <- function(param_result, ref_level = "R", test_level = "T") {
+  tcoef <- param_result$treatment_coef %||% NA
+  tse   <- param_result$treatment_se   %||% NA
+  tdf   <- param_result$residual_df    %||% NA
+  if (is.na(tcoef) || is.na(tse)) return(NULL)
+  tval <- tcoef / tse
+  tp   <- if (!is.na(tdf) && tdf > 0) 2 * pt(abs(tval), tdf, lower.tail = FALSE) else NA
+  div(class = "card mb-3",
+    div(class = "card-header",
+      h6(class = "card-title mb-0", icon("calculator"), " Parameter Estimates")
+    ),
+    div(class = "card-body",
+      div(class = "table-responsive",
+        tags$table(class = "table table-sm table-bordered",
+          tags$thead(class = "table-light",
+            tags$tr(
+              tags$th("Parameter"),
+              tags$th("Estimate", style = "text-align: right;"),
+              tags$th("Standard Error", style = "text-align: right;"),
+              tags$th("t Value", style = "text-align: right;"),
+              tags$th("Pr > |t|", style = "text-align: right;")
+            )
+          ),
+          tags$tbody(
+            tags$tr(
+              tags$td(strong(sprintf("%s - %s", test_level, ref_level))),
+              tags$td(sprintf("%.6f", tcoef), style = "text-align: right;"),
+              tags$td(sprintf("%.6f", tse), style = "text-align: right;"),
+              tags$td(sprintf("%.2f", tval), style = "text-align: right;"),
+              tags$td(if (!is.na(tp)) format.pval(tp, digits = 4) else "", style = "text-align: right;")
+            )
+          )
+        )
+      )
+    )
+  )
+}
+
 # Format replicateBE ANOVA results for display
 format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
-  
+
   # Extract replicateBE output
   rbe_output <- param_result$replicatebe_output
-  
-  # Determine variability classification (same CV_wR threshold as RSABE: ~25.4%)
+
+  # NOTE: replicateBE's own `Method` column is unreliable for distinguishing
+  # A vs B — the installed package version returns "A" even when method.B()
+  # was called (contradicts its documented "B-<option>" format). Use our own
+  # anova_method field (set directly by perform_abel_placeholder()) instead.
+  is_method_a <- identical(param_result$anova_method, "lm")
+
+  # replicateBE::method.A()/method.B() name the acceptance-limit columns
+  # differently depending on whether the drug ended up scaled: `L(%)`/`U(%)`
+  # when reference-scaling applied (CVwR > 30%, high-variability), but
+  # `BE.lo(%)`/`BE.hi(%)` when it did not (standard 80-125% limits used).
+  # Reading only `L(%)`/`U(%)` (as this function previously did) returned
+  # NULL for any non-scaled result, which crashed several `if()`/sprintf()
+  # calls below ("missing value where TRUE/FALSE needed") — e.g. a full
+  # replicate with CVwR just under the 30% switching threshold.
+  limit_lo <- rbe_output$`L(%)` %||% rbe_output$`BE.lo(%)`
+  limit_hi <- rbe_output$`U(%)` %||% rbe_output$`BE.hi(%)`
+
+  # Determine variability classification. EMA ABEL switches at CV_wR > 30%.
   cv_wr <- rbe_output$`CVwR(%)`
   is_hv <- !is.na(cv_wr) && cv_wr > 30  # EMA ABEL uses 30% switching CV
-  
+
   # Determine if limits are scaled vs fixed
   limits_are_scaled <- FALSE
   tryCatch({
-    lo <- rbe_output$`L(%)`
-    hi <- rbe_output$`U(%)`
-    if (!is.na(lo) && !is.na(hi) && (lo < 79.9 || hi > 125.1)) limits_are_scaled <- TRUE
+    if (!is.na(limit_lo) && !is.na(limit_hi) && (limit_lo < 79.9 || limit_hi > 125.1)) limits_are_scaled <- TRUE
   }, error = function(e) NULL)
-  
+
   # Evaluate individual criteria like RSABE
   pe_pct <- rbe_output$`PE(%)`
   pe_pass <- !is.na(pe_pct) && pe_pct >= 80 & pe_pct <= 125
   ci_lo <- rbe_output$`CL.lo(%)`
   ci_hi <- rbe_output$`CL.hi(%)`
   be_pass <- rbe_output$BE == "pass"
-  ci_within <- !is.na(ci_lo) && !is.na(ci_hi) && ci_lo >= rbe_output$`L(%)` && ci_hi <= rbe_output$`U(%)`
+  ci_within <- !is.na(ci_lo) && !is.na(ci_hi) && !is.na(limit_lo) && !is.na(limit_hi) &&
+               ci_lo >= limit_lo && ci_hi <= limit_hi
   
   # Detect whether test (swT) is estimable (full vs partial replicate)
   swT_val <- suppressWarnings(as.numeric(rbe_output$swT))
@@ -252,15 +689,15 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
   swR_val <- suppressWarnings(as.numeric(rbe_output$swR))
   cvR_val <- suppressWarnings(as.numeric(rbe_output$`CVwR(%)`))
 
-  # 4 columns when full replicate (test estimable), 3 columns for partial replicate
-  col_class <- if (has_test) "col-md-3" else "col-md-4"
+  # 3 columns when full replicate (test estimable), 2 columns for partial replicate
+  col_class <- if (has_test) "col-md-4" else "col-md-6"
 
   # ── Summary card: per-product intra-subject variability (Reference + Test) ──
   summary_card <- div(class = "card mb-3",
     div(class = "card-header bg-primary text-white",
       h5(class = "card-title mb-0", 
         icon("flask"), 
-        sprintf(" ABEL / replicateBE Results for %s", param_name)
+        "ANOVA output from replicateBE"
       )
     ),
     div(class = "card-body",
@@ -272,25 +709,23 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
             tags$tbody(
               tags$tr(tags$td(strong("Design:")), tags$td(rbe_output$Design)),
               tags$tr(tags$td(strong("Method:")),
-                tags$td(if (rbe_output$Method == "A") "Method A (ANOVA/lm)" else "Method B (Mixed Model/lme4)")),
-              tags$tr(tags$td(strong("Total Subjects:")), tags$td(sprintf("%g", rbe_output$n))),
-              tags$tr(tags$td(strong("Test Subjects:")), tags$td(sprintf("%g", rbe_output$nTT))),
-              tags$tr(tags$td(strong("Ref Subjects:")), tags$td(sprintf("%g", rbe_output$nRR))),
-              tags$tr(tags$td(strong("Degrees of Freedom:")), tags$td(sprintf("%.1f", rbe_output$DF)))
+                tags$td(if (is_method_a) "Method A (ANOVA/lm)" else "Method B (Mixed Model/lme4)")),
+              tags$tr(tags$td(strong("Total Subjects:")), tags$td(sprintf("%g", rbe_output$n)))
             )
           )
         ),
-        # Column 2: Intra-subject Reference (s_wR, MSE, CV%)
+        # Column 2: Intra-subject Reference (n, s_wR, MSE, CV%)
         div(class = col_class,
           h6(icon("user"), " Intra-subject Reference:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
+              tags$tr(tags$td(strong("n:")), tags$td(sprintf("%g", rbe_output$nRR))),
               tags$tr(tags$td(strong("s", tags$sub("wR"), ":")),
-                tags$td(if (!is.na(swR_val)) sprintf("%.4f", swR_val) else "\u2014")),
-              tags$tr(tags$td(strong("MSE (s\u00b2", tags$sub("wR"), "):")),
-                tags$td(if (!is.na(swR_val)) sprintf("%.6f", swR_val^2) else "\u2014")),
+                tags$td(if (!is.na(swR_val)) sprintf("%.4f", swR_val) else "—")),
+              tags$tr(tags$td(strong("MSE (s²", tags$sub("wR"), "):")),
+                tags$td(if (!is.na(swR_val)) sprintf("%.6f", swR_val^2) else "—")),
               tags$tr(tags$td(strong("CV%:")),
-                tags$td(if (!is.na(cvR_val)) sprintf("%.2f%%", cvR_val) else "\u2014"))
+                tags$td(if (!is.na(cvR_val)) sprintf("%.2f%%", cvR_val) else "—"))
             )
           )
         ),
@@ -299,174 +734,90 @@ format_replicatebe_anova_results <- function(param_result, param_name, be_res) {
           h6(icon("user"), " Intra-subject Test:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
+              tags$tr(tags$td(strong("n:")), tags$td(sprintf("%g", rbe_output$nTT))),
               tags$tr(tags$td(strong("s", tags$sub("wT"), ":")), tags$td(sprintf("%.4f", swT_val))),
-              tags$tr(tags$td(strong("MSE (s\u00b2", tags$sub("wT"), "):")), tags$td(sprintf("%.6f", swT_val^2))),
+              tags$tr(tags$td(strong("MSE (s²", tags$sub("wT"), "):")), tags$td(sprintf("%.6f", swT_val^2))),
               tags$tr(tags$td(strong("CV%:")), tags$td(sprintf("%.2f%%", cvT_val)))
             )
           )
-        ),
-        # Final column: BE Assessment (with classification footer)
-        div(class = col_class,
-          h6(icon("check-circle"), " ABEL Assessment:"),
-          tags$table(class = "table table-sm table-borderless",
-            tags$tbody(
-              tags$tr(tags$td(strong("Point Estimate:")), tags$td(sprintf("%.2f%%", pe_pct))),
-              tags$tr(tags$td(strong("CI Lower:")), tags$td(sprintf("%.2f%%", ci_lo))),
-              tags$tr(tags$td(strong("CI Upper:")), tags$td(sprintf("%.2f%%", ci_hi))),
-              tags$tr(tags$td(strong("Scaled limits:")),
-                tags$td(sprintf("[%.2f%%, %.2f%%]", rbe_output$`L(%)`, rbe_output$`U(%)`))),
-              tags$tr(
-                tags$td(strong("CI within limits:")),
-                tags$td(class = if (ci_within) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                  ifelse(ci_within, "PASS", "FAIL"))
-              ),
-              tags$tr(
-                tags$td(strong("PE constraint:")),
-                tags$td(class = if (pe_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                  sprintf("%s (80\u2013125%%)", ifelse(pe_pass, "PASS", "FAIL")))
-              ),
-              tags$tr(
-                tags$td(strong("Overall BE:")),
-                tags$td(class = if (be_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                  toupper(rbe_output$BE))
-              ),
-              tags$tr(
-                tags$td(strong("Classification:")),
-                tags$td(style = if (is_hv) "color: #e65100; font-weight: bold;" else "color: #2e7d32; font-weight: bold;",
-                  if (is_hv) {
-                    if (limits_are_scaled) "HIGH VARIABILITY \u2014 Scaled limits" else "HIGH VARIABILITY \u2014 Fixed limits (cap)"
-                  } else {
-                    "Low variability \u2014 Fixed ABE limits"
-                  }
-                )
-              )
-            )
-          )
         )
       )
     )
   )
   
-  # ── ANOVA Table Note ──
-  anova_note <- div(class = "card mb-3",
-    div(class = "card-header",
-      h6(class = "card-title mb-0", icon("table"), " ANOVA Table")
-    ),
-    div(class = "card-body",
-      div(class = "alert alert-secondary mb-0",
-        icon("info-circle"), " ",
-        strong("Full ANOVA table not available. "),
-        "The replicateBE package computes BE results internally using ",
-        if (rbe_output$Method == "A") "Method A (ANOVA/lm)" else "Method B (mixed model/lme4)",
-        " but does not expose the full ANOVA sum-of-squares decomposition. ",
-        "The variance components, degrees of freedom, and BE limits shown above are the complete statistical output from replicateBE."
-      )
-    )
+  # ── SAS PROC GLM-style ANOVA output, from the same independently-fit
+  # treatment-effect model used to reproduce replicateBE's PE/CI (fit in
+  # R/be_analysis.R via fit_rsabe_model() — the same model replicateBE fits
+  # internally: y ~ seq + subj:seq + prd + drug for Method A; y ~ seq + prd +
+  # drug, random=~1|subj for Method B). Same structure ABE and RSABE show.
+  model_summary_card <- render_model_summary_card(param_result, param_name)
+  type3_card     <- render_type3_anova_card(param_result)      # Fixed (Method A) only
+  type3_mixed_card <- render_type3_marginal_card(param_result) # Mixed (Method B) only
+  seq_subj_card <- render_seq_subj_test_card(param_result)
+  lsmeans_cards <- render_lsmeans_cards(param_result, param_name)
+  param_est_card <- render_parameter_estimates_card(
+    param_result,
+    ref_level  = param_result$lsmeans_result$ref_level  %||% "R",
+    test_level = param_result$lsmeans_result$test_level %||% "T"
   )
-  
-  # ── Log-Scale Results (collapsed by default) ──
-  log_scale_panel <- NULL
-  tryCatch({
-    if (!is.na(pe_pct) && !is.na(ci_lo) && !is.na(ci_hi)) {
-      safe_id <- gsub("[^a-zA-Z0-9]", "", param_name)
-      log_scale_panel <- div(class = "card mb-3",
-        div(class = "card-header", style = "cursor: pointer;",
-            `data-toggle` = "collapse", `data-target` = paste0("#logscale-abel-", safe_id),
-          h6(class = "card-title mb-0",
-            icon("compress-arrows-alt"),
-            " Log-Scale Results ",
-            tags$small(class = "text-muted", "(click to expand)")
-          )
-        ),
-        div(id = paste0("logscale-abel-", safe_id), class = "collapse",
-          div(class = "card-body",
-            tags$table(class = "table table-sm",
-              tags$tbody(
-                tags$tr(tags$td(strong("Log GMR:")), tags$td(sprintf("%.6f", log(pe_pct / 100)))),
-                tags$tr(tags$td(strong("Log CI Lower:")), tags$td(sprintf("%.6f", log(ci_lo / 100)))),
-                tags$tr(tags$td(strong("Log CI Upper:")), tags$td(sprintf("%.6f", log(ci_hi / 100))))
-              )
-            )
-          )
-        )
-      )
-    }
-  }, error = function(e) NULL)
-  
-  # ── Info note ──
-  info_note <- div(class = "alert alert-info",
-    h6(icon("info-circle"), " About replicateBE Analysis"),
-    p(paste0(
-      "This analysis was performed using the replicateBE package (EMA ABEL). ",
-      "The package implements ", 
-      if(rbe_output$Method == "A") "Method A (Linear Model/ANOVA)" else {
-        df_label <- switch(as.character(be_res$df_approximation %||% 2),
-          "1" = "Satterthwaite",
-          "2" = "nlme/SAS CONTAIN",
-          "3" = "Kenward-Roger",
-          "default"
-        )
-        sprintf("Method B (Mixed Model, %s DF approximation)", df_label)
-      },
-      ". Results include within-subject variability estimates and scaled bioequivalence limits."
-    ))
-  )
-  
+
   return(tagList(
     summary_card,
-    anova_note,
-    log_scale_panel,
-    info_note
+    model_summary_card,
+    type3_card,
+    type3_mixed_card,
+    seq_subj_card,
+    lsmeans_cards,
+    param_est_card
   ))
 }
 
 # Format RSABE ANOVA results for display
 format_rsabe_anova_results <- function(param_result, param_name, be_res) {
-  
+
   rsabe_details <- be_res$rsabe_details[[param_name]]
-  isc <- if (!is.null(rsabe_details)) rsabe_details$isc_result else NULL
   rsabe_test <- if (!is.null(rsabe_details)) rsabe_details$rsabe_test else NULL
-  model_result <- if (!is.null(rsabe_details)) rsabe_details$model_result else NULL
   is_hv <- if (!is.null(rsabe_details)) rsabe_details$is_hv else FALSE
   rsabe_method <- be_res$rsabe_method %||% "fda_linearized"
-  
-  # Detect whether test is estimable (full vs partial replicate)
+
+  # Detect whether the Test-side variance is estimable (full-replicate only)
   s2wT_val <- suppressWarnings(as.numeric(param_result$s2_wT %||% NA))
   cvwT_val <- suppressWarnings(as.numeric(param_result$cv_wt_percent %||% NA))
   has_test <- !is.na(s2wT_val) && !is.na(cvwT_val)
   s2wR_val <- suppressWarnings(as.numeric(param_result$s2_wR))
   cvwR_val <- suppressWarnings(as.numeric(param_result$cv_wr_percent))
-  col_class <- if (has_test) "col-md-3" else "col-md-4"
+  col_class <- if (has_test) "col-md-4" else "col-md-6"
 
-  # ── Summary card: per-product intra-subject variability (Reference + Test) ──
+  method_label <- if (identical(param_result$anova_method, "fixed")) "Fixed Effects (PROC GLM)" else "Mixed Effects (PROC MIXED)"
+
+  # \u2500\u2500 Summary card: per-product intra-subject variability (Reference + Test) \u2500\u2500
+  # Same layout as ABEL's summary card (format_replicatebe_anova_results()).
   summary_card <- div(class = "card mb-3",
     div(class = "card-header bg-primary text-white",
       h5(class = "card-title mb-0",
         icon("flask"),
-        sprintf(" RSABE ANOVA Results for %s", param_name)
+        sprintf(" RSABE Results for %s", param_name)
       )
     ),
     div(class = "card-body",
       div(class = "row",
-        # Column 1: Model Summary
+        # Column 1: Study Design
         div(class = col_class,
           h6(icon("flask"), " Model Summary:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
-              tags$tr(tags$td(strong("ANOVA Method:")),
-                tags$td(if (param_result$anova_method == "fixed") "Fixed Effects" else "Mixed Effects (nlme)")),
-              tags$tr(tags$td(strong("Observations:")), tags$td(sprintf("%g", param_result$n_observations))),
-              tags$tr(tags$td(strong("Residual DF:")), tags$td(sprintf("%.0f", param_result$residual_df))),
-              tags$tr(tags$td(strong("Treatment Diff (d\u0302):")), tags$td(sprintf("%.6f", param_result$treatment_coef))),
-              tags$tr(tags$td(strong("SE(d\u0302):")), tags$td(sprintf("%.6f", param_result$treatment_se)))
+              tags$tr(tags$td(strong("Design:")), tags$td(be_res$design_type %||% "\u2014")),
+              tags$tr(tags$td(strong("Method:")), tags$td(method_label)),
+              tags$tr(tags$td(strong("Total Subjects:")), tags$td(sprintf("%g", param_result$n_observations)))
             )
           )
         ),
-        # Column 2: Intra-subject Reference (s_wR, MSE, CV%)
+        # Column 2: Intra-subject Reference (n, s_wR, MSE, CV%)
         div(class = col_class,
           h6(icon("user"), " Intra-subject Reference:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
+              tags$tr(tags$td(strong("n:")), tags$td(sprintf("%s", param_result$n_wR %||% "\u2014"))),
               tags$tr(tags$td(strong("s", tags$sub("wR"), ":")),
                 tags$td(if (!is.na(s2wR_val) && s2wR_val >= 0) sprintf("%.4f", sqrt(s2wR_val)) else "\u2014")),
               tags$tr(tags$td(strong("MSE (s\u00b2", tags$sub("wR"), "):")),
@@ -481,129 +832,34 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
           h6(icon("user"), " Intra-subject Test:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
+              tags$tr(tags$td(strong("n:")), tags$td(sprintf("%s", param_result$n_wT %||% "\u2014"))),
               tags$tr(tags$td(strong("s", tags$sub("wT"), ":")),
                 tags$td(if (s2wT_val >= 0) sprintf("%.4f", sqrt(s2wT_val)) else "\u2014")),
               tags$tr(tags$td(strong("MSE (s\u00b2", tags$sub("wT"), "):")), tags$td(sprintf("%.6f", s2wT_val))),
               tags$tr(tags$td(strong("CV%:")), tags$td(sprintf("%.2f%%", cvwT_val)))
             )
           )
-        ),
-        # Final column: RSABE Assessment (with Classification footer)
-        div(class = col_class,
-          h6(icon("check-circle"), " RSABE Assessment:"),
-          if (is_hv && !is.null(rsabe_test)) {
-            if (rsabe_method == "fda_linearized") {
-              tags$table(class = "table table-sm table-borderless",
-                tags$tbody(
-                  tags$tr(tags$td(strong("\u03B8\u00B2\u209B:")), tags$td(sprintf("%.6f", rsabe_test$theta_sq))),
-                  tags$tr(tags$td(strong("\u03B7\u0302 (point est):")), tags$td(sprintf("%.6f", rsabe_test$eta_hat))),
-                  tags$tr(tags$td(strong("UCB (95%):")), tags$td(sprintf("%.6f", rsabe_test$ucb))),
-                  tags$tr(tags$td(strong("Scaled limits:")), tags$td(sprintf("[%.2f%%, %.2f%%]", rsabe_test$scaled_lower, rsabe_test$scaled_upper))),
-                  tags$tr(
-                    tags$td(strong("Scaling criterion:")),
-                    tags$td(class = if (rsabe_test$rsabe_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                      sprintf("%s (UCB %s 0)", ifelse(rsabe_test$rsabe_pass, "PASS", "FAIL"), ifelse(rsabe_test$rsabe_pass, "\u2264", ">")))
-                  ),
-                  tags$tr(
-                    tags$td(strong("PE constraint:")),
-                    tags$td(class = if (rsabe_details$pe_constraint_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                      sprintf("%s (80\u2013125%%)", ifelse(rsabe_details$pe_constraint_pass, "PASS", "FAIL")))
-                  )
-                )
-              )
-            } else {
-              # ncTOST
-              tags$table(class = "table table-sm table-borderless",
-                tags$tbody(
-                  tags$tr(tags$td(strong("d = d\u0302/s_wR:")), tags$td(sprintf("%.4f", rsabe_test$d_index))),
-                  tags$tr(tags$td(strong("K:")), tags$td(sprintf("%.6f", rsabe_test$K))),
-                  tags$tr(tags$td(strong("d/(K\u00B7c\u1d63):")), tags$td(sprintf("%.4f", rsabe_test$stat))),
-                  tags$tr(tags$td(strong("p-values:")), tags$td(sprintf("p\u2081=%.6f, p\u2082=%.6f", rsabe_test$p1, rsabe_test$p2))),
-                  tags$tr(tags$td(strong("max(p):")), tags$td(sprintf("%.6f", rsabe_test$overall_p))),
-                  tags$tr(tags$td(strong("Scaled limits:")), tags$td(sprintf("[%.2f%%, %.2f%%]", rsabe_test$scaled_lower_pct, rsabe_test$scaled_upper_pct))),
-                  tags$tr(
-                    tags$td(strong("ncTOST:")),
-                    tags$td(class = if (rsabe_test$rsabe_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                      ifelse(rsabe_test$rsabe_pass, "PASS", "FAIL"))
-                  ),
-                  tags$tr(
-                    tags$td(strong("PE constraint:")),
-                    tags$td(class = if (rsabe_details$pe_constraint_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                      sprintf("%s (80\u2013125%%)", ifelse(rsabe_details$pe_constraint_pass, "PASS", "FAIL")))
-                  )
-                )
-              )
-            }
-          } else {
-            tags$table(class = "table table-sm table-borderless",
-              tags$tbody(
-                tags$tr(tags$td(strong("Decision:")), tags$td("Using standard ABE (80\u2013125%)")),
-                tags$tr(tags$td(strong("Reason:")), tags$td(sprintf("CV_wR (%.1f%%) \u2264 switching CV (~25.4%%)", param_result$cv_wr_percent))),
-                tags$tr(tags$td(""), tags$td("RSABE scaling not required"))
-              )
-            )
-          },
-          tags$div(style = "margin-top: 6px; font-size: 0.9em;",
-            strong("Classification: "),
-            tags$span(style = if (is_hv) "color: #e65100; font-weight: bold;" else "color: #2e7d32; font-weight: bold;",
-              if (is_hv) "HIGH VARIABILITY \u2014 Scaled limits" else "Low variability \u2014 Fixed ABE limits")
-          )
         )
       )
     )
   )
-  
-  # ── ANOVA Table from the RSABE model ──
-  anova_table_div <- NULL
-  if (!is.null(param_result$anova)) {
-    tryCatch({
-      anova_df <- as.data.frame(param_result$anova)
-      anova_table_div <- div(class = "card mb-3",
-        div(class = "card-header",
-          h6(class = "card-title mb-0", icon("table"), " ANOVA Table (from RSABE model)")
-        ),
-        div(class = "card-body",
-          p(style = "font-size: 0.85em; color: #6c757d; margin-bottom: 10px;",
-            "Analysis of Variance table from the treatment effect model used for RSABE."),
-          div(class = "table-responsive",
-            tags$table(class = "table table-striped table-hover table-sm",
-              tags$thead(class = "table-primary",
-                tags$tr(
-                  tags$th("Source"),
-                  lapply(names(anova_df), function(col) tags$th(col))
-                )
-              ),
-              tags$tbody(
-                lapply(1:nrow(anova_df), function(i) {
-                  tags$tr(
-                    tags$td(style = "font-weight: bold;", rownames(anova_df)[i]),
-                    lapply(1:ncol(anova_df), function(j) {
-                      val <- anova_df[i, j]
-                      col_name <- names(anova_df)[j]
-                      formatted <- if (is.numeric(val) && !is.na(val)) {
-                        if (col_name %in% c("Pr(>F)", "p-value", "Pr(>|t|)")) format.pval(val, digits = 4)
-                        else if (col_name %in% c("Df", "NumDF", "DenDF", "numDF", "denDF", "npar")) as.character(round(val))
-                        else if (col_name %in% c("Sum Sq", "Mean Sq")) sprintf("%.4f", val)
-                        else if (col_name %in% c("F value", "F-value")) sprintf("%.2f", val)
-                        else sprintf("%.4f", val)
-                      } else as.character(val)
-                      tags$td(formatted)
-                    })
-                  )
-                })
-              )
-            )
-          )
-        )
-      )
-    }, error = function(e) NULL)
-  }
-  
-  # ── Collapsible Intermediate Values ──
+
+  # \u2500\u2500 SAS-style ANOVA output \u2500\u2500 same card set ABE/ABEL use; the
+  # Type III / Subject(Seq) / LSMeans cards simply render nothing when the
+  # underlying fields aren't populated (this model has no Period/Treatment/
+  # Subject(Sequence) terms), same as ABE/ABEL do for any table they can't build.
+  model_summary_card <- render_model_summary_card(param_result, param_name)
+  type3_card       <- render_type3_anova_card(param_result)
+  type3_mixed_card <- render_type3_marginal_card(param_result)
+  seq_subj_card  <- render_seq_subj_test_card(param_result)
+  lsmeans_cards  <- render_lsmeans_cards(param_result, param_name)
+  param_est_card <- render_parameter_estimates_card(param_result, ref_level = "R", test_level = "T")
+
+  # \u2500\u2500 Collapsible Intermediate Values \u2500\u2500
   intermediate_panel <- NULL
   if (is_hv && !is.null(rsabe_test)) {
     safe_id <- gsub("[^a-zA-Z0-9]", "", param_name)
-    
+
     if (rsabe_method == "fda_linearized") {
       # Howe UCB intermediate components
       intermediate_panel <- div(class = "card mb-3",
@@ -657,60 +913,35 @@ format_rsabe_anova_results <- function(param_result, param_name, be_res) {
       )
     }
   }
-  
-  # ── Log-Scale Results (collapsed by default) ──
-  log_scale_panel <- NULL
-  if (!is.null(param_result$treatment_coef) && !is.na(param_result$treatment_coef)) {
-    safe_id2 <- gsub("[^a-zA-Z0-9]", "", param_name)
-    ci_obj <- be_res$confidence_intervals[[param_name]]
-    log_lower <- if (!is.null(ci_obj$ci_lower)) log(ci_obj$ci_lower / 100) else NA
-    log_upper <- if (!is.null(ci_obj$ci_upper)) log(ci_obj$ci_upper / 100) else NA
-    
-    log_scale_panel <- div(class = "card mb-3",
-      div(class = "card-header", style = "cursor: pointer;",
-          `data-toggle` = "collapse", `data-target` = paste0("#logscale-rsabe-", safe_id2),
-        h6(class = "card-title mb-0",
-          icon("compress-arrows-alt"),
-          " Log-Scale Results ",
-          tags$small(class = "text-muted", "(click to expand)")
-        )
-      ),
-      div(id = paste0("logscale-rsabe-", safe_id2), class = "collapse",
-        div(class = "card-body",
-          tags$table(class = "table table-sm",
-            tags$tbody(
-              tags$tr(tags$td(strong("Log Difference d\u0302 (T\u2212R):")), tags$td(sprintf("%.6f", param_result$treatment_coef))),
-              tags$tr(tags$td(strong("SE(d\u0302):")), tags$td(sprintf("%.6f", param_result$treatment_se))),
-              if (!is.na(log_lower)) tags$tr(tags$td(strong("Log CI Lower:")), tags$td(sprintf("%.6f", log_lower))),
-              if (!is.na(log_upper)) tags$tr(tags$td(strong("Log CI Upper:")), tags$td(sprintf("%.6f", log_upper)))
-            )
-          )
-        )
-      )
-    )
-  }
-  
-  # Method note
-  method_display <- if (rsabe_method == "nctost") "Non-Central TOST (ncTOST)" else "FDA Linearized Scaled Criterion (Howe UCB)"
-  info_note <- div(class = "alert alert-info",
-    h6(icon("info-circle"), " About RSABE Analysis"),
-    p(sprintf("Analysis performed using %s with Intra-Subject Contrasts (ISC) for variance estimation. ", method_display),
-      "ISC avoids convergence issues with mixed models by computing within-subject differences directly. ",
-      sprintf("Regulatory constants: \u03B8\u209B = ln(1.25)/\u03C3\u2080 = 0.2231/0.25 \u2248 0.8924, switching s\u00B2_w0 = 0.0625 (CV \u2248 25.4%%). "),
-      "FDA requires point estimate within 80\u2013125% regardless of scaling decision."
-    )
-  )
-  
-  return(tagList(summary_card, anova_table_div, intermediate_panel, log_scale_panel, info_note))
+
+  return(tagList(summary_card, model_summary_card, type3_card, type3_mixed_card, seq_subj_card, lsmeans_cards, param_est_card, intermediate_panel))
 }
 
 # Format parallel group statistical results for display
 format_parallel_results <- function(param_name, be_res) {
-  
+
+  # Resolve the results key: the ANOVA-tab dropdown supplies log names (e.g.
+  # "lnCmax"), but the parallel path keys statistical_results/confidence_intervals
+  # by the base parameter name (e.g. "Cmax"). Try as-is, then the base name,
+  # then a case-insensitive base-name match.
+  resolve_key <- function(nm, lst) {
+    if (is.null(lst)) return(nm)
+    if (!is.null(lst[[nm]])) return(nm)
+    base <- sub("^(ln|log)", "", nm, ignore.case = TRUE)
+    if (!is.null(lst[[base]])) return(base)
+    hit <- names(lst)[tolower(names(lst)) == tolower(base)]
+    if (length(hit) > 0) return(hit[1])
+    nm
+  }
+  ci_key <- resolve_key(param_name, be_res$confidence_intervals)
+  stats_key <- resolve_key(param_name, be_res$statistical_results)
+
   # Extract statistical results for this parameter
-  stats <- be_res$statistical_results[[param_name]]
-  ci <- be_res$confidence_intervals[[param_name]]
-  
+  stats <- be_res$statistical_results[[stats_key]]
+  ci <- be_res$confidence_intervals[[ci_key]]
+  # Display the resolved (base) parameter name
+  param_name <- log_param_to_display_name(param_name)
+
   if (is.null(stats) && is.null(ci)) {
     return(div(class = "alert alert-warning",
       h5(icon("exclamation-triangle"), " No Statistical Results"),
@@ -737,7 +968,7 @@ format_parallel_results <- function(param_name, be_res) {
     div(class = "card-body",
       div(class = "row",
         # Model Summary
-        div(class = "col-md-4",
+        div(class = "col-md-6",
           h6(icon("flask"), " Test Method:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
@@ -765,7 +996,7 @@ format_parallel_results <- function(param_name, be_res) {
           )
         ),
         # Test Statistics
-        div(class = "col-md-4",
+        div(class = "col-md-6",
           h6(icon("calculator"), " Test Statistics:"),
           tags$table(class = "table table-sm table-borderless",
             tags$tbody(
@@ -784,30 +1015,6 @@ format_parallel_results <- function(param_name, be_res) {
               tags$tr(
                 tags$td(strong("Analysis:")),
                 tags$td("Log-transformed data")
-              )
-            )
-          )
-        ),
-        # BE Assessment
-        div(class = "col-md-4",
-          h6(icon("check-circle"), " BE Assessment:"),
-          tags$table(class = "table table-sm table-borderless",
-            tags$tbody(
-              if (!is.null(ci$point_estimate)) tags$tr(
-                tags$td(strong("Point Estimate:")),
-                tags$td(sprintf("%.2f%%", ci$point_estimate))
-              ),
-              if (!is.null(ci$ci_lower)) tags$tr(
-                tags$td(strong("CI Lower:")),
-                tags$td(sprintf("%.2f%%", ci$ci_lower))
-              ),
-              if (!is.null(ci$ci_upper)) tags$tr(
-                tags$td(strong("CI Upper:")),
-                tags$td(sprintf("%.2f%%", ci$ci_upper))
-              ),
-              if (!is.null(ci$confidence_level)) tags$tr(
-                tags$td(strong("Confidence Level:")),
-                tags$td(sprintf("%.0f%%", ci$confidence_level))
               )
             )
           )
@@ -1337,12 +1544,19 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           if (is.numeric(display_data[[col]])) {
             if (grepl("p.value|p-value", col, ignore.case = TRUE)) {
               # Format p-values with scientific notation if very small
-              display_data[[col]] <- ifelse(display_data[[col]] < 0.001, 
+              display_data[[col]] <- ifelse(display_data[[col]] < 0.001,
                                            formatC(display_data[[col]], format = "e", digits = 2),
                                            round(display_data[[col]], 4))
-            } else {
-              # Round other numeric values to 4 decimal places
+            } else if (grepl("^ln", col, ignore.case = TRUE)) {
+              # ln-transformed columns (lnCmax, lnAUC0t, ...) get 4 decimals —
+              # normal-scale NCA values stay at 2 (matches the SAS reference
+              # output's display convention).
               display_data[[col]] <- round(display_data[[col]], 4)
+            } else {
+              # Round NCA parameter values to 2 decimal places (matches the SAS
+              # reference output's display convention, and standardizes this
+              # table with the report's per-subject listing).
+              display_data[[col]] <- round(display_data[[col]], 2)
             }
           }
         }
@@ -1662,33 +1876,57 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         be_conclusions <- be_res$be_conclusions
         
         # Analysis type header
-        analysis_header <- tagList(
-          div(class = "well", style = "background-color: #f8f9fa; border: 1px solid #dee2e6;",
-            h4(icon("chart-line"), paste("Analysis Type:", be_method), style = "color: #495057; margin-bottom: 10px;"),
-            if (analysis_type == "RSABE") {
-              # RSABE analysis details
-              rsabe_method_label <- be_res$rsabe_method %||% "fda_linearized"
-              method_display <- if (rsabe_method_label == "nctost") "Non-Central TOST (ncTOST)" else "FDA Linearized Scaled Criterion (Howe UCB)"
-              
-              div(class = "alert alert-info", style = "margin-bottom: 0;",
-                icon("flask"), " ",
-                strong("RSABE Method: "), method_display,
-                br(),
-                tags$small(
-                  "Scaling constant \u03B8\u209B = ln(1.25)/\u03C3\u2080 \u2248 0.8924 | ",
-                  "Switching CV: ~25.4% | ",
-                  "Point estimate constraint: 80\u2013125% | ",
-                  "Variance estimation: Intra-Subject Contrasts (ISC)"
-                )
-              )
-            } else if (analysis_type == "ABEL") {
-              # ABEL: header only — per-parameter limits/scaling are shown in the results table
-              NULL
-            } else {
-              NULL
-            }
+        # All analysis types share the same blue "alert-info" box style (left
+        # border matches other elements on this page) with a bold "<Type>
+        # Method:" line plus a small subtitle line of key design/criteria
+        # facts — RSABE was the original pattern; ABE/ABEL/Parallel now match.
+        analysis_header <- if (analysis_type == "RSABE") {
+          rsabe_method_label <- be_res$rsabe_method %||% "fda_linearized"
+          method_display <- if (rsabe_method_label == "nctost") "Non-Central TOST (ncTOST)" else "FDA Linearized Scaled Criterion (Howe UCB)"
+
+          div(class = "alert alert-info",
+            icon("flask"), " ",
+            strong("RSABE Method: "), method_display,
+            br(),
+            tags$small(
+              "Scaling constant θₛ = ln(1.25)/σ₀ ≈ 0.8924 | ",
+              "Switching: s", tags$sub("wR"), " ≥ 0.294 (CV", tags$sub("wR"), " ≈ 30%) | ",
+              "Point estimate constraint: 80–125%"
+            )
           )
-        )
+        } else if (analysis_type == "ABEL") {
+          design_label <- be_res$design %||% "replicate"
+
+          div(class = "alert alert-info",
+            icon("flask"), " ",
+            strong("ABEL Method: "), be_method,
+            br(),
+            tags$small(
+              "Design: ", design_label, " | ",
+              "Switching: CV", tags$sub("wR"), " > 30% → reference-scaled expanding limits | ",
+              "Non-scaled limits: ", sprintf("%.0f–%.0f%%", be_lower, be_upper)
+            )
+          )
+        } else {
+          is_parallel <- identical(be_res$design %||% "", "parallel")
+          model_label <- if (is_parallel) {
+            if (isTRUE(analysis_cfg$welch_correction)) "Welch's Two-Sample t-test" else "Student's Two-Sample t-test"
+          } else if (identical(analysis_cfg$anova_model, "mixed")) {
+            "Mixed Effects (nlme)"
+          } else {
+            "Fixed Effects (lm)"
+          }
+
+          div(class = "alert alert-info",
+            icon("flask"), " ",
+            strong("ABE Method: "), model_label,
+            br(),
+            tags$small(
+              "Design: ", be_res$design %||% "2x2x2 crossover", " | ",
+              "BE Limits: ", sprintf("%.0f–%.0f%%", be_lower, be_upper)
+            )
+          )
+        }
         
         # Filter for ANY PK parameters that have BE results (not just primary)
         # Look for all parameters with both confidence intervals and BE conclusions
@@ -1725,22 +1963,65 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         status_color <- if (all_be) "#28a745" else "#dc3545"
         status_bg <- if (all_be) "#d4edda" else "#f8d7da"
         
+        is_rsabe <- identical(analysis_type, "RSABE")
+
         # Create results table with display names and per-parameter limits
         results_list <- mapply(function(param, is_be) {
           ci <- primary_ci[[param]]
-          
+
           # Handle NA values in BE conclusions
           be_status <- if (is.na(is_be)) {
-            "❓ UNKNOWN"
+            "\u2753 UNKNOWN"
           } else if (is_be) {
-            "✅ PASS"
+            "\u2705 PASS"
           } else {
-            "❌ FAIL"
+            "\u274c FAIL"
           }
-          
+
           # Convert log parameter name to display name
           display_param <- log_param_to_display_name(param)
-          
+          n_val <- ci$n_subjects %||% be_res$n_subjects %||% NA
+
+          if (is_rsabe) {
+            # RSABE's conclusion is NOT a 90% CI check \u2014 per FDA guidance Step 3
+            # it's the Howe UCB (or ncTOST) scaling criterion plus the point-
+            # estimate constraint. A standard 90% CI applies only for parameters
+            # where s_wR < 0.294 (not high variability) \u2014 FDA's own Step 1a
+            # specifies the two-one-sided-tests/CI procedure there instead, so
+            # those rows fall back to the CI display.
+            rsabe_det  <- be_res$rsabe_details[[param]]
+            is_hv      <- if (!is.null(rsabe_det)) isTRUE(rsabe_det$is_hv) else FALSE
+            rsabe_test <- if (!is.null(rsabe_det)) rsabe_det$rsabe_test else NULL
+
+            if (is_hv && !is.null(rsabe_test)) {
+              ucb_val <- rsabe_test$ucb %||% NA_real_
+              criterion_str <- if (!is.na(ucb_val)) {
+                sprintf("UCB = %.4f (\u2264 0? %s)", ucb_val, ifelse(ucb_val <= 0, "Yes", "No"))
+              } else {
+                sprintf("Overall p = %.4f", rsabe_test$overall_p %||% NA_real_)
+              }
+              pe_pass <- if (!is.null(rsabe_det)) rsabe_det$pe_constraint_pass else NA
+              constraint_str <- if (!is.na(pe_pass)) {
+                sprintf("PE in [80,125]%%? %s", ifelse(pe_pass, "Yes", "No"))
+              } else {
+                "\u2014"
+              }
+            } else {
+              criterion_str  <- sprintf("90%% CI: [%.2f%%, %.2f%%]", ci$ci_lower, ci$ci_upper)
+              constraint_str <- "80\u2013125% (standard ABE, s_wR < 0.294)"
+            }
+
+            return(data.frame(
+              Parameter = display_param,
+              N = if (!is.na(n_val)) as.character(round(n_val)) else "\u2014",
+              `Point Estimate` = sprintf("%.2f%%", ci$point_estimate),
+              Criterion = criterion_str,
+              `PE Constraint` = constraint_str,
+              `BE Status` = be_status,
+              stringsAsFactors = FALSE
+            ))
+          }
+
           # Per-parameter limits: use limits_used if available, else fall back to global
           param_lower <- be_lower
           param_upper <- be_upper
@@ -1751,17 +2032,17 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             param_lower <- ci$scaled_lower_limit
             param_upper <- ci$scaled_upper_limit
           }
-          
+
           # Determine limit type label
           limit_type <- ""
           if (!is.null(ci$limits_used$type) && ci$limits_used$type == "expanded") {
             limit_type <- " (expanded ABEL)"
+          } else if (!is.null(ci$limits_used$type) && ci$limits_used$type == "scaled") {
+            limit_type <- " (scaled RSABE)"
           } else {
             limit_type <- " (fixed)"
           }
-          
-          n_val <- ci$n_subjects %||% be_res$n_subjects %||% NA
-          
+
           data.frame(
             Parameter = display_param,
             N = if (!is.na(n_val)) as.character(round(n_val)) else "\u2014",
@@ -1777,8 +2058,12 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         results_rows <- do.call(rbind, results_list)
 
         # ── Intra-subject Reference summary (CV%_wR and variance s²_wR) ──
-        # Pulls from ABEL ci_list, RSABE ISC, or log-scale residual MSE depending on path.
-        intra_ref_block <- tryCatch({
+        # Only meaningful for replicate designs (RSABE/ABEL), where the reference
+        # is replicated so a reference-specific within-subject variance is
+        # estimable and drives the scaling decision. A 2×2×2 (or parallel) design
+        # has a single reference observation per subject, so CVwR/swR is NOT
+        # estimable there (the residual is a pooled T+R variance) — omit it.
+        intra_ref_block <- if (!(analysis_type %in% c("RSABE", "ABEL"))) NULL else tryCatch({
           anova_data2 <- be_res$anova_results$anova_results
           rows <- list()
           for (p in names(primary_ci)) {
@@ -1807,20 +2092,24 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               if (!is.na(swR)) s2R <- swR^2
               src <- "ABEL (replicateBE)"
             }
-            # Priority 3: RSABE — ISC components
+            # Priority 3: RSABE — Reference-only ANOVA
             else if (!is.null(pr) && !is.null(pr$s2_wR)) {
               s2R <- suppressWarnings(as.numeric(pr$s2_wR))
               cvR <- suppressWarnings(as.numeric(pr$cv_wr_percent))
-              src <- "RSABE (ISC)"
+              src <- "RSABE (Reference-only ANOVA)"
             }
             # Priority 4: simple ABE — log-scale residual MSE
             # Only valid if the analysis was on log scale.
             else {
-              mse_val <- suppressWarnings(as.numeric(ci_p$mse))
+              # ci_p$mse doesn't exist on ABEL/RSABE confidence-interval objects
+              # (only plain ABE's does) — as.numeric(NULL) is a zero-length
+              # vector, and is.na() on that breaks the if() below with "missing
+              # value where TRUE/FALSE needed"; coalesce to a proper length-1 NA.
+              mse_val <- suppressWarnings(as.numeric(ci_p$mse %||% NA_real_))
               if (is.na(mse_val) && !is.null(pr)) {
                 if (isTRUE(pr$data_was_logged) || startsWith(pr$parameter %||% "", "ln") ||
                     startsWith(p, "ln")) {
-                  mse_val <- suppressWarnings(as.numeric(pr$residual_mse))
+                  mse_val <- suppressWarnings(as.numeric(pr$residual_mse %||% NA_real_))
                 }
               }
               if (!is.na(mse_val) && mse_val >= 0 && mse_val < 5) {
@@ -1833,12 +2122,21 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
 
             if (is.na(cvR) && is.na(s2R)) next
             disp_param <- log_param_to_display_name(p)
+            swR_val <- if (!is.na(s2R) && s2R >= 0) sqrt(s2R) else NA_real_
+            # Classification: s_wR >= 0.294 is the actual FDA RSABE / EMA ABEL
+            # switching criterion (not a CV%-based proxy, which is only an
+            # approximate conversion and can disagree with s_wR at the margin).
+            is_hv_p <- !is.na(swR_val) && swR_val >= 0.294
             rows[[length(rows) + 1]] <- tags$li(
               tags$strong(disp_param), ": ",
-              "CV% = ",
+              "s", tags$sub("wR"), " = ",
+              if (!is.na(swR_val)) sprintf("%.4f", swR_val) else "\u2014",
+              " (CV% = ",
               if (!is.na(cvR)) sprintf("%.2f%%", cvR) else "\u2014",
-              ", s", tags$sub("wR"), " = ",
-              if (!is.na(s2R) && s2R >= 0) sprintf("%.4f", sqrt(s2R)) else "\u2014"
+              ")",
+              " \u2014 ",
+              tags$span(style = if (is_hv_p) "color: #e65100; font-weight: bold;" else "color: #2e7d32; font-weight: bold;",
+                if (is_hv_p) "HIGH VARIABILITY" else "Low variability")
             )
           }
           if (length(rows) == 0) NULL else div(
@@ -1856,35 +2154,46 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           # Intra-subject Reference summary (above BE results table)
           intra_ref_block,
 
-          # Results table
-          DT::datatable(
-            results_rows,
-            options = list(
-              dom = 't',
-              pageLength = 10,
-              columnDefs = list(
-                list(className = 'dt-center', targets = 1:6),
-                list(
-                  targets = 6,
-                  createdCell = JS("
-                    function(td, cellData, rowData, row, col) {
-                      if (cellData.includes('PASS')) {
-                        $(td).css('color', '#28a745');
-                        $(td).css('font-weight', 'bold');
-                      } else {
-                        $(td).css('color', '#dc3545');
-                        $(td).css('font-weight', 'bold');
+          # Results table — RSABE has one fewer column (Criterion + PE
+          # Constraint instead of CI Lower/CI Upper); the "BE Status" column
+          # is always last, so its 0-indexed target is ncol - 1 either way.
+          {
+            status_target <- ncol(results_rows) - 1
+            table_colnames <- if (is_rsabe) {
+              c("Parameter", "N", "Point Estimate", "Criterion", "PE Constraint", "BE Status")
+            } else {
+              c("Parameter", "N", "Point Estimate", paste(ci_label, "Lower"), paste(ci_label, "Upper"), "BE Criteria", "BE Status")
+            }
+
+            DT::datatable(
+              results_rows,
+              options = list(
+                dom = 't',
+                pageLength = 10,
+                columnDefs = list(
+                  list(className = 'dt-center', targets = 1:status_target),
+                  list(
+                    targets = status_target,
+                    createdCell = JS("
+                      function(td, cellData, rowData, row, col) {
+                        if (cellData.includes('PASS')) {
+                          $(td).css('color', '#28a745');
+                          $(td).css('font-weight', 'bold');
+                        } else {
+                          $(td).css('color', '#dc3545');
+                          $(td).css('font-weight', 'bold');
+                        }
                       }
-                    }
-                  ")
+                    ")
+                  )
                 )
-              )
-            ),
-            rownames = FALSE,
-            colnames = c("Parameter", "N", "Point Estimate", paste(ci_label, "Lower"), paste(ci_label, "Upper"), "BE Criteria", "BE Status"),
-            escape = FALSE
-          ) %>% 
-            DT::formatStyle(columns = 1:7, fontSize = '14px'),
+              ),
+              rownames = FALSE,
+              colnames = table_colnames,
+              escape = FALSE
+            ) %>%
+              DT::formatStyle(columns = seq_len(ncol(results_rows)), fontSize = '14px')
+          },
           
           # AUC0-t / AUC0-inf coverage ratio (Test, Reference, Overall)
           {
@@ -1953,16 +2262,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               cat(sprintf("[DEBUG] AUC coverage calculation skipped: %s\n", e$message))
             })
             if (!is.null(auc_coverage_div)) tagList(br(), auc_coverage_div) else NULL
-          },
-          
-          br(),
-          div(
-            style = "padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid #6c757d;",
-            tags$small(
-              tags$strong("Note: "), 
-              "Bioequivalence evaluation performed on log-transformed data (regulatory requirement) but results displayed with original parameter names (Cmax, AUC0-t, AUC0-\u221e) for clarity."
-            )
-          )
+          }
         ))
         
       }, error = function(e) {
@@ -2013,7 +2313,16 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       root_mse <- param_result$root_mse
       param_mean <- param_result$param_mean
       cv_percent <- param_result$cv_percent
-      
+
+      # Mixed-effects models (lme/lmerTest) do not yield a SAS PROC GLM-style
+      # sum-of-squares decomposition or a comparable model frame. For those we
+      # suppress the GLM-only "Class Level Information" and "Model/Error/
+      # Corrected Total" cards (which otherwise render empty/degenerate) and rely
+      # on the variance-component summary, the fixed-effects test table, and the
+      # treatment contrast — the appropriate output for a mixed model.
+      is_mixed_model <- !is.null(param_result$anova_method) &&
+        param_result$anova_method %in% c("nlme", "satterthwaite", "kenward-roger")
+
       # ── Summary card: critical variability and BE data up front ──
       # ── Header: model + parameter ─────────────────────────────────────────────
       model_header <- div(class = "mb-3",
@@ -2024,7 +2333,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       )
 
       # ── Class Level Information (mirrors SAS PROC GLM) ────────────────────────
-      class_info_card <- {
+      class_info_card <- if (is_mixed_model) NULL else {
         mdl <- param_result$model
         cli <- NULL
         if (!is.null(mdl) && !is.null(mdl$model)) {
@@ -2074,100 +2383,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       }
 
       # ── Top-of-output Model / Error / Corrected Total summary (SAS style) ─────
-      model_summary_card <- {
-        at <- tryCatch(as.data.frame(param_result$anova), error = function(e) NULL)
-        if (is.null(at) || !"Df" %in% names(at) || !"Sum Sq" %in% names(at)) NULL else {
-          n_rows  <- nrow(at)
-          err_df  <- at$Df[n_rows]
-          err_ss  <- at$`Sum Sq`[n_rows]
-          mdl_df  <- sum(at$Df[-n_rows], na.rm = TRUE)
-          mdl_ss  <- sum(at$`Sum Sq`[-n_rows], na.rm = TRUE)
-          tot_df  <- mdl_df + err_df
-          tot_ss  <- mdl_ss + err_ss
-          mdl_ms  <- if (mdl_df > 0) mdl_ss / mdl_df else NA
-          err_ms  <- if (err_df > 0) err_ss / err_df else NA
-          f_val   <- if (!is.na(mdl_ms) && !is.na(err_ms) && err_ms > 0) mdl_ms / err_ms else NA
-          p_val   <- if (!is.na(f_val) && mdl_df > 0 && err_df > 0)
-                       pf(f_val, mdl_df, err_df, lower.tail = FALSE) else NA
-
-          fmt_num <- function(x, d = 4) if (is.na(x)) "" else sprintf(paste0("%.", d, "f"), x)
-
-          div(class = "card mb-3",
-            div(class = "card-header",
-              h6(class = "card-title mb-0", icon("table"),
-                 sprintf(" Dependent Variable: %s", param_name))
-            ),
-            div(class = "card-body",
-              div(class = "table-responsive",
-                tags$table(class = "table table-striped table-sm",
-                  tags$thead(class = "table-primary",
-                    tags$tr(
-                      tags$th("Source"), tags$th("DF", style = "text-align: right;"),
-                      tags$th("Sum of Squares", style = "text-align: right;"),
-                      tags$th("Mean Square", style = "text-align: right;"),
-                      tags$th("F Value", style = "text-align: right;"),
-                      tags$th("Pr > F", style = "text-align: right;")
-                    )
-                  ),
-                  tags$tbody(
-                    tags$tr(
-                      tags$td(strong("Model")),
-                      tags$td(mdl_df, style = "text-align: right;"),
-                      tags$td(fmt_num(mdl_ss), style = "text-align: right;"),
-                      tags$td(fmt_num(mdl_ms, 6), style = "text-align: right;"),
-                      tags$td(fmt_num(f_val, 2), style = "text-align: right;"),
-                      tags$td(if (is.na(p_val)) "" else format.pval(p_val, digits = 4),
-                              style = "text-align: right;")
-                    ),
-                    tags$tr(
-                      tags$td(strong("Error")),
-                      tags$td(err_df, style = "text-align: right;"),
-                      tags$td(fmt_num(err_ss), style = "text-align: right;"),
-                      tags$td(fmt_num(err_ms, 6), style = "text-align: right;"),
-                      tags$td(""), tags$td("")
-                    ),
-                    tags$tr(
-                      tags$td(strong("Corrected Total")),
-                      tags$td(tot_df, style = "text-align: right;"),
-                      tags$td(fmt_num(tot_ss), style = "text-align: right;"),
-                      tags$td(""), tags$td(""), tags$td("")
-                    )
-                  )
-                )
-              ),
-              # Stats line: R-Square / Coeff Var / Root MSE / Mean
-              div(class = "table-responsive mt-2",
-                tags$table(class = "table table-sm table-bordered",
-                  tags$thead(class = "table-light",
-                    tags$tr(
-                      tags$th("R-Square", style = "text-align: center;"),
-                      tags$th("Coeff Var", style = "text-align: center;"),
-                      tags$th("Root MSE", style = "text-align: center;"),
-                      tags$th(sprintf("%s Mean", param_name), style = "text-align: center;")
-                    )
-                  ),
-                  tags$tbody(
-                    tags$tr(
-                      tags$td(if (!is.null(param_result$r_squared) && !is.na(param_result$r_squared))
-                                sprintf("%.6f", param_result$r_squared) else "\u2014",
-                              style = "text-align: center;"),
-                      tags$td(if (!is.null(param_result$cv_percent) && !is.na(param_result$cv_percent))
-                                sprintf("%.4f", param_result$cv_percent) else "\u2014",
-                              style = "text-align: center;"),
-                      tags$td(if (!is.null(param_result$root_mse) && !is.na(param_result$root_mse))
-                                sprintf("%.6f", param_result$root_mse) else "\u2014",
-                              style = "text-align: center;"),
-                      tags$td(if (!is.null(param_result$param_mean) && !is.na(param_result$param_mean))
-                                sprintf("%.6f", param_result$param_mean) else "\u2014",
-                              style = "text-align: center;")
-                    )
-                  )
-                )
-              )
-            )
-          )
-        }
-      }
+      model_summary_card <- if (is_mixed_model) NULL else render_model_summary_card(param_result, param_name)
 
 
       # ── Detect replicate design and compute per-product intra-subject variability
@@ -2175,91 +2391,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       # replace the single Intra/Inter columns with Intra-subject Reference and,
       # when estimable (full replicate), Intra-subject Test boxes.
       #
-      # Per-product variability is estimated by fitting a SAS-style ANOVA on the
-      # product-only subset (FDA / Schuirmann reference approach):
-      #     y ~ Seq + Subject(Seq) + Period
-      # The residual MSE from that model is s2_w (within-subject variance) and
-      # CV%_w = 100 * sqrt(exp(MSE) - 1) on the log scale.
-      replicate_info <- tryCatch({
-        mdl <- param_result$model
-        if (is.null(mdl) || is.null(mdl$model)) NULL else {
-          mf <- mdl$model
-          if (!all(c("subj", "drug") %in% names(mf))) NULL else {
-            yname <- names(mf)[1]
-            d <- data.frame(
-              y = as.numeric(mf[[yname]]),
-              subj = as.character(mf$subj),
-              drug = as.character(mf$drug),
-              prd  = if ("prd" %in% names(mf)) as.character(mf$prd) else NA_character_,
-              seq  = if ("seq" %in% names(mf)) as.character(mf$seq) else NA_character_,
-              stringsAsFactors = FALSE
-            )
-            d <- d[is.finite(d$y), , drop = FALSE]
-            tab <- table(d$subj, d$drug)
-            is_replicate_design <- any(tab > 1)
-            if (!is_replicate_design) NULL else {
-              # Identify reference vs test levels (factor order: ref first)
-              drug_lvls <- if (is.factor(mf$drug)) levels(mf$drug) else sort(unique(d$drug))
-              ref_lvl  <- drug_lvls[1]
-              test_lvl <- if (length(drug_lvls) >= 2) drug_lvls[2] else NA_character_
-
-              # SAS-style per-product ANOVA: y ~ Seq + Subject(Seq) + Period
-              # Returns residual MSE and DF, or NA when not estimable.
-              fit_within_anova <- function(df_drug) {
-                if (nrow(df_drug) == 0) return(list(s2 = NA_real_, df = 0L))
-                # Need >=2 reps for some subject to estimate within-subject error
-                rc <- table(df_drug$subj)
-                if (!any(rc >= 2)) return(list(s2 = NA_real_, df = 0L))
-                df_drug$subj <- factor(df_drug$subj)
-                terms <- "y ~ 1"
-                if (!all(is.na(df_drug$seq)) && length(unique(df_drug$seq)) >= 2) {
-                  df_drug$seq <- factor(df_drug$seq)
-                  terms <- paste(terms, "+ seq + subj:seq")
-                } else {
-                  terms <- paste(terms, "+ subj")
-                }
-                if (!all(is.na(df_drug$prd)) && length(unique(df_drug$prd)) >= 2) {
-                  df_drug$prd <- factor(df_drug$prd)
-                  terms <- paste(terms, "+ prd")
-                }
-                fit <- tryCatch(
-                  lm(as.formula(terms), data = df_drug),
-                  error = function(e) NULL
-                )
-                if (is.null(fit)) return(list(s2 = NA_real_, df = 0L))
-                rdf <- df.residual(fit)
-                if (is.null(rdf) || is.na(rdf) || rdf <= 0)
-                  return(list(s2 = NA_real_, df = 0L))
-                rss <- sum(residuals(fit)^2)
-                list(s2 = rss / rdf, df = as.integer(rdf))
-              }
-
-              data_logged <- isTRUE(param_result$data_was_logged) ||
-                             grepl("^(ln|log)", param_name, ignore.case = TRUE)
-              cv_from_s2 <- function(s2) {
-                if (is.na(s2) || s2 < 0) return(NA_real_)
-                if (data_logged) 100 * sqrt(exp(s2) - 1)
-                else 100 * sqrt(s2) / abs(mean(d$y, na.rm = TRUE))
-              }
-
-              ref_pool  <- fit_within_anova(d[d$drug == ref_lvl, , drop = FALSE])
-              test_pool <- if (!is.na(test_lvl))
-                fit_within_anova(d[d$drug == test_lvl, , drop = FALSE])
-              else list(s2 = NA_real_, df = 0L)
-
-              list(
-                is_replicate = TRUE,
-                ref_label  = ref_lvl,
-                test_label = test_lvl,
-                s2_wR = ref_pool$s2,  df_wR = ref_pool$df,
-                s2_wT = test_pool$s2, df_wT = test_pool$df,
-                cv_wR = cv_from_s2(ref_pool$s2),
-                cv_wT = cv_from_s2(test_pool$s2)
-              )
-            }
-          }
-        }
-      }, error = function(e) NULL)
+      # compute_replicate_intra_subject_variability() (R/simple_anova.R) does the
+      # actual per-arm SAS-style ANOVA (y ~ Seq + Subject(Seq) + Period on each
+      # arm separately) - shared with the SAS-style HTML report's Intra-subject
+      # Variability Summary section (sas_style_report.R) so the two stay in sync.
+      data_logged <- isTRUE(param_result$data_was_logged) ||
+                     grepl("^(ln|log)", param_name, ignore.case = TRUE)
+      replicate_info <- compute_replicate_intra_subject_variability(
+        param_result$model, is_log_scale = data_logged)
 
       # ── Summary card: 3 focused columns ───────────────────────────────────────
       summary_card <- {
@@ -2293,7 +2432,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         # ── Replicate design: build per-product intra-subject columns ────────────
         if (!is.null(replicate_info) && isTRUE(replicate_info$is_replicate)) {
           has_test_intra <- !is.na(replicate_info$s2_wT) && replicate_info$df_wT > 0
-          rep_col_class  <- if (has_test_intra) "col-md-4" else "col-md-6"
+          rep_col_class  <- if (has_test_intra) "col-md-6" else "col-md-12"
 
           ref_label_disp <- sprintf("Intra-subject Reference (%s):", replicate_info$ref_label)
           ref_col <- div(class = rep_col_class,
@@ -2330,119 +2469,19 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             )
           } else NULL
 
-          be_col <- div(class = rep_col_class,
-            h6(icon("check-circle"), " Bioequivalence Assessment:"),
-            tags$table(class = "table table-sm table-borderless",
-              tags$tbody(
-                tags$tr(
-                  tags$td(strong("GMR (PE):")),
-                  tags$td(if (!is.na(gmr_val)) sprintf("%.2f%%", gmr_val) else "\u2014")
-                ),
-                tags$tr(
-                  tags$td(strong("90% CI:")),
-                  tags$td(if (!is.na(ci_lo_be) && !is.na(ci_hi_be))
-                    sprintf("%.2f%% \u2013 %.2f%%", ci_lo_be, ci_hi_be) else "\u2014")
-                ),
-                tags$tr(tags$td(strong("BE Limits:")), tags$td("80.00% \u2013 125.00%")),
-                if (!is.na(ci_lo_be) && !is.na(ci_hi_be))
-                  tags$tr(
-                    tags$td(strong("Decision:")),
-                    tags$td(class = if (be_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                      if (be_pass) "PASS" else "FAIL")
-                  )
-              )
-            )
-          )
-
           return_card <- div(class = "card mb-3",
             div(class = "card-body",
-              div(class = "row", ref_col, test_col, be_col)
+              div(class = "row", ref_col, test_col)
             )
           )
           return_card
         } else {
-
-        div(class = "card mb-3",
-          div(class = "card-body",
-            div(class = "row",
-              # ── Column 1: Intra-subject ───────────────────────────────────────
-              div(class = "col-md-4",
-                h6(icon("user"), " Intra-subject (within-subject):"),
-                tags$table(class = "table table-sm table-borderless",
-                  tags$tbody(
-                    tags$tr(
-                      tags$td(strong("CV%:")),
-                      tags$td(if (!is.na(intra_cv)) sprintf("%.2f%%", intra_cv) else "\u2014")
-                    ),
-                    tags$tr(
-                      tags$td(strong("MSE:")),  
-                      tags$td(if (!is.na(mse_intra)) sprintf("%.6f", mse_intra) else "\u2014")
-                    ),
-                    tags$tr(
-                      tags$td(strong("DF:")),
-                      tags$td(if (!is.na(df_intra)) sprintf("%.0f", df_intra) else "\u2014")
-                    )
-                  )
-                )
-              ),
-              # ── Column 2: Inter-subject ───────────────────────────────────────
-              div(class = "col-md-4",
-                h6(icon("users"), " Inter-subject (between-subject):"),
-                tags$table(class = "table table-sm table-borderless",
-                  tags$tbody(
-                    tags$tr(
-                      tags$td(strong("CV%:")),
-                      tags$td(if (!is.na(inter_cv)) sprintf("%.2f%%", inter_cv) else "\u2014")
-                    ),
-                    tags$tr(
-                      tags$td(strong("MSE:")),
-                      tags$td(if (!is.na(mse_intr)) sprintf("%.6f", mse_intr) else "\u2014")
-                    ),
-                    tags$tr(
-                      tags$td(strong("DF:")),
-                      tags$td(if (!is.na(df_intr)) sprintf("%.0f", df_intr) else "\u2014")
-                    ),
-                    if (!is.na(f_intr))
-                      tags$tr(
-                        tags$td(strong("F value:")),
-                        tags$td(sprintf("%.2f", f_intr))
-                      ),
-                    if (!is.na(p_intr))
-                      tags$tr(
-                        tags$td(strong("Pr > F:")),
-                        tags$td(format.pval(p_intr, digits = 4))
-                      )
-                  )
-                )
-              ),
-              # ── Column 3: BE Assessment ───────────────────────────────────────
-              div(class = "col-md-4",
-                h6(icon("check-circle"), " Bioequivalence Assessment:"),
-                tags$table(class = "table table-sm table-borderless",
-                  tags$tbody(
-                    tags$tr(
-                      tags$td(strong("GMR (PE):")),
-                      tags$td(if (!is.na(gmr_val)) sprintf("%.2f%%", gmr_val) else "\u2014")
-                    ),
-                    tags$tr(
-                      tags$td(strong("90% CI:")),
-                      tags$td(if (!is.na(ci_lo_be) && !is.na(ci_hi_be))
-                        sprintf("%.2f%% \u2013 %.2f%%", ci_lo_be, ci_hi_be) else "\u2014")
-                    ),
-                    tags$tr(tags$td(strong("BE Limits:")), tags$td("80.00% \u2013 125.00%")),
-                    if (!is.na(ci_lo_be) && !is.na(ci_hi_be))
-                      tags$tr(
-                        tags$td(strong("Decision:")),
-                        tags$td(class = if (be_pass) "text-success font-weight-bold" else "text-danger font-weight-bold",
-                          if (be_pass) "PASS" else "FAIL")
-                      )
-                  )
-                )
-              )
-            )
-          )
-        )
-        }  # end else (non-replicate branch)
+          # Non-replicate 2x2 crossover: no separate summary card here — the
+          # between-subject (Subject(Sequence)) DF/SS/MS/F/p is already shown,
+          # unduplicated, as its own row in the Type III SS table below (matching
+          # SAS PROC GLM's own output, which has no equivalent standalone card).
+          NULL
+        }
       }
 
       # ── ANOVA Table ──────────────────────────────────────────────────────────
@@ -2464,7 +2503,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
                   col_name <- names(df)[j]
                   formatted <- if (is.numeric(val) && !is.na(val)) {
                     if (col_name %in% c("Pr(>F)", "Pr..F.", "p-value")) format.pval(val, digits = 4)
-                    else if (col_name %in% c("Df", "NumDF", "DenDF")) as.character(round(val))
+                    else if (col_name %in% c("Df", "NumDF", "DenDF", "numDF", "denDF")) as.character(round(val))
                     else if (col_name %in% c("Sum Sq", "Sum.Sq", "Mean Sq", "Mean.Sq", "Sum of Sq", "RSS")) sprintf("%.4f", val)
                     else if (col_name %in% c("F value", "F.value", "F-value")) sprintf("%.2f", val)
                     else sprintf("%.4f", val)
@@ -2477,203 +2516,58 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         )
       }
 
-      # ── Single canonical Type III ANOVA table (consolidated) ────────────────
-      # All effects tested against Residual MS (SAS PROC GLM default for Type III).
-      # A separate second table shows Seq tested against Subject(Sequence) MS.
-      anova_tables_div <- if (!is.null(param_result$anova_comprehensive)) {
-        tryCatch({
-          comp_df <- param_result$anova_comprehensive
-          div(class = "card mb-3",
-            div(class = "card-header",
-              h6(class = "card-title mb-0", icon("table"),
-                 " Analysis of Variance (Type III SS)"),
-              tags$small(class = "text-muted",
-                "All effects tested against Residual mean square.")
-            ),
-            div(class = "card-body",
-              div(class = "table-responsive",
-                tags$table(class = "table table-striped table-hover table-sm",
-                  tags$thead(class = "table-primary",
-                    tags$tr(
-                      tags$th("Source"), tags$th("DF", style = "text-align: right;"),
-                      tags$th("Sum of Squares", style = "text-align: right;"),
-                      tags$th("Mean Square", style = "text-align: right;"),
-                      tags$th("F Value", style = "text-align: right;"),
-                      tags$th("Pr > F", style = "text-align: right;")
-                    )
-                  ),
-                  tags$tbody(
-                    lapply(1:nrow(comp_df), function(i) {
-                      tags$tr(
-                        tags$td(style = "font-weight: bold;", comp_df$Source[i]),
-                        tags$td(if (!is.na(comp_df$Df[i])) as.character(comp_df$Df[i]) else "",
-                                style = "text-align: right;"),
-                        tags$td(if (!is.na(comp_df$`Sum Sq`[i])) sprintf("%.4f", comp_df$`Sum Sq`[i]) else "",
-                                style = "text-align: right;"),
-                        tags$td(if (!is.na(comp_df$`Mean Sq`[i])) sprintf("%.6f", comp_df$`Mean Sq`[i]) else "",
-                                style = "text-align: right;"),
-                        tags$td(if (!is.na(comp_df$`F value`[i])) sprintf("%.2f", comp_df$`F value`[i]) else "",
-                                style = "text-align: right;"),
-                        tags$td(if (!is.na(comp_df$`Pr(>F)`[i])) format.pval(comp_df$`Pr(>F)`[i], digits = 4) else "",
-                                style = "text-align: right;")
-                      )
-                    })
-                  )
-                )
-              )
-            )
-          )
-        }, error = function(e) div(class = "alert alert-warning",
-          p("Could not display ANOVA table: ", e$message)))
-      } else if (!is.null(param_result$type3_ss)) {
-        # Fallback if comprehensive table is missing for some reason
+      # ── GLM-style Model/Error/Corrected Total summary (fixed-effects lm only) ──
+      # Not a standard summary for REML mixed models (there is no single-df
+      # "Model" term to test against a "Corrected Total"); mixed models instead
+      # get the Type 3 Tests of Fixed Effects table below (type3_tests_div).
+      anova_tables_div <- if (is_mixed_model) NULL else render_type3_anova_card(param_result)
+
+      # ── Type 3 Tests of Fixed Effects (mixed models only) ──────────────────
+      # The per-term significance table (numDF/denDF/F-value/p-value for each
+      # fixed effect: Sequence, Period, Treatment). This is the standard
+      # SAS PROC MIXED "Type 3 Tests of Fixed Effects" output and is the
+      # necessary complement to the treatment-contrast/variance-component cards
+      # for a mixed-effects model, which gets no table from anova_tables_div
+      # above. NOT shown for fixed-effects lm: there, `anova_comprehensive`
+      # (anova_tables_div) already IS the full per-term Type III table
+      # (Sequence/Subject(Sequence)/Period/Treatment/Residual) — adding this
+      # too would duplicate it.
+      type3_tests_div <- if (!is_mixed_model || is.null(param_result$type3_ss)) NULL else {
         tryCatch({
           type3_df <- as.data.frame(param_result$type3_ss)
           div(class = "card mb-3",
             div(class = "card-header",
-              h6(class = "card-title mb-0", icon("table"), " Analysis of Variance (Type III)")
+              h6(class = "card-title mb-0", icon("table"), " Type 3 Tests of Fixed Effects"),
+              tags$small(class = "text-muted",
+                "Marginal (Type III) F-tests for each fixed effect from the mixed-effects model.")
             ),
             div(class = "card-body",
               div(class = "table-responsive", render_anova_table(type3_df, "table-primary"))
             )
           )
         }, error = function(e) NULL)
-      } else NULL
-      
-      # ── Log-Scale Results (collapsed by default) ──
-      log_scale_panel <- NULL
-      if (!is.null(param_result$treatment_coef) && !is.na(param_result$treatment_coef)) {
-        log_diff <- param_result$treatment_coef
-        log_ci_lower <- param_result$ci_lower_log %||% NA
-        log_ci_upper <- param_result$ci_upper_log %||% NA
-        # Fallback: compute from %-scale CIs if log-scale not stored
-        if (is.na(log_ci_lower) && !is.null(param_result$ci_lower) && !is.na(param_result$ci_lower)) {
-          log_ci_lower <- log(param_result$ci_lower / 100)
-          log_ci_upper <- log(param_result$ci_upper / 100)
-        }
-        
-        safe_id <- gsub("[^a-zA-Z0-9]", "", param_name)
-        log_scale_panel <- div(class = "card mb-3",
-          div(class = "card-header", style = "cursor: pointer;",
-              `data-toggle` = "collapse", `data-target` = paste0("#logscale-abe-", safe_id),
-            h6(class = "card-title mb-0",
-              icon("compress-arrows-alt"),
-              " Log-Scale Results ",
-              tags$small(class = "text-muted", "(click to expand)")
-            )
-          ),
-          div(id = paste0("logscale-abe-", safe_id), class = "collapse",
-            div(class = "card-body",
-              tags$table(class = "table table-sm",
-                tags$tbody(
-                  tags$tr(tags$td(strong("Log Difference (T\u2212R):")), tags$td(sprintf("%.6f", log_diff))),
-                  if (!is.na(log_ci_lower)) tags$tr(tags$td(strong("Log CI Lower:")), tags$td(sprintf("%.6f", log_ci_lower))),
-                  if (!is.na(log_ci_upper)) tags$tr(tags$td(strong("Log CI Upper:")), tags$td(sprintf("%.6f", log_ci_upper)))
-                )
-              )
-            )
-          )
-        )
       }
       
-      # ── Estimate / SE / t / Pr>|t| (Test \u2212 Reference) — SAS-style contrast ──
-      contrast_card <- {
-        tcoef <- param_result$treatment_coef %||% NA
-        tse   <- param_result$treatment_se   %||% NA
-        tdf   <- param_result$residual_df    %||% NA
-        tp    <- param_result$treatment_pval %||% NA
-        if (is.na(tcoef) || is.na(tse)) NULL else {
-          tval <- tcoef / tse
-          if (is.na(tp) && !is.na(tdf) && tdf > 0) {
-            tp <- 2 * pt(abs(tval), tdf, lower.tail = FALSE)
-          }
-          ci_lo_log <- if (!is.na(tdf) && tdf > 0) tcoef - qt(0.95, tdf) * tse else NA
-          ci_hi_log <- if (!is.na(tdf) && tdf > 0) tcoef + qt(0.95, tdf) * tse else NA
-          div(class = "card mb-3",
-            div(class = "card-header",
-              h6(class = "card-title mb-0", icon("balance-scale"),
-                 " Treatment Contrast (Test \u2212 Reference, Log Scale)")
-            ),
-            div(class = "card-body",
-              div(class = "table-responsive",
-                tags$table(class = "table table-sm table-bordered",
-                  tags$thead(class = "table-light",
-                    tags$tr(
-                      tags$th("Parameter"),
-                      tags$th("Estimate", style = "text-align: right;"),
-                      tags$th("Standard Error", style = "text-align: right;"),
-                      tags$th("DF", style = "text-align: right;"),
-                      tags$th("t Value", style = "text-align: right;"),
-                      tags$th("Pr > |t|", style = "text-align: right;"),
-                      tags$th("Lower 90% CL", style = "text-align: right;"),
-                      tags$th("Upper 90% CL", style = "text-align: right;")
-                    )
-                  ),
-                  tags$tbody(
-                    tags$tr(
-                      tags$td(strong("T \u2212 R")),
-                      tags$td(sprintf("%.6f", tcoef), style = "text-align: right;"),
-                      tags$td(sprintf("%.6f", tse), style = "text-align: right;"),
-                      tags$td(if (!is.na(tdf)) sprintf("%.0f", tdf) else "",
-                              style = "text-align: right;"),
-                      tags$td(sprintf("%.4f", tval), style = "text-align: right;"),
-                      tags$td(if (!is.na(tp)) format.pval(tp, digits = 4) else "",
-                              style = "text-align: right;"),
-                      tags$td(if (!is.na(ci_lo_log)) sprintf("%.6f", ci_lo_log) else "",
-                              style = "text-align: right;"),
-                      tags$td(if (!is.na(ci_hi_log)) sprintf("%.6f", ci_hi_log) else "",
-                              style = "text-align: right;")
-                    )
-                  )
-                )
-              ),
-              p(class = "text-muted mb-0", style = "font-size: 0.85em;",
-                "Back-transformed (geometric) ratio and 90% CI are shown in the BE Comparison and Complete BE Analysis tabs.")
-            )
-          )
-        }
-      }
-
       # ── Second table: "Tests of Hypotheses Using Type III MS for Subject(Sequence)" ──
-      seq_subj_test_div <- NULL
-      tryCatch({
-        ssa <- param_result$subj_seq_analysis
-        seq_test <- ssa$hypothesis_tests$seq
-        if (!is.null(seq_test) && !is.null(seq_test$f_value) && !is.na(seq_test$f_value)) {
-          seq_subj_test_div <- div(class = "card mb-3",
-            div(class = "card-header",
-              h6(class = "card-title mb-0", icon("table"),
-                 " Tests of Hypotheses Using the Type III MS for Subject(Sequence) as an Error Term")
-            ),
-            div(class = "card-body",
-              div(class = "table-responsive",
-                tags$table(class = "table table-striped table-hover table-sm",
-                  tags$thead(class = "table-info",
-                    tags$tr(
-                      tags$th("Source"),
-                      tags$th("DF", style = "text-align: right;"),
-                      tags$th("Type III SS", style = "text-align: right;"),
-                      tags$th("Mean Square", style = "text-align: right;"),
-                      tags$th("F Value", style = "text-align: right;"),
-                      tags$th("Pr > F", style = "text-align: right;")
-                    )
-                  ),
-                  tags$tbody(
-                    tags$tr(
-                      tags$td(style = "font-weight: bold;", "Sequence"),
-                      tags$td(as.character(seq_test$df), style = "text-align: right;"),
-                      tags$td(sprintf("%.6f", seq_test$ss), style = "text-align: right;"),
-                      tags$td(sprintf("%.6f", seq_test$ms), style = "text-align: right;"),
-                      tags$td(sprintf("%.2f", seq_test$f_value), style = "text-align: right;"),
-                      tags$td(format.pval(seq_test$p_value, digits = 4), style = "text-align: right;")
-                    )
-                  )
-                )
-              )
-            )
-          )
-        }
-      }, error = function(e) NULL)
+      # (or "Subject(Group x Sequence)", gaining a Group row, when Group is in the model)
+      seq_subj_test_div <- render_seq_subj_test_card(param_result)
+
+      # ── Group x Treatment interaction (supportive analysis only, opt-in) ──
+      # Populated only when the user checked "Test Group x Treatment
+      # Interaction"; never affects pe_estimate/ci_lower/ci_upper above.
+      group_treatment_div <- render_group_treatment_interaction_card(param_result)
+
+      # ── Least Squares Means (SAS-style 3-table layout) ──
+      lsmeans_cards <- render_lsmeans_cards(param_result, param_name)
+
+      # ── Parameter Estimates (T − R): Estimate/SE/t/Pr>|t| ──
+      # CI on the difference is shown in the Least Squares Means card above
+      # (matching how SAS PROC GLM splits this across its own two tables).
+      contrast_card <- render_parameter_estimates_card(
+        param_result,
+        ref_level  = param_result$lsmeans_result$ref_level  %||% "R",
+        test_level = param_result$lsmeans_result$test_level %||% "T"
+      )
 
       # Combine all components
       return(div(
@@ -2682,11 +2576,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         class_info_card,
         model_summary_card,
         anova_tables_div,
+        type3_tests_div,
         seq_subj_test_div,
-        contrast_card,
-        log_scale_panel
+        group_treatment_div,
+        lsmeans_cards,
+        contrast_card
       ))
     }
+
     
     # ANOVA parameter selection reactive
     selected_anova_param <- reactive({
@@ -2701,7 +2598,26 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       
       tryCatch({
         be_res <- be_results()
-        
+
+        # ── RSABE / ABEL: show the purpose-built scaled formatter ──
+        # The dropdown supplies a log name (e.g. "lnCmax"); the BE engine's
+        # scaled output (`scaled_anova`) is keyed by base name ("Cmax"). Resolve
+        # the key and route to the RSABE or replicateBE (ABEL) formatter so
+        # the scaled variance components / limits / decision are shown instead of
+        # a fixed-limit ABE ANOVA table.
+        atype <- be_res$analysis_type %||% "ABE"
+        if (atype %in% c("RSABE", "ABEL") && !is.null(be_res$scaled_anova$anova_results)) {
+          eng <- be_res$scaled_anova$anova_results
+          sel <- selected_anova_param()
+          base <- sub("^(ln|log)", "", sel, ignore.case = TRUE)
+          key <- if (!is.null(eng[[sel]])) sel else if (!is.null(eng[[base]])) base else names(eng)[1]
+          pr <- eng[[key]]
+          if (!is.null(pr)) {
+            if (!is.null(pr$replicatebe_output)) return(format_replicatebe_anova_results(pr, base, be_res))
+            if (!is.null(pr$s2_wR))             return(format_rsabe_anova_results(pr, base, be_res))
+          }
+        }
+
         # ── Parallel group design: no ANOVA, use t-test format ──
         if (identical(be_res$design, "parallel") || !is.null(be_res$statistical_results)) {
           param <- selected_anova_param()
@@ -2758,7 +2674,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           # Format replicateBE ANOVA results
           return(format_replicatebe_anova_results(param_result, param, be_res))
         } else if (!is.null(param_result$s2_wR)) {
-          # RSABE result — has ISC variance components
+          # RSABE result — has intra-subject reference variance components
           return(format_rsabe_anova_results(param_result, param, be_res))
         } else {
           # Format simple ANOVA results for display
@@ -2771,301 +2687,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
           p(paste("Error:", e$message))
         )
       })
-    })    # =======================================================================
-    # COMPLETE BE ANALYSIS OUTPUTS (New Tab)
-    # =======================================================================
-    
-    # Complete BE Analysis output
-    output$complete_be_analysis <- renderUI({
-      req(results_available())
-      
-      tryCatch({
-        be_res <- be_results()
-        
-        if (is.null(be_res$confidence_intervals) || length(be_res$confidence_intervals) == 0) {
-          return(div(
-            class = "alert alert-warning",
-            h5("⚠️ Complete BE Analysis Not Available"),
-            p("Bioequivalence confidence intervals are not available.")
-          ))
-        }
-        
-        ci_results <- be_res$confidence_intervals
-        be_conclusions <- be_res$be_conclusions
-        
-        # Filter out NA or invalid parameters
-        valid_ci_params <- names(ci_results)[!is.na(names(ci_results)) & names(ci_results) != ""]
-        valid_be_params <- names(be_conclusions)[!is.na(names(be_conclusions)) & names(be_conclusions) != ""]
-        
-        # Find common parameters that exist in both CI results and BE conclusions
-        common_params <- intersect(valid_ci_params, valid_be_params)
-        
-        # Use ALL parameters that have BE results (not just log-transformed)
-        # since the analysis should already be ensuring only appropriate parameters are analyzed
-        valid_be_params_final <- common_params
-        
-        if (length(valid_be_params_final) == 0) {
-          return(div(
-            class = "alert alert-warning",
-            h5("⚠️ No Valid BE Results"),
-            p("No valid bioequivalence results available for display.")
-          ))
-        }
-        
-        # Create comprehensive results table for all valid BE parameters
-        results_list <- lapply(valid_be_params_final, function(param) {
-          ci <- ci_results[[param]]
-          is_be <- be_conclusions[[param]]
-          
-          # Validate CI data exists
-          if (is.null(ci) || is.na(ci$point_estimate)) {
-            # Convert log parameter name to display name
-            display_param <- log_param_to_display_name(param)
-            return(data.frame(
-              Parameter = display_param,
-              `Ratio (%)` = "N/A",
-              `CI (%)` = "N/A",
-              `BE Criteria` = "N/A",
-              `BE Status` = "⚠️ UNKNOWN",
-              stringsAsFactors = FALSE
-            ))
-          }
-          
-          # Extract geometric scale values
-          point_est_geom <- ci$point_estimate
-          ci_lower_geom <- ci$ci_lower
-          ci_upper_geom <- ci$ci_upper
-          
-          # Per-parameter limits
-          param_lower <- 80
-          param_upper <- 125
-          if (!is.null(ci$limits_used)) {
-            param_lower <- ci$limits_used$lower %||% 80
-            param_upper <- ci$limits_used$upper %||% 125
-          }
-          
-          # Determine limit type label
-          limit_type <- ""
-          if (!is.null(ci$limits_used$type) && ci$limits_used$type == "expanded") {
-            limit_type <- " (expanded ABEL)"
-          } else {
-            limit_type <- " (fixed)"
-          }
-          
-          # Extract N and DF
-          n_val <- ci$n_subjects %||% be_res$n_subjects %||% NA
-          df_val <- ci$degrees_freedom %||% NA
-          
-          # Convert log parameter name to display name
-          display_param <- log_param_to_display_name(param)
-          
-          data.frame(
-            Parameter = display_param,
-            N = if (!is.na(n_val)) as.character(round(n_val)) else "\u2014",
-            DF = if (!is.na(df_val)) sprintf("%.1f", df_val) else "\u2014",
-            `Ratio (%)` = sprintf("%.2f%%", point_est_geom),
-            `CI (%)` = sprintf("[%.2f%%, %.2f%%]", ci_lower_geom, ci_upper_geom),
-            `BE Criteria` = sprintf("%.2f%% \u2013 %.2f%%%s", param_lower, param_upper, limit_type),
-            `BE Status` = ifelse(is.na(is_be), "⚠️ UNKNOWN", 
-                                ifelse(is_be, "✅ BIOEQUIVALENT", "❌ NOT BIOEQUIVALENT")),
-            stringsAsFactors = FALSE
-          )
-        })
-        
-        # Filter out NULL results and combine
-        valid_results <- results_list[!sapply(results_list, is.null)]
-        
-        if (length(valid_results) == 0) {
-          return(div(
-            class = "alert alert-warning",
-            h5("⚠️ No Valid Results to Display"),
-            p("No bioequivalence results could be processed for display.")
-          ))
-        }
-        
-        all_results <- do.call(rbind, valid_results)
-        
-        # Get dynamic CI label
-        analysis_cfg2 <- analysis_config()
-        alpha_level2 <- analysis_cfg2$alpha_level %||% 0.05
-        ci_pct2 <- round((1 - alpha_level2 * 2) * 100)
-        ci_label2 <- paste0(ci_pct2, "% CI")
-        
-        # Define clean column names for display
-        clean_column_names <- c("Parameter", "N", "DF", "Ratio (%)", paste0(ci_label2, " (%)"), "BE Criteria", "BE Status")
-        
-        return(div(
-          h5("📋 Bioequivalence Assessment Results"),
-          p(style = "font-size: 0.9em; color: #6c757d;", 
-            sprintf("Bioequivalence assessment results with %s confidence intervals for all evaluated parameters. ", ci_label2),
-            "Analysis performed on log-transformed data; parameter names shown without 'ln' prefix for clarity. ",
-            "Bioequivalence is determined by whether the confidence interval falls within the acceptance limits."),
-          DT::datatable(
-            all_results,
-            options = list(
-              pageLength = 15,
-              scrollX = TRUE,
-              columnDefs = list(
-                list(className = 'dt-center', targets = 1:6),
-                list(
-                  targets = 6, # BE Status column
-                  createdCell = JS("
-                    function(td, cellData, rowData, row, col) {
-                      if (cellData.includes('BIOEQUIVALENT')) {
-                        $(td).css('color', '#28a745');
-                        $(td).css('font-weight', 'bold');
-                      } else if (cellData.includes('NOT BIOEQUIVALENT')) {
-                        $(td).css('color', '#dc3545');
-                        $(td).css('font-weight', 'bold');
-                      } else {
-                        $(td).css('color', '#ffc107');
-                        $(td).css('font-weight', 'bold');
-                      }
-                    }
-                  ")
-                )
-              )
-            ),
-            rownames = FALSE,
-            colnames = clean_column_names,
-            escape = FALSE
-          ) %>% 
-            DT::formatStyle(columns = 1:6, fontSize = '13px')
-        ))
-        
-      }, error = function(e) {
-        return(div(
-          class = "alert alert-danger",
-          h5("❌ Error Loading Complete BE Analysis"),
-          p("An error occurred while loading the complete bioequivalence analysis."),
-          tags$small(paste("Error details:", e$message))
-        ))
-      })
     })
-    
-    # BE Statistical Summary output
-    output$be_statistical_summary <- renderUI({
-      req(results_available())
-      
-      tryCatch({
-        be_res <- be_results()
-        analysis_cfg <- analysis_config()
-        
-        # Get basic statistics
-        n_subjects <- be_res$n_subjects %||% "Unknown"
-        study_design <- be_res$design %||% analysis_cfg$detected_design %||% "Unknown"
-        confidence_level <- analysis_cfg$confidence_level %||% 90
-        be_lower <- analysis_cfg$be_lower %||% 80
-        be_upper <- analysis_cfg$be_upper %||% 125
-        
-        # Count all available BE parameters (not just specific log-transformed ones)
-        total_params <- length(be_res$confidence_intervals)
-        total_be_params <- sum(unlist(be_res$be_conclusions), na.rm = TRUE)
-        
-        # Identify the parameter types we have
-        param_names <- names(be_res$confidence_intervals)
-        has_log_params <- any(startsWith(param_names, "ln"))
-        
-        # Create a list of parameter display names
-        param_display_names <- sapply(param_names, log_param_to_display_name)
-        unique_display_names <- unique(param_display_names)
-        
-        return(div(
-          tags$ul(
-            tags$li(tags$strong("Study Design: "), study_design),
-            tags$li(tags$strong("Number of Subjects: "), n_subjects),
-            tags$li(tags$strong("Confidence Level: "), paste0(confidence_level, "%")),
-            tags$li(tags$strong("BE Limits: "), paste0(be_lower, "% - ", be_upper, "%")),
-            tags$li(tags$strong("Parameters Analyzed: "), total_params, " (", paste(unique_display_names, collapse = ", "), ")"),
-            tags$li(tags$strong("Bioequivalent Parameters: "), paste0(total_be_params, " of ", total_params)),
-            tags$li(tags$strong("Analysis Model: "), analysis_cfg$anova_model %||% "Fixed Effects"),
-            tags$li(tags$strong("Analysis Scale: "), if(has_log_params) "Log-transformed (multiplicative model)" else "Original scale"),
-            tags$li(tags$strong("Results Presentation: "), "Geometric scale (%) with original parameter names")
-          ),
-          br(),
-          h6("📊 Scale Information:"),
-          tags$ul(
-            tags$li(tags$strong("Statistical Analysis: "), "Performed on log-transformed data (e.g., ln(Cmax), ln(AUC0-t))"),
-            tags$li(tags$strong("Results Display: "), "Shown with original parameter names (e.g., Cmax, AUC0-t) for clarity"),
-            tags$li(tags$strong("Geometric Scale: "), "Results expressed as percentage ratios (Test/Reference × 100%)"),
-            tags$li(tags$strong("BE Assessment: "), "Based on log-scale analysis per regulatory guidelines")
-          )
-        ))
-        
-      }, error = function(e) {
-        return(div(
-          class = "alert alert-warning",
-          p("Statistical summary not available.")
-        ))
-      })
-    })
-    
-    # BE Regulatory Summary output
-    output$be_regulatory_summary <- renderUI({
-      req(results_available())
-      
-      tryCatch({
-        be_res <- be_results()
-        # Use all available BE conclusions for regulatory assessment
-        all_conclusions <- be_res$be_conclusions
-        
-        # Remove any NULL or NA conclusions
-        valid_conclusions <- all_conclusions[!is.na(unlist(all_conclusions))]
-        
-        # Regulatory status based on all available results
-        overall_be <- length(valid_conclusions) > 0 && all(unlist(valid_conclusions))
-        overall_status <- if (overall_be) "✅ BIOEQUIVALENT" else "❌ NOT BIOEQUIVALENT"
-        status_color <- if (overall_be) "#28a745" else "#dc3545"
-        
-        # Check if log-transformed parameters were used
-        param_names <- names(be_res$confidence_intervals)
-        has_log_params <- any(startsWith(param_names, "ln"))
-        
-        # Get dynamic labels for regulatory notes
-        analysis_cfg3 <- analysis_config()
-        alpha_level3 <- analysis_cfg3$alpha_level %||% 0.05
-        ci_pct3 <- round((1 - alpha_level3 * 2) * 100)
-        be_lower3 <- analysis_cfg3$be_lower %||% 80
-        be_upper3 <- analysis_cfg3$be_upper %||% 125
-        
-        # Regulatory guidelines compliance
-        regulatory_notes <- list(
-          sprintf("✓ %d%% Confidence Interval used", ci_pct3),
-          if(has_log_params) "✓ Log-transformed analysis performed" else "✓ Analysis performed on available parameters",
-          sprintf("✓ Default BE limits: %.2f%% - %.2f%%", be_lower3, be_upper3),
-          if (overall_be) "✓ Meets regulatory bioequivalence criteria" else "✗ Does not meet regulatory bioequivalence criteria"
-        )
-        
-        return(div(
-          div(
-            style = paste0("padding: 10px; margin-bottom: 15px; border-radius: 5px; background-color: ", 
-                          if (overall_be) "#d4edda" else "#f8d7da", ";"),
-            h6(style = paste0("color: ", status_color, "; margin: 0;"), overall_status)
-          ),
-          tags$ul(
-            lapply(regulatory_notes, function(note) {
-              color <- if (grepl("✓", note)) "#28a745" else "#dc3545"
-              tags$li(style = paste0("color: ", color), note)
-            })
-          ),
-          br(),
-          div(
-            style = "padding: 8px; background-color: #e9ecef; border-radius: 4px;",
-            tags$small(
-              tags$strong("Regulatory Compliance: "),
-              "Analysis follows FDA, EMA, and ICH M13A guidelines for bioequivalence assessment."
-            )
-          )
-        ))
-        
-      }, error = function(e) {
-        return(div(
-          class = "alert alert-warning",
-          p("Regulatory summary not available.")
-        ))
-      })
-    })
-    
     # Refresh button observer  
     observeEvent(input$refresh_anova, {
       # Force refresh of reactive values to re-trigger ANOVA display
@@ -3075,7 +2697,7 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
     })
     
     # =======================================================================
-    # Summary Statistics Tab — one descriptive table per product
+    # Descriptive Statistics Tab — one descriptive table per product
     # (split by period for replicate designs)
     # =======================================================================
 
@@ -3096,11 +2718,11 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         data.frame(
           Variable  = label,
           N         = length(x),
-          Mean      = round(m, 4),
-          `Std Dev` = round(s, 4),
-          Minimum   = round(min(x), 4),
-          Median    = round(stats::median(x), 4),
-          Maximum   = round(max(x), 4),
+          Mean      = round(m, 2),
+          `Std Dev` = round(s, 2),
+          Minimum   = round(min(x), 2),
+          Median    = round(stats::median(x), 2),
+          Maximum   = round(max(x), 2),
           `CV (%)`  = round(cv, 2),
           check.names = FALSE,
           stringsAsFactors = FALSE
@@ -3108,6 +2730,39 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       })
       do.call(rbind, rows)
     }
+
+    # Grouping dropdown for the Descriptive Statistics tab. "Each Exposure"
+    # (T1/T2/R1/R2) only makes sense for replicate designs — a standard 2x2
+    # or parallel study has exactly one Test and one Reference exposure per
+    # subject, so it's identical to "Each Treatment" and is left out entirely
+    # rather than shown as a redundant option.
+    output$summary_stats_group_by_ui <- renderUI({
+      req(results_available())
+      nca_res <- nca_results()
+      is_rep <- FALSE
+      if (!is.null(nca_res) && !is.null(nca_res$subject_data)) {
+        sd_data <- nca_res$subject_data
+        if (all(c("Subject", "Treatment") %in% names(sd_data))) {
+          counts_by_subj_tr <- table(sd_data$Subject, sd_data$Treatment)
+          is_rep <- any(counts_by_subj_tr > 1)
+        }
+      }
+
+      choices <- list(
+        "Each Sequence"  = "sequence",
+        "Each Period"    = "period",
+        "Each Treatment" = "treatment"
+      )
+      if (is_rep) {
+        choices <- c(list("Each Exposure" = "formulation"), choices)
+      }
+
+      selectInput(session$ns("summary_stats_group_by"), label = NULL,
+        choices = choices,
+        selected = "treatment",
+        width = "100%"
+      )
+    })
 
     output$summary_stats_tables <- renderUI({
       req(results_available())
@@ -3161,40 +2816,81 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
 
       # Replicate detection: ANY subject has > 1 row for the same treatment.
       # In that case the design provides repeated T and/or R exposures per
-      # subject (e.g. partial / full replicate).  We split by exposure index
-      # (T1, T2, R1, R2) using per-subject ordering by Period (when present)
-      # so the groups match what the ANOVA / BE engine actually consumes.
+      # subject (e.g. partial / full replicate).
       counts_by_subj_tr <- table(sd_data$Subject, sd_data$Treatment)
       is_replicate <- any(counts_by_subj_tr > 1)
 
+      has_period <- "Period" %in% names(sd_data)
+      has_seq    <- "Sequence" %in% names(sd_data)
+
+      # Design-position exposure index (T1/T2/R1/R2) — rank each Period within
+      # (Sequence, Treatment) using every period observed anywhere in that
+      # sequence, not just what one subject happened to complete. A per-subject
+      # chronological ordering would mislabel a subject with a missing early
+      # exposure: e.g. an RTRT subject who only completed periods 1 (R) and 4
+      # (T) belongs in R1 (period 1 is the sequence's first designed R slot)
+      # and T2 (period 4 is the second designed T slot) — not R1/T1, which is
+      # what counting "this subject's first observed R/T" in isolation would
+      # produce.
+      if (has_period) {
+        key_cols <- if (has_seq) c("Sequence", "Treatment", "Period") else c("Treatment", "Period")
+        design_map <- unique(sd_data[, key_cols, drop = FALSE])
+        ord <- if (has_seq) {
+          order(design_map$Sequence, design_map$Treatment, suppressWarnings(as.numeric(design_map$Period)))
+        } else {
+          order(design_map$Treatment, suppressWarnings(as.numeric(design_map$Period)))
+        }
+        design_map <- design_map[ord, , drop = FALSE]
+        group_key  <- if (has_seq) interaction(design_map$Sequence, design_map$Treatment, drop = TRUE) else design_map$Treatment
+        design_map$.expo <- ave(seq_len(nrow(design_map)), group_key, FUN = seq_along)
+        sd_data <- merge(sd_data, design_map, by = key_cols, all.x = TRUE, sort = FALSE)
+      } else {
+        sd_data$.expo <- NA_integer_
+      }
+
+      group_by <- input$summary_stats_group_by %||% "treatment"
+
       groups <- list()
-      if (is_replicate) {
-        order_col <- if ("Period" %in% names(sd_data)) "Period" else NULL
+      if (group_by == "formulation" && is_replicate) {
         for (tr in treatments) {
           tr_rows <- sd_data[sd_data$Treatment == tr, , drop = FALSE]
           if (nrow(tr_rows) == 0) next
-          # Per subject, order by Period (or original order) and assign 1..k
-          tr_rows$.expo <- NA_integer_
-          for (subj in unique(tr_rows$Subject)) {
-            idx <- which(tr_rows$Subject == subj)
-            if (!is.null(order_col) && order_col %in% names(tr_rows)) {
-              ord <- order(tr_rows[[order_col]][idx])
-            } else {
-              ord <- seq_along(idx)
-            }
-            tr_rows$.expo[idx[ord]] <- seq_along(idx)
+          if (all(is.na(tr_rows$.expo))) {
+            # No Period column to rank by — fall back to original row order.
+            tr_rows$.expo <- seq_len(nrow(tr_rows))
           }
           max_expo <- max(tr_rows$.expo, na.rm = TRUE)
           tr_label <- substr(tr, 1, 1)  # "T" or "R"
           for (k in seq_len(max_expo)) {
-            sub <- tr_rows[tr_rows$.expo == k, , drop = FALSE]
+            sub <- tr_rows[!is.na(tr_rows$.expo) & tr_rows$.expo == k, , drop = FALSE]
             if (nrow(sub) == 0) next
             groups[[paste0(tr_label, k, " — ", tr,
                             " exposure ", k)]] <- sub
           }
         }
+      } else if (group_by == "sequence" && has_seq) {
+        # One table per Sequence, pooling every Treatment/Period assigned to it.
+        seqs <- sort(unique(as.character(sd_data$Sequence)))
+        seqs <- seqs[!is.na(seqs) & nzchar(seqs)]
+        for (sq in seqs) {
+          sub <- sd_data[as.character(sd_data$Sequence) == sq, , drop = FALSE]
+          if (nrow(sub) == 0) next
+          groups[[paste0("Sequence ", sq)]] <- sub
+        }
+      } else if (group_by == "period" && has_period) {
+        # One table per Period, pooling every Sequence/Treatment observed then.
+        pds <- suppressWarnings(as.numeric(unique(sd_data$Period)))
+        pds <- sort(pds[!is.na(pds)])
+        for (pd in pds) {
+          sub <- sd_data[suppressWarnings(as.numeric(sd_data$Period)) == pd, , drop = FALSE]
+          if (nrow(sub) == 0) next
+          groups[[paste0("Period ", pd)]] <- sub
+        }
       } else {
-        # Parallel / 2x2: a single table per treatment, all subjects pooled.
+        # "Each Treatment": T1+T2 and R1+R2 pooled into a single T / R table
+        # (also the fallback for parallel / standard 2x2 designs, and for
+        # "formulation"/"sequence"/"period" modes when the underlying column
+        # needed for that breakdown isn't available).
         for (tr in treatments) {
           sub <- sd_data[sd_data$Treatment == tr, , drop = FALSE]
           if (nrow(sub) == 0) next
@@ -3232,7 +2928,12 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
               ),
               rownames = FALSE,
               class = 'compact stripe hover'
-            )
+            ) %>%
+              DT::formatRound(
+                columns = intersect(c("Mean", "Std Dev", "Minimum", "Median", "Maximum", "CV (%)"),
+                                     names(stats_df)),
+                digits = 2
+              )
         )
       })
 
@@ -3344,18 +3045,23 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
 
       ind <- d$individual
 
+      # ln-transformed (log scale) values get 4 decimals; normal-scale values
+      # stay capped at 2 — the log values are typically small (e.g. ~0.05-0.5)
+      # where 2 decimals loses meaningful precision.
+      value_digits <- if (d$scale == "log") 4 else 2
+
       if (d$is_replicate) {
         display <- ind[, c("Subject", "T1", "T2", "T_mean",
                             "R1", "R2", "R_mean", "Ratio"),
                         drop = FALSE]
-        display[, -1] <- lapply(display[, -1], function(x) round(x, 4))
+        display[, -1] <- lapply(display[, -1], function(x) round(x, value_digits))
         col_names <- c("Subject", "T1", "T2", "T mean",
                         "R1", "R2", "R mean",
                         if (d$scale == "log") "ln(T) − ln(R)" else "T/R Ratio")
       } else {
         display <- ind[, c("Subject", "Test", "Reference", "Ratio"),
                         drop = FALSE]
-        display[, -1] <- lapply(display[, -1], function(x) round(x, 4))
+        display[, -1] <- lapply(display[, -1], function(x) round(x, value_digits))
         col_names <- c("Subject",
                         if (d$scale == "log") "ln(Test)"      else "Test",
                         if (d$scale == "log") "ln(Reference)" else "Reference",
@@ -3370,12 +3076,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         ),
         rownames = FALSE,
         colnames = col_names
-      )
+      ) %>%
+        DT::formatRound(columns = setdiff(names(display), "Subject"), digits = value_digits)
     })
 
     output$be_comp_overall_summary <- renderUI({
       req(results_available())
       param <- req(input$be_comp_parameter)
+      scale <- input$be_comp_scale %||% "normal"
 
       nca_res <- nca_results()
       if (is.null(nca_res)) return(NULL)
@@ -3388,18 +3096,21 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         sd <- sd[!duplicated(sd[, c("Subject", "Treatment")]), ]
       }
 
-      # ── 1. Geometric means from raw data ────────────────────────────────
+      # ── 1. Regular (arithmetic) mean from raw data ──────────────────────
       test_vals <- sd[[param]][sd$Treatment %in% c("T", "Test") & !is.na(sd[[param]]) & sd[[param]] > 0]
       ref_vals  <- sd[[param]][sd$Treatment %in% c("R", "Reference") & !is.na(sd[[param]]) & sd[[param]] > 0]
-
-      geom_T <- if (length(test_vals) > 0) exp(mean(log(test_vals))) else NA_real_
-      geom_R <- if (length(ref_vals)  > 0) exp(mean(log(ref_vals)))  else NA_real_
-      gmr_data <- if (!is.na(geom_T) && !is.na(geom_R) && geom_R > 0) geom_T / geom_R else NA_real_
       n_T <- length(test_vals)
       n_R <- length(ref_vals)
 
+      arith_T <- if (n_T > 0) mean(test_vals) else NA_real_
+      arith_R <- if (n_R > 0) mean(ref_vals)  else NA_real_
+      arith_ratio <- if (!is.na(arith_T) && !is.na(arith_R) && arith_R > 0) arith_T / arith_R else NA_real_
+
       # ── 2. Geometric LS means from ANOVA (via be_results) ───────────────
-      # Map base param → ln param name in confidence_intervals
+      # Map base param → ln param name — standard ABE's confidence_intervals
+      # is keyed by the ln-prefixed name (e.g. "lnCmax"), but RSABE/ABEL key
+      # theirs by the base name (e.g. "Cmax") — try both so this works for
+      # every analysis type, not just standard ABE.
       ln_param_map <- c(
         Cmax   = "lnCmax",
         AUC0t  = "lnAUC0t",
@@ -3408,31 +3119,51 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       )
       ln_param <- ln_param_map[param]
 
-      lsmean_T  <- NA_real_
-      lsmean_R  <- NA_real_
+      lsmean_T     <- NA_real_
+      lsmean_R     <- NA_real_
       lsmean_ratio <- NA_real_
+      lsmean_ln_T  <- NA_real_
+      lsmean_ln_R  <- NA_real_
+      lsmean_diff  <- NA_real_
 
       be_res_val <- tryCatch(be_results(), error = function(e) NULL)
-      if (!is.null(ln_param) && !is.na(ln_param) &&
-          !is.null(be_res_val) &&
-          !is.null(be_res_val$confidence_intervals[[ln_param]])) {
-        ci_ln <- be_res_val$confidence_intervals[[ln_param]]
+      ci_all <- be_res_val$confidence_intervals
+      ci_ln <- NULL
+      if (!is.null(ci_all)) {
+        if (!is.null(ln_param) && !is.na(ln_param) && !is.null(ci_all[[ln_param]])) {
+          ci_ln <- ci_all[[ln_param]]
+        } else if (!is.null(ci_all[[param]])) {
+          ci_ln <- ci_all[[param]]
+        }
+      }
+      if (!is.null(ci_ln)) {
         pe <- ci_ln$point_estimate  # e.g. 106.23 means 106.23%
-        if (!is.null(pe) && is.finite(pe) && pe > 0 &&
-            !is.na(geom_T) && !is.na(geom_R)) {
-          # Derive individual LS means:
+        if (!is.null(pe) && is.finite(pe) && pe > 0 && n_T > 0 && n_R > 0) {
+          # Derive individual LS means directly on the log scale:
           # grand_ln = (mean(ln T) + mean(ln R)) / 2
           # lsmean_ln_T = grand_ln + log(PE/100)/2
           # lsmean_ln_R = grand_ln - log(PE/100)/2
-          grand_ln  <- (mean(log(test_vals)) + mean(log(ref_vals))) / 2
-          half_coef <- log(pe / 100) / 2
-          lsmean_T  <- exp(grand_ln + half_coef)
-          lsmean_R  <- exp(grand_ln - half_coef)
+          grand_ln    <- (mean(log(test_vals)) + mean(log(ref_vals))) / 2
+          half_coef   <- log(pe / 100) / 2
+          lsmean_ln_T <- grand_ln + half_coef
+          lsmean_ln_R <- grand_ln - half_coef
+          lsmean_diff <- lsmean_ln_T - lsmean_ln_R   # == log(pe/100), the ANOVA treatment coefficient
+          lsmean_T    <- exp(lsmean_ln_T)
+          lsmean_R    <- exp(lsmean_ln_R)
           lsmean_ratio <- pe / 100
         }
       }
 
       # ── 3. Render ────────────────────────────────────────────────────────
+      # Normal scale shows two rows: the plain arithmetic mean of the raw
+      # data, and the geometric mean derived from the ANOVA LS means
+      # (back-transformed). ln scale shows only the LS Mean, in the log
+      # domain directly (not log() applied cosmetically to a back-transformed
+      # number) — an arithmetic "mean of logs" row would just duplicate the
+      # LS mean under a balanced design and diverge from it under an
+      # unbalanced one, which is more confusing than useful here.
+      is_log <- identical(scale, "log")
+
       fmt_n <- function(x, digits = 2) {
         if (is.null(x) || is.na(x) || !is.finite(x)) return("—")
         formatC(x, format = "f", digits = digits, big.mark = ",")
@@ -3441,8 +3172,23 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
         if (is.null(x) || is.na(x) || !is.finite(x)) return("—")
         sprintf("%.2f%%", x * 100)
       }
+      fmt_ln <- function(x, digits = 4) {
+        if (is.null(x) || is.na(x) || !is.finite(x)) return("—")
+        formatC(x, format = "f", digits = digits, big.mark = ",")
+      }
 
       has_ls <- !is.na(lsmean_T) && !is.na(lsmean_R)
+
+      test_hdr  <- if (is_log) "ln(Test)"      else "Test"
+      ref_hdr   <- if (is_log) "ln(Reference)" else "Reference"
+      ratio_hdr <- if (is_log) "ln(T) − ln(R)" else "Ratio (T/R)"
+
+      mean_row_sub <- sprintf("(n = %d / %d)", n_T, n_R)
+
+      ls_row_sub <- if (is_log) "(ANOVA, ln scale)" else "(ANOVA LS Means, back-transformed)"
+      ls_test_val  <- if (is_log) fmt_ln(lsmean_ln_T) else fmt_n(lsmean_T)
+      ls_ref_val   <- if (is_log) fmt_ln(lsmean_ln_R) else fmt_n(lsmean_R)
+      ls_ratio_val <- if (is_log) fmt_ln(lsmean_diff) else fmt_ratio(lsmean_ratio)
 
       tagList(
         tags$table(
@@ -3452,28 +3198,33 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
             style = "background-color: #f0f4f8;",
             tags$tr(
               tags$th(style = "width: 34%;", ""),
-              tags$th(style = "width: 22%; text-align: center;", "Test"),
-              tags$th(style = "width: 22%; text-align: center;", "Reference"),
-              tags$th(style = "width: 22%; text-align: center;", "Ratio (T/R)")
+              tags$th(style = "width: 22%; text-align: center;", test_hdr),
+              tags$th(style = "width: 22%; text-align: center;", ref_hdr),
+              tags$th(style = "width: 22%; text-align: center;", ratio_hdr)
             )
           ),
           tags$tbody(
-            tags$tr(
-              tags$td(tags$strong("Geometric Mean"),
-                      tags$div(style = "font-size: 11px; color: #6c757d;",
-                               sprintf("(n = %d / %d)", n_T, n_R))),
-              tags$td(style = "text-align: center;", fmt_n(geom_T)),
-              tags$td(style = "text-align: center;", fmt_n(geom_R)),
-              tags$td(style = "text-align: center; font-weight: 600;", fmt_ratio(gmr_data))
-            ),
+            if (!is_log) {
+              tags$tr(
+                tags$td(tags$strong("Mean"),
+                        tags$div(style = "font-size: 11px; color: #6c757d;", mean_row_sub)),
+                tags$td(style = "text-align: center;", fmt_n(arith_T)),
+                tags$td(style = "text-align: center;", fmt_n(arith_R)),
+                tags$td(style = "text-align: center; font-weight: 600;", fmt_ratio(arith_ratio))
+              )
+            },
             if (has_ls) {
               tags$tr(
-                tags$td(tags$strong("Geometric LS Mean"),
-                        tags$div(style = "font-size: 11px; color: #6c757d;",
-                                 "(ANOVA, ln-transformed data)")),
-                tags$td(style = "text-align: center;", fmt_n(lsmean_T)),
-                tags$td(style = "text-align: center;", fmt_n(lsmean_R)),
-                tags$td(style = "text-align: center; font-weight: 600;", fmt_ratio(lsmean_ratio))
+                tags$td(tags$strong(if (is_log) "LS Mean" else "Geometric Mean"),
+                        tags$div(style = "font-size: 11px; color: #6c757d;", ls_row_sub)),
+                tags$td(style = "text-align: center;", ls_test_val),
+                tags$td(style = "text-align: center;", ls_ref_val),
+                tags$td(style = "text-align: center; font-weight: 600;", ls_ratio_val)
+              )
+            } else if (is_log) {
+              tags$tr(
+                tags$td(colspan = 4, class = "text-muted",
+                        "LS Mean not available for this parameter (no ANOVA result found).")
               )
             }
           )
@@ -3485,313 +3236,5 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       nca_results()
     })
 
-    # PK Comparison placeholder
-    output$pk_comparison_content <- renderUI({
-      if (!results_available()) {
-        return(div(
-          class = "alert alert-info",
-          "No analysis results available. Please complete the analysis setup and run the analysis first."
-        ))
-      }
-      
-      # Placeholder content for now
-      div(
-        h5("PK Comparison functionality coming soon..."),
-        p("This tab will display:"),
-        tags$ul(
-          tags$li("Individual subject Test and Reference values"),
-          tags$li("T/R ratios for each subject"),
-          tags$li("Summary statistics (mean, SD, CV%)"),
-          tags$li("Geometric means and ratios")
-        )
-      )
-    })
-    
-    # PK Comparison - Parameter Selection UI
-    output$pk_comparison_parameter_select_ui <- renderUI({
-      if (!results_available()) {
-        return(NULL)
-      }
-      
-      nca_res <- nca_results()
-      if (is.null(nca_res) || is.null(nca_res$subject_data)) {
-        return(div(class = "alert alert-warning", "No NCA results available"))
-      }
-      
-      # Get available parameters from subject data
-      data <- nca_res$subject_data
-      
-      # Define parameter categories (aligned with Subject Data tab)
-      primary_params <- c("Cmax", "AUC0t")
-      secondary_params <- c("AUC0inf", "pAUC", "t_half", "AUC_percent_extrap")
-      log_params <- c("lnCmax", "lnAUC0t", "lnAUC0inf")
-      
-      # Filter for available parameters
-      available_primary <- intersect(primary_params, names(data))
-      available_secondary <- intersect(secondary_params, names(data))
-      available_log <- intersect(log_params, names(data))
-      
-      # Create grouped choices
-      choices <- list()
-      
-      if (length(available_primary) > 0) {
-        choices[["Primary PK Parameters"]] <- available_primary
-      }
-      
-      if (length(available_log) > 0) {
-        choices[["Log-Transformed Parameters"]] <- available_log
-      }
-      
-      if (length(available_secondary) > 0) {
-        choices[["Secondary PK Parameters"]] <- available_secondary
-      }
-      
-      # If no parameters available
-      if (length(unlist(choices)) == 0) {
-        return(div(class = "alert alert-warning", "No PK parameters available for comparison"))
-      }
-      
-      # Create the select input
-      selectInput(
-        inputId = session$ns("pk_comparison_parameter"),
-        label = NULL,  # No label since we show it inline in UI
-        choices = choices,
-        selected = unlist(choices)[1],
-        width = "100%"
-      )
-    })
-    
-    # Reactive for selected comparison parameter
-    selected_comparison_param <- reactive({
-      input$pk_comparison_parameter
-    })
-    
-    # PK Comparison Display - Left Panel (Individual Subject Table)
-    output$pk_comparison_table_display <- renderUI({
-      param <- selected_comparison_param()
-      
-      if (is.null(param) || param == "") {
-        return(div(
-          class = "alert alert-info",
-          "Please select a PK parameter to view comparison results."
-        ))
-      }
-      
-      nca_res <- nca_results()
-      if (is.null(nca_res)) {
-        return(div(class = "alert alert-warning", "No NCA results available"))
-      }
-      
-      # Calculate comparison statistics
-      comparison_results <- calculate_pk_comparison(nca_res, param)
-      
-      if (is.null(comparison_results)) {
-        return(div(
-          class = "alert alert-warning",
-          paste("No data available for parameter:", param)
-        ))
-      }
-      
-      # Check if there's an error in the results
-      if (!is.null(comparison_results$error)) {
-        return(div(
-          class = "alert alert-danger",
-          h5("Data Structure Error"),
-          p(comparison_results$error),
-          if (!is.null(nca_res$subject_data)) {
-            tagList(
-              p("Available columns in NCA subject data:"),
-              p(paste(names(nca_res$subject_data), collapse = ", "))
-            )
-          }
-        ))
-      }
-      
-      # Format the left panel display
-      tagList(
-        div(
-          class = "panel panel-default",
-          div(class = "panel-heading",
-            h4(class = "panel-title", 
-               icon("chart-line"), 
-               paste("PK Comparison Analysis:", param))
-          ),
-          div(class = "panel-body",
-            # Individual subject data table
-            div(
-              class = "pk-comparison-section",
-              h5("Individual Subject Data", 
-                 if (comparison_results$unit != "") paste0(" (", comparison_results$unit, ")") else ""),
-              DT::dataTableOutput(session$ns("pk_comparison_individual_table"))
-            )
-          )
-        )
-      )
-    })
-    
-    # PK Comparison Display - Right Panel (Summary Statistics)
-    output$pk_comparison_stats_display <- renderUI({
-      param <- selected_comparison_param()
-      
-      if (is.null(param) || param == "") {
-        return(div(
-          class = "alert alert-light",
-          style = "text-align: center; color: #6c757d;",
-          icon("info-circle"),
-          br(), br(),
-          "Summary statistics will appear here once a parameter is selected."
-        ))
-      }
-      
-      nca_res <- nca_results()
-      if (is.null(nca_res)) {
-        return(div(class = "alert alert-warning", "No NCA results available"))
-      }
-      
-      comparison_results <- calculate_pk_comparison(nca_res, param)
-      
-      if (is.null(comparison_results) || !is.null(comparison_results$error)) {
-        return(div(
-          class = "alert alert-light",
-          style = "text-align: center; color: #6c757d;",
-          "Summary statistics not available for this parameter."
-        ))
-      }
-      
-      tagList(
-        div(
-          class = "panel panel-default",
-          div(class = "panel-heading",
-            h4(class = "panel-title",
-               icon("calculator"),
-               "Summary Statistics")
-          ),
-          div(class = "panel-body",
-            div(
-              class = "alert alert-info",
-              style = "margin-bottom: 20px;",
-              icon("users"),
-              paste(" Analysis based on", nrow(comparison_results$individual_data), "subjects",
-                   if(comparison_results$is_replicate) " (Replicate Design)" else " (2x2x2 Crossover)")
-            ),
-            DT::dataTableOutput(session$ns("pk_comparison_consolidated_table"))
-          )
-        )
-      )
-    })
-    
-    # Render individual subject data table
-    output$pk_comparison_individual_table <- DT::renderDataTable({
-      param <- selected_comparison_param()
-      if (is.null(param)) return(NULL)
-      
-      nca_res <- nca_results()
-      comparison_results <- calculate_pk_comparison(nca_res, param)
-      
-      if (is.null(comparison_results)) return(NULL)
-      
-      # Format the individual data based on design type
-      formatted_data <- comparison_results$individual_data
-      
-      if (comparison_results$is_replicate) {
-        # REPLICATE DESIGN: T1, T2, T Mean, R1, R2, R Mean, T/R Ratio
-        display_data <- formatted_data %>%
-          select(Subject, T1, T2, T_mean, R1, R2, R_mean, Ratio) %>%
-          mutate(across(where(is.numeric), ~round(., 3)))
-
-        display_data <- display_data %>%
-          mutate(
-            Notes = case_when(
-              is.na(T1) & is.na(T2) ~ "Missing all T",
-              is.na(R1) & is.na(R2) ~ "Missing all R",
-              is.na(T1) | is.na(T2) ~ "Missing T period",
-              is.na(R1) | is.na(R2) ~ "Missing R period",
-              TRUE ~ ""
-            )
-          )
-
-        col_names <- c("Subject", "T1", "T2", "T Mean", "R1", "R2", "R Mean",
-                       "T/R Ratio", "Notes")
-
-      } else {
-        # 2x2x2 CROSSOVER: Subject, Test, Reference, Ratio
-        display_data <- formatted_data %>%
-          select(Subject, Test, Reference, Ratio) %>%
-          mutate(across(where(is.numeric), ~round(., 3)))
-
-        display_data <- display_data %>%
-          mutate(
-            Notes = case_when(
-              is.na(Test)      ~ "Missing Test",
-              is.na(Reference) ~ "Missing Ref",
-              TRUE ~ ""
-            )
-          )
-
-        col_names <- c("Subject", "Test", "Reference", "T/R Ratio", "Notes")
-      }
-      
-      DT::datatable(
-        display_data,
-        options = list(
-          pageLength = 15,
-          dom = 'tp',  # 't' = table, 'p' = pagination
-          ordering = FALSE,
-          columnDefs = list(
-            list(className = 'dt-center', targets = '_all')
-          ),
-          scrollX = TRUE,
-          lengthMenu = c(15, 25, 50, 100),
-          pagingType = "simple_numbers"
-        ),
-        rownames = FALSE,
-        colnames = col_names
-      )
-    })
-    
-    # Render summary statistics table (SAS MEANS style)
-    output$pk_comparison_consolidated_table <- DT::renderDataTable({
-      param <- selected_comparison_param()
-      if (is.null(param)) return(NULL)
-
-      nca_res <- nca_results()
-      comparison_results <- calculate_pk_comparison(nca_res, param)
-      if (is.null(comparison_results) || !is.null(comparison_results$error)) return(NULL)
-
-      display_data <- comparison_results$means_table %>%
-        mutate(across(where(is.numeric), ~round(., 4)))
-
-      col_names <- c("Group", "N", "Mean", "Std Dev", "CV%", "Min", "Median", "Max")
-
-      DT::datatable(
-        display_data,
-        options = list(
-          pageLength = 10,
-          dom = 't',
-          ordering = FALSE,
-          columnDefs = list(list(className = 'dt-center', targets = '_all')),
-          scrollX = TRUE,
-          rowCallback = DT::JS(
-            "function(row, data, index) {",
-            "  if (data[0] && data[0].indexOf('Total') >= 0) {",
-            "    $(row).css({'font-weight': 'bold', 'background-color': '#e8f4f8'});",
-            "  }",
-            "}"
-          )
-        ),
-        rownames = FALSE,
-        colnames = col_names
-      ) %>%
-        DT::formatStyle(
-          columns = colnames(display_data),
-          backgroundColor = '#f9f9f9'
-        )
-    })
-    
-    # Refresh button handler
-    observeEvent(input$refresh_pk_comparison, {
-      # Force reactivity
-      nca_results()
-    })
   })
 }

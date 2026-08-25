@@ -1,8 +1,8 @@
 # BioEQ: Bioequivalence Analysis Platform
 
-[![R Version](https://img.shields.io/badge/R-%3E%3D%204.0.0-blue.svg)](https://cran.r-project.org/)
+[![R Version](https://img.shields.io/badge/R-%3E%3D%204.4.0-blue.svg)](https://cran.r-project.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Beta-yellow.svg)]()
+[![Version](https://img.shields.io/badge/Version-1.0.0-brightgreen.svg)]()
 
 ## Overview
 
@@ -56,7 +56,7 @@ Interactive and static visualizations of study data.
 ### Exports & Reports
 Export results and generate regulatory-ready reports.
 - **Data exports**: CSV, Excel
-- **Reports**: PDF, HTML (Word requires optional `officer`/`flextable` packages)
+- **Reports**: PDF, HTML, Word (`.docx`)
 - **Plots**: High-resolution static graphics
 - **R script**: Reproducible analysis code
 
@@ -64,7 +64,11 @@ Export results and generate regulatory-ready reports.
 
 
 ### Validation
-Built-in black-box validation engine that benchmarks BioEQ results against embedded reference datasets derived from industry-standard software. Validation runs within the app — no filesystem access or external files needed.
+Built-in black-box validation engine that benchmarks BioEQ results against 59 embedded reference datasets spanning NCA, bioequivalence (parallel, 2×2×2 crossover, and full-replicate designs), and data-handling (missing data, carryover) — no filesystem access or external files needed; validation runs entirely within the app.
+
+- **NCA** — the bear/Phoenix WinNonlin cross-validation profile (Lee & Lee 2009) and the full 12-subject Theoph dataset against published Phoenix WinNonlin 6.3/7.0 output (Bae 2018), plus BioEQ-generated internal consistency checks for AUC integration edge cases and λz best-fit tie-breaking.
+- **Bioequivalence** — parallel-design (Fuglsang 2015, 11 datasets), 2×2×2 crossover (Schütz, Labes & Fuglsang 2014, 8 datasets), and full-replicate ABEL (Schütz et al. 2020 / the `replicateBE` package's reference datasets, 30 datasets).
+- **Data handling** — BioEQ-generated datasets verifying missing-data imputation (exclude/interpolate/LOCF), ICH M13A carryover detection, and TTT λz point-selection.
 
 ![Validation Module Screenshot](docs/images/image-3.png)
 
@@ -98,26 +102,18 @@ Step-by-step guidance on data format requirements, workflow, and analysis interp
 
 ### Install Dependencies
 
+**Requires R >= 4.4.0.**
+
 ```r
-# Option 1: Automatic install
+# From the BioEQ project root
 Rscript install_dependencies.R
-
-# Option 2: Manual install (core)
-install.packages(c(
-  "shiny", "shinydashboard", "DT", "readr", "dplyr",
-  "readxl", "bslib", "shinyjs", "shinycssloaders",
-  "ggplot2", "gridExtra", "plotly", "htmlwidgets",
-  "nlme", "lme4", "lmerTest", "replicateBE",
-  "PowerTOST", "reshape2", "scales", "writexl", "tidyr",
-  "rmarkdown", "knitr", "zip", "digest"
-))
-
-# Optional (Word report generation)
-install.packages(c("officer", "flextable"))
-
-# Optional (analysis enhancements: DTW similarity, Kenward-Roger DDF)
-install.packages(c("dtw", "pbkrtest"))
 ```
+
+This installs the 31 packages BioEQ loads directly; their ~103 supporting
+dependencies are pulled in automatically. See
+[docs/user_guide.md](docs/user_guide.md) section 2 for the complete
+categorized package inventory (Base R / Recommended / Intended for Use /
+Imports) with the tested version baseline.
 
 ### Launch the App
 
@@ -183,7 +179,7 @@ Pre-calculated AUC, Cmax, and Tmax values per subject can be uploaded directly f
 
 ---
 
-## Project Structure
+## Application Structure
 
 ```
 BioEQ/
@@ -218,11 +214,6 @@ BioEQ/
 
 ---
 
-## Roadmap
-
-- **Expanded reporting** — Full Word report support (requires optional `officer`/`flextable` packages)
-- **Additional study designs** — Higher-order crossover and multi-dose designs
-- **DTW pairwise comparison** — Dynamic Time Warping for anomaly detection (requires optional `dtw` package)
 
 ---
 
@@ -241,4 +232,4 @@ BioEQ Development Team
 
 ---
 
-*Version BETA*
+*Version 1.0.0*

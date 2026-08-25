@@ -143,6 +143,25 @@ randomization_server <- function(id, ss_result = NULL) {
     }
 
     observeEvent(input$generate, {
+      if (is.null(input$design) || !nzchar(input$design)) {
+        showNotification("Select a study design before generating a schedule.",
+                         type = "error")
+        return()
+      }
+      if (is.null(input$n_total) || is.na(input$n_total) || input$n_total < 2) {
+        showNotification("Enter a total sample size (N).", type = "error")
+        return()
+      }
+      if (is.null(input$seed) || is.na(input$seed)) {
+        showNotification("Enter an RNG seed, or click 'Random seed'.", type = "error")
+        return()
+      }
+      if (isTRUE(input$use_blocks) &&
+          (is.null(input$block_size) || is.na(input$block_size) || input$block_size <= 0)) {
+        showNotification("Enter a group size, or turn off group randomization.",
+                         type = "error")
+        return()
+      }
       tryCatch({
         bs <- if (isTRUE(input$use_blocks) && !is.null(input$block_size) &&
                   !is.na(input$block_size) && input$block_size > 0) {
@@ -173,6 +192,23 @@ randomization_server <- function(id, ss_result = NULL) {
         showNotification(paste("Generation failed:", e$message), type = "error",
                          duration = 8)
       })
+    })
+
+    # ---- Reset (Generate tab) ----------------------------------------------
+    observeEvent(input$reset_generate, {
+      updateSelectInput(session, "design", selected = "")
+      updateNumericInput(session, "n_total", value = NA)
+      updateCheckboxInput(session, "use_blocks", value = FALSE)
+      updateNumericInput(session, "block_size", value = NA)
+      updateNumericInput(session, "seed", value = NA)
+      updateCheckboxInput(session, "use_strata", value = FALSE)
+      updateTextInput(session, "stratum1_name",   value = "")
+      updateTextInput(session, "stratum1_levels", value = "")
+      updateTextInput(session, "stratum2_name",   value = "")
+      updateTextInput(session, "stratum2_levels", value = "")
+      updateTextInput(session, "subject_prefix",  value = "")
+      rnd_result(NULL)
+      showNotification("Generate Schedule inputs reset.", type = "message", duration = 3)
     })
 
     .strip_unused <- function(df, r) {
@@ -251,6 +287,23 @@ randomization_server <- function(id, ss_result = NULL) {
     # =========================================================================
     # Audit / Report
     # =========================================================================
+
+    # Just the reproduction code (no surrounding prose) — shared by the plain
+    # -text audit's "Verification" section and the HTML report's.
+    .repro_code <- function(m) {
+      paste0(
+        "  source('R/randomization.R')\n",
+        "  res <- generate_randomization(\n",
+        sprintf("    design     = '%s',\n", m$design),
+        sprintf("    n_total    = %d,\n",   m$n_total),
+        sprintf("    block_size = %d,\n",   m$block_size),
+        sprintf("    seed       = %d%s)\n",  m$seed,
+                if (!is.null(m$strata) && length(m$strata) > 0)
+                  sprintf(",\n    strata = %s", deparse(m$strata)) else ""),
+        "  identical(res$meta$schedule_hash, '", m$schedule_hash, "')\n"
+      )
+    }
+
     .audit_text <- function() {
       r <- rnd_result()
       if (is.null(r)) return("No schedule generated yet.")
@@ -285,25 +338,11 @@ randomization_server <- function(id, ss_result = NULL) {
         "Verification\n",
         "------------\n",
         "Reproduce in R (>= 3.6.0):\n",
-        sprintf("  source('R/randomization.R')\n"),
-        sprintf("  res <- generate_randomization(\n"),
-        sprintf("    design     = '%s',\n", m$design),
-        sprintf("    n_total    = %d,\n",   m$n_total),
-        sprintf("    block_size = %d,\n",   m$block_size),
-        sprintf("    seed       = %d%s)\n",  m$seed,
-                if (!is.null(m$strata) && length(m$strata) > 0)
-                  sprintf(",\n    strata = %s", deparse(m$strata)) else ""),
-        "  identical(res$meta$schedule_hash, '", m$schedule_hash, "')\n"
+        .repro_code(m)
       )
     }
 
     output$audit_text <- renderText({ .audit_text() })
-
-    output$dl_audit <- downloadHandler(
-      filename = function() sprintf("randomization_audit_seed%s_%s.txt",
-                                    input$seed, format(Sys.Date(), "%Y%m%d")),
-      content  = function(file) writeLines(.audit_text(), file)
-    )
 
     output$dl_report <- downloadHandler(
       filename = function() sprintf("randomization_report_seed%s_%s.html",
@@ -315,7 +354,7 @@ randomization_server <- function(id, ss_result = NULL) {
         # Self-contained HTML — no rmarkdown dependency
         html <- c(
           "<!doctype html><html><head><meta charset='utf-8'>",
-          "<title>BioEQ Randomization Report</title>",
+          "<title>BioEQ Randomization Audit Record</title>",
           "<style>",
           "body{font-family:'Inter',Arial,sans-serif;max-width:1000px;margin:30px auto;padding:0 20px;color:#1f2937;}",
           "h1{color:#1e3a5f;border-bottom:2px solid #2c5282;padding-bottom:6px;}",
@@ -326,8 +365,14 @@ randomization_server <- function(id, ss_result = NULL) {
           ".meta td:first-child{width:220px;font-weight:600;background:#f8fafc;}",
           "pre{background:#f8fafc;border:1px solid #e2e8f0;padding:10px;font-size:12px;}",
           ".sig{margin-top:40px;border-top:1px dashed #94a3b8;padding-top:14px;font-size:13px;}",
+          "@media print{",
+          "  body{margin:12px;max-width:none;}",
+          "  h1,h2{break-after:avoid;page-break-after:avoid;}",
+          "  pre{break-inside:avoid;page-break-inside:avoid;}",
+          "  table tr{break-inside:avoid;page-break-inside:avoid;}",
+          "}",
           "</style></head><body>",
-          "<h1>BioEQ Randomization Report</h1>",
+          "<h1>BioEQ Randomization Audit Record</h1>",
           sprintf("<p><strong>Generated:</strong> %s</p>", m$generated_at),
 
           "<h2>Study Parameters</h2><table class='meta'>",
@@ -358,16 +403,13 @@ randomization_server <- function(id, ss_result = NULL) {
           .df_to_html(as.data.frame(table(Stratum = r$schedule$Stratum,
                                           Sequence = r$schedule$Sequence))),
 
-          "<h2>Randomization Schedule</h2>",
-          .df_to_html(r$schedule),
-
           "<h2>Verification</h2>",
-          "<p>Any independent reviewer can reproduce this schedule by running the",
-          " R code below. The resulting <code>schedule_hash</code> must match the",
-          " value above.</p>",
           "<pre>",
-          .escape_html(.audit_text()),
+          .escape_html(paste0("Reproduce in R (>= 3.6.0):\n", .repro_code(m))),
           "</pre>",
+
+          "<h2>Randomization Schedule (by Subject)</h2>",
+          .df_to_html(r$schedule),
 
           "<div class='sig'>",
           "<p><strong>Prepared by:</strong> ___________________________&nbsp;&nbsp;",
@@ -417,6 +459,23 @@ randomization_server <- function(id, ss_result = NULL) {
     }
 
     observeEvent(input$verify, {
+      if (is.null(input$v_design) || !nzchar(input$v_design)) {
+        showNotification("Select a study design before verifying.", type = "error")
+        return()
+      }
+      if (is.null(input$v_n_total) || is.na(input$v_n_total) || input$v_n_total < 2) {
+        showNotification("Enter a total sample size (N).", type = "error")
+        return()
+      }
+      if (is.null(input$v_seed) || is.na(input$v_seed)) {
+        showNotification("Enter the RNG seed used to generate the schedule.", type = "error")
+        return()
+      }
+      if (isTRUE(input$v_use_blocks) &&
+          (is.null(input$v_block_size) || is.na(input$v_block_size) || input$v_block_size <= 0)) {
+        showNotification("Enter the group size that was used.", type = "error")
+        return()
+      }
       tryCatch({
         prov <- .read_provided(input$v_file)
         bs <- if (isTRUE(input$v_use_blocks)) as.integer(input$v_block_size) else NULL
@@ -440,6 +499,26 @@ randomization_server <- function(id, ss_result = NULL) {
         showNotification(paste("Verification failed:", e$message),
                          type = "error", duration = 8)
       })
+    })
+
+    # ---- Reset (Verify tab) ------------------------------------------------
+    observeEvent(input$reset_verify, {
+      updateSelectInput(session, "v_design", selected = "")
+      updateNumericInput(session, "v_n_total", value = NA)
+      updateCheckboxInput(session, "v_use_blocks", value = FALSE)
+      updateNumericInput(session, "v_block_size", value = NA)
+      updateNumericInput(session, "v_seed", value = NA)
+      updateCheckboxInput(session, "v_use_strata", value = FALSE)
+      updateTextInput(session, "v_stratum1_name",   value = "")
+      updateTextInput(session, "v_stratum1_levels", value = "")
+      updateTextInput(session, "v_stratum2_name",   value = "")
+      updateTextInput(session, "v_stratum2_levels", value = "")
+      updateTextInput(session, "v_subject_prefix",  value = "")
+      if (exists("shinyjs_available") && shinyjs_available) {
+        shinyjs::reset("v_file")
+      }
+      verify_state(NULL)
+      showNotification("Verify Schedule inputs reset.", type = "message", duration = 3)
     })
 
     output$verify_status <- renderUI({

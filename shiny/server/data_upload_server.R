@@ -30,7 +30,7 @@ validate_bioeq_data_enhanced <- function(data) {
     subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
     treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
     period = c("period", "per", "phase", "visit"),
-    sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+    sequence = c("sequence", "seq", "period_sequence"),
     time = c("time", "timepoint", "hour", "hours", "hr", "sampling_time"),
     concentration = c("concentration", "conc", "result", "value", "plasma_conc", "serum_conc")
   )
@@ -483,8 +483,11 @@ observeEvent(input$data_file, {
               $('.progress-step:nth-child(2)').addClass('active');
             ")
           }
-          
-          showNotification("Data uploaded successfully!", type = "message", duration = 3)
+          # No separate "Data uploaded successfully!" toast — the
+          # withProgress() bar above already walks through each step to
+          # "Finalizing...", and the column-mapping UI appearing right after
+          # is itself the completion signal. A second toast on top of that
+          # was pure duplication.
       } else {
         values$uploaded_data <- NULL
         values$data_summary <- NULL
@@ -505,6 +508,19 @@ observeEvent(input$data_file, {
 
 
 
+# F11: Clear all downstream analysis state so results from a previous dataset
+# never linger. Used by both the explicit Reset button and a new file upload.
+clear_downstream_analysis <- function() {
+  values$nca_results <- NULL
+  values$anova_results <- NULL
+  values$be_results <- NULL
+  values$analysis_config <- NULL
+  values$carryover_results <- NULL
+  values$pk_parameter_info <- NULL
+  values$columns_mapped <- FALSE
+  values$analysis_complete <- FALSE
+}
+
 # Reset button observer
 observeEvent(input$reset_upload, {
   # Clear all data and reset state
@@ -512,14 +528,21 @@ observeEvent(input$reset_upload, {
   values$uploaded_data_original <- NULL
   values$validation_result <- NULL
   values$data_summary <- NULL
-  
+  clear_downstream_analysis()
+
   # Reset file input (this requires shinyjs)
   if (exists("shinyjs_available") && shinyjs_available) {
     shinyjs::reset("data_file")
   }
-  
+
   showNotification("Upload reset", type = "message", duration = 3)
 })
+
+# F11: When a new file is selected, discard any analysis results/config from the
+# previous dataset before it is processed, so the app can't show stale output.
+observeEvent(input$data_file, {
+  clear_downstream_analysis()
+}, ignoreInit = TRUE)
 
 # Observer to update treatment designation dropdowns when treatment column is mapped
 observe({
@@ -630,12 +653,6 @@ observe({
 # =============================================================================
 # REACTIVE OUTPUTS FOR UI DISPLAY
 # =============================================================================
-
-# Upload status indicator
-output$upload_status <- reactive({
-  !is.null(values$uploaded_data) && isTRUE(values$columns_mapped)
-})
-outputOptions(output, "upload_status", suspendWhenHidden = FALSE)
 
 # Step 4 visibility - only show after columns are mapped and confirmed
 output$step4_ready <- reactive({
@@ -872,52 +889,9 @@ output$data_summary <- renderText({
   }
 })
 
-# Template download handlers
-output$download_example_data <- downloadHandler(
-  filename = function() {
-    paste0("validation_data_", Sys.Date(), ".csv")
-  },
-  content = function(file) {
-    # First try to use the full example data we created
-    example_file_full <- "inst/templates/example_data_full.csv"
-    example_file_validation <- "../data/user_validation_data.csv"
-    
-    if (file.exists(example_file_full)) {
-      file.copy(example_file_full, file)
-    } else if (file.exists(example_file_validation)) {
-      file.copy(example_file_validation, file)
-    } else {
-      # Create comprehensive example data if files don't exist
-      example_data <- data.frame(
-        Subject = rep(1:4, each = 18),
-        Treatment = rep(rep(c("R", "T"), each = 9), 4),
-        Time = rep(c(0, 0.25, 0.5, 1, 2, 4, 8, 12, 24), 8),
-        Concentration = c(
-          # Subject 1 - Reference
-          0, 8.12, 15.43, 22.17, 18.95, 12.84, 7.23, 4.51, 1.02,
-          # Subject 1 - Test  
-          0, 7.89, 14.76, 21.34, 17.82, 11.97, 6.85, 4.12, 0.89,
-          # Subject 2 - Test (RT sequence)
-          0, 9.24, 16.78, 24.12, 20.45, 13.89, 8.12, 5.23, 1.34,
-          # Subject 2 - Reference
-          0, 8.67, 15.89, 23.45, 19.78, 13.21, 7.56, 4.89, 1.12,
-          # Subject 3 - Reference
-          0, 7.45, 14.23, 20.67, 17.34, 11.78, 6.89, 4.23, 0.95,
-          # Subject 3 - Test
-          0, 8.01, 15.12, 21.89, 18.45, 12.34, 7.12, 4.67, 1.08,
-          # Subject 4 - Test (RT sequence)
-          0, 8.78, 16.23, 23.67, 19.89, 13.45, 7.89, 5.01, 1.23,
-          # Subject 4 - Reference
-          0, 8.34, 15.67, 22.89, 19.23, 12.98, 7.45, 4.78, 1.09
-        ),
-        Sequence = rep(c("TR", "TR", "RT", "RT"), each = 18),
-        Period = rep(c(1, 2, 1, 2), each = 9, times = 2)
-      )
-      write_csv(example_data, file)
-    }
-  }
-)
-
+# Template download handlers - headers/structure only, no sample data (a
+# template is meant to be filled in, not confused for real study data; see
+# the Validation module for actual worked-example datasets).
 output$download_template <- downloadHandler(
   filename = function() {
     paste0("bioeq_template_", Sys.Date(), ".csv")
@@ -927,58 +901,12 @@ output$download_template <- downloadHandler(
     if (file.exists(template_file)) {
       file.copy(template_file, file)
     } else {
-      # Fallback template with proper structure
       template_data <- data.frame(
-        Subject = rep(1:2, each = 18),
-        Treatment = rep(rep(c("R", "T"), each = 9), 2),
-        Time = rep(c(0, 0.5, 1, 2, 4, 6, 8, 12, 24), 4),
-        Concentration = c(
-          # Subject 1 - Reference
-          0, 12.5, 18.2, 15.8, 10.1, 7.2, 4.9, 2.8, 0.3,
-          # Subject 1 - Test  
-          0, 11.8, 17.5, 16.2, 9.8, 6.9, 4.7, 2.6, 0.2,
-          # Subject 2 - Reference
-          0, 12.1, 17.8, 15.2, 9.9, 7.1, 4.8, 2.7, 0.3,
-          # Subject 2 - Test
-          0, 13.2, 19.1, 16.8, 11.2, 8.1, 5.3, 3.1, 0.4
-        ),
-        Sequence = rep(c("TR", "RT"), each = 18),
-        Period = rep(c(1, 2), each = 9, times = 2)
+        Subject = integer(0), Treatment = character(0), Time = numeric(0),
+        Concentration = numeric(0), Sequence = character(0), Period = integer(0)
       )
       write_csv(template_data, file)
     }
-  }
-)
-
-output$download_excel_template <- downloadHandler(
-  filename = function() {
-    paste0("bioeq_template_", Sys.Date(), ".xlsx")
-  },
-  content = function(file) {
-    template_file <- "inst/templates/bioequivalence_data_template.csv"
-    if (file.exists(template_file)) {
-      template_data <- read_csv(template_file, show_col_types = FALSE)
-    } else {
-      # Fallback template with proper structure
-      template_data <- data.frame(
-        Subject = rep(1:2, each = 18),
-        Treatment = rep(rep(c("R", "T"), each = 9), 2),
-        Time = rep(c(0, 0.5, 1, 2, 4, 6, 8, 12, 24), 4),
-        Concentration = c(
-          # Subject 1 - Reference
-          0, 12.5, 18.2, 15.8, 10.1, 7.2, 4.9, 2.8, 0.3,
-          # Subject 1 - Test  
-          0, 11.8, 17.5, 16.2, 9.8, 6.9, 4.7, 2.6, 0.2,
-          # Subject 2 - Reference
-          0, 12.1, 17.8, 15.2, 9.9, 7.1, 4.8, 2.7, 0.3,
-          # Subject 2 - Test
-          0, 13.2, 19.1, 16.8, 11.2, 8.1, 5.3, 3.1, 0.4
-        ),
-        Sequence = rep(c("TR", "RT"), each = 18),
-        Period = rep(c(1, 2), each = 9, times = 2)
-      )
-    }
-    writexl::write_xlsx(template_data, file)
   }
 )
 
@@ -992,18 +920,9 @@ output$download_pk_template <- downloadHandler(
     if (file.exists(pk_template_file)) {
       file.copy(pk_template_file, file)
     } else {
-      # Fallback PK parameters template
       pk_template_data <- data.frame(
-        Subject = rep(1:6, each = 2),
-        Period = rep(1:2, times = 6),
-        Treatment = rep(c("Reference", "Test"), times = 6),
-        AUC0t = c(245.6, 235.8, 251.4, 248.2, 239.7, 228.5, 
-                  256.3, 251.8, 242.1, 237.4, 248.9, 244.3),
-        AUC0inf = c(251.2, 241.5, 257.8, 254.1, 245.3, 234.2,
-                   262.7, 258.1, 247.9, 243.1, 254.6, 250.2),
-        Cmax = c(18.2, 17.5, 19.1, 17.8, 16.9, 16.1,
-                20.2, 18.7, 17.3, 16.8, 18.5, 17.9),
-        Tmax = rep(1.0, 12)
+        Subject = integer(0), Period = integer(0), Treatment = character(0),
+        AUC0t = numeric(0), AUC0inf = numeric(0), Cmax = numeric(0), Tmax = numeric(0)
       )
       write_csv(pk_template_data, file)
     }
@@ -1046,7 +965,7 @@ validate_pk_data_enhanced <- function(data) {
   
   # Additional optional columns
   optional_mappings <- list(
-    sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+    sequence = c("sequence", "seq", "period_sequence"),
     period = c("period", "prd", "per", "phase", "occasion", "visit"),
     dose = c("dose", "amt", "amount_dose", "dosage"),
     weight = c("weight", "wt", "bw", "bodyweight"),
@@ -1089,7 +1008,7 @@ validate_pk_data_enhanced <- function(data) {
     if ("Sequence" %in% names(processed_data)) mapped_columns[["Sequence"]] <- "Sequence"
     
     # Identify PK parameter columns (non-standard columns that aren't the core columns)
-    core_columns <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration")
+    core_columns <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration", "group")
     potential_pk_columns <- setdiff(names(processed_data), core_columns)
     for (col in potential_pk_columns) {
       mapped_pk_parameters[[col]] <- col
@@ -1254,20 +1173,6 @@ validate_pk_data_enhanced <- function(data) {
   ))
 }
 
-# Helper function to find columns by pattern (for PK parameter processing)
-find_column_by_pattern <- function(data, possible_names) {
-  data_names_lower <- tolower(names(data))
-  possible_names_lower <- tolower(possible_names)
-  
-  for (name in possible_names_lower) {
-    matches <- which(data_names_lower == name)
-    if (length(matches) > 0) {
-      return(names(data)[matches[1]])
-    }
-  }
-  return(NULL)
-}
-
 # Store unit specifications in reactive values for use in analysis
 observeEvent(input$concentration_units, {
   if (!is.null(input$concentration_units)) {
@@ -1324,7 +1229,7 @@ output$concentration_column_mapper <- renderUI({
         subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
         treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
         period = c("period", "per", "phase", "visit"),
-        sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+        sequence = c("sequence", "seq", "period_sequence"),
         time = c("time", "timepoint", "hour", "hours", "hr", "sampling_time"),
         concentration = c("concentration", "conc", "result", "value", "plasma_conc", "serum_conc")
       )
@@ -1700,7 +1605,9 @@ observeEvent(input$confirm_concentration_mapping, {
   
   # Remove columns that were NOT mapped AND columns mapped to "other/ignore"
   # Build list of columns to keep (already renamed to standard names)
-  columns_to_keep <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration")
+  # "group" is optional (facility/dosing-cohort grouping) — kept when mapped so
+  # it survives into the NCA/ANOVA pipeline instead of being silently dropped.
+  columns_to_keep <- c("Subject", "Treatment", "Period", "Sequence", "Time", "Concentration", "group")
   
   # Add PK parameter names (these are the RENAMED standard names)
   if (length(pk_parameter_info) > 0) {
@@ -1803,7 +1710,7 @@ output$pk_parameter_selector <- renderUI({
         subject = c("subject", "subj", "id", "subjid", "subject_id", "patientid", "patient", "vol", "volunteer"),
         treatment = c("treatment", "treat", "tmt", "trt", "formulation", "form", "drug", "product", "regimen"),
         period = c("period", "per", "phase", "visit"),
-        sequence = c("sequence", "seq", "period_sequence", "grp", "group"),
+        sequence = c("sequence", "seq", "period_sequence"),
         group = c("group", "grp", "cohort", "site", "batch", "study_group", "dose_group"),
         dose = c("dose", "dosage", "dose_amount"),
         weight = c("weight", "bw", "body_weight"),

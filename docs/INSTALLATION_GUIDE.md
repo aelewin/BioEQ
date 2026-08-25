@@ -206,12 +206,31 @@ and read the output for any ✗ marks. Re-install any failed packages individual
 install.packages("name_of_failed_package")
 ```
 
-### Word (`.docx`) report export doesn't work
-Word reports are optional. To enable them, run:
-```r
-install.packages(c("officer", "flextable"))
+### macOS only — "fatal error: 'fribidi.h' file not found" (or `webp/encode.h`, `harfbuzz`, `freetype`)
+This is **not** an R problem. A few packages used for Word (`.docx`) report export are built on top
+of C libraries that macOS doesn't include. Install them once using Homebrew: open the **Terminal**
+app and run:
 ```
-Then restart the app. PDF and HTML reports work without these.
+brew install fribidi harfbuzz freetype libpng jpeg-turbo libtiff webp
+```
+(If you don't have Homebrew, install it first from [brew.sh](https://brew.sh).)
+Then go back to RStudio and re-run `source("install_dependencies.R")`.
+
+> ⚠️ **If you installed R with Homebrew**, be aware the command above can also **upgrade R itself**,
+> because R depends on some of those libraries. After an R upgrade your packages appear to vanish
+> (R switches to a new library folder). If that happens, simply re-run
+> `source("install_dependencies.R")` to reinstall them into the new version.
+
+On **Windows** you will not hit this — R downloads pre-built packages. On **Debian/Ubuntu**, use:
+```
+sudo apt-get install libfribidi-dev libharfbuzz-dev libfreetype6-dev libpng-dev libjpeg-dev libtiff5-dev libwebp-dev
+```
+
+### Word (`.docx`) report export doesn't work
+`officer` and `flextable` handle Word export and are installed automatically by
+`install_dependencies.R`. If Word export still fails, they most likely failed to build — scroll the
+install output for a ✗ next to `officer` or `flextable`, and see the system-library fix directly
+above. PDF and HTML reports do not depend on these.
 
 ### Still stuck?
 Take a screenshot of the **last 30 lines of red text in the RStudio Console**, plus the output of:

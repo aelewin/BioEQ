@@ -13,12 +13,6 @@ source(file.path(.BIOEQ_R_DIR, "rsabe_analysis.R"), local = TRUE)
 # Helper function for null coalescing
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-# Data type for conditional display
-output$data_type <- reactive({
-  values$data_type %||% "concentration"
-})
-outputOptions(output, "data_type", suspendWhenHidden = FALSE)
-
 # Upload status for conditional display
 output$upload_status <- reactive({
   !is.null(values$uploaded_data)
@@ -43,11 +37,11 @@ output$is_parallel_design <- reactive({
     tryCatch({
       data <- values$uploaded_data
       # Use capitalized column names
-      n_treatments <- length(unique(data$Treatment))
       treatments_per_subject <- data %>%
         group_by(Subject) %>%
         summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
-      is_crossover <- all(treatments_per_subject$n_treatments == n_treatments)
+      # Crossover/replicate if ANY subject has >1 treatment (robust to missing periods)
+      is_crossover <- max(treatments_per_subject$n_treatments, na.rm = TRUE) >= 2
       return(!is_crossover)  # Return TRUE if NOT crossover (i.e., parallel)
     }, error = function(e) {
       return(FALSE)
@@ -73,10 +67,10 @@ output$is_non_replicate_design <- reactive({
   if (design == "auto" && !is.null(values$uploaded_data)) {
     tryCatch({
       data <- values$uploaded_data
-      n_treatments <- length(unique(data$Treatment))
       treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
-      is_crossover <- all(treatments_per_subject == n_treatments)
-      
+      # Crossover/replicate if ANY subject has >1 treatment (robust to missing periods)
+      is_crossover <- max(treatments_per_subject, na.rm = TRUE) >= 2
+
       if (!is_crossover) return(TRUE)  # parallel
       
       # Check periods to distinguish 2x2x2 from replicate
@@ -94,6 +88,34 @@ output$is_non_replicate_design <- reactive({
   return(TRUE)
 })
 outputOptions(output, "is_non_replicate_design", suspendWhenHidden = FALSE)
+
+# F5: Drive the PK-parameter selection from the data actually uploaded.
+# For pre-calculated PK data the only analysable parameters are those the user
+# mapped, so restrict both the choices and the selection to those (prevents
+# e.g. a Cmax-only dataset from having AUC0-t pre-checked). For concentration-
+# time data the NCA generates the full standard set, so the static defaults
+# (Cmax + AUC0-t) are left untouched.
+observeEvent(list(values$uploaded_data, values$data_type, values$pk_parameter_info), {
+  if (is.null(values$uploaded_data)) return()
+  if (!identical(values$data_type, "pk_parameters")) return()
+
+  primary_choices   <- c("Cmax" = "Cmax", "AUC0-t" = "AUC0t")
+  secondary_choices <- c("AUC0-inf" = "AUC0inf", "pAUC" = "pAUC", "Tmax" = "Tmax")
+
+  # Available parameters = mapped PK params, falling back to matching columns.
+  avail <- names(values$pk_parameter_info %||% list())
+  if (length(avail) == 0) {
+    avail <- intersect(c(primary_choices, secondary_choices), names(values$uploaded_data))
+  }
+
+  p_avail <- primary_choices[primary_choices %in% avail]
+  s_avail <- secondary_choices[secondary_choices %in% avail]
+
+  updateCheckboxGroupInput(session, "primary_pk_params",
+                           choices = p_avail, selected = unname(p_avail))
+  updateCheckboxGroupInput(session, "secondary_pk_params",
+                           choices = s_avail, selected = character(0))
+}, ignoreInit = TRUE)
 
 # Check if groups are detected in the data
 output$groups_detected <- reactive({
@@ -144,15 +166,19 @@ output$detected_design <- renderUI({
                 FUN = function(x) length(unique(x)))
     })
     
-    is_crossover <- isTRUE(all(treatments_per_subject$n_treatments == n_treatments))
-    
+    # A design is crossover/replicate if ANY subject receives more than one
+    # treatment. Using max(...) >= 2 (rather than requiring EVERY subject to have
+    # the full treatment set) is robust to subjects with missing periods, which
+    # otherwise cause a replicate study to be misclassified as parallel.
+    is_crossover <- isTRUE(max(treatments_per_subject$n_treatments, na.rm = TRUE) >= 2)
+
     # Detect replicate design using the BE analysis function
     replicate_result <- NULL
     if (isTRUE(is_crossover) && all(c("Subject", "Period", "Treatment") %in% names(data))) {
       replicate_result <- tryCatch({
         detect_replicate_design(data)
       }, error = function(e) {
-        cat("[WARN] detect_replicate_design failed:", e$message, "\n")
+        bioeq_log(sprintf("detect_replicate_design failed: %s", e$message), "WARNING")
         NULL
       })
     }
@@ -205,12 +231,14 @@ output$detected_design_type <- reactive({
     data <- values$uploaded_data
     
     # Use capitalized column names
-    n_treatments <- length(unique(data$Treatment))
     treatments_per_subject <- data %>%
       group_by(Subject) %>%
       summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
-    is_crossover <- isTRUE(all(treatments_per_subject$n_treatments == n_treatments))
-    
+    # Crossover/replicate if ANY subject receives >1 treatment (robust to
+    # subjects with missing periods). True parallel designs give every subject a
+    # single treatment. See detected_design above for the matching logic.
+    is_crossover <- isTRUE(max(treatments_per_subject$n_treatments, na.rm = TRUE) >= 2)
+
     if (is_crossover) {
       return("crossover")
     } else {
@@ -222,43 +250,50 @@ output$detected_design_type <- reactive({
 })
 outputOptions(output, "detected_design_type", suspendWhenHidden = FALSE)
 
+# RSABE's ANOVA model is auto-selected by replicate design (partial -> Fixed,
+# full -> Mixed), per FDA guidance — see R/rsabe_analysis.R::perform_rsabe().
+# Single-choice selectInput (same style as the other analysis types) so the
+# value is displayed but not user-editable. IMPORTANT: the value must be one
+# perform_simple_anova() recognizes ("fixed"/"nlme"/"satterthwaite"/
+# "kenward-roger") — this same analysis_config$anova_model feeds the
+# ANOVA Results tab's primary perform_simple_anova() call, not just
+# perform_rsabe() (which does its own separate, internal auto-selection and
+# ignores this value). Using an unrecognized value here silently breaks that
+# ANOVA table instead of erroring.
+#
+# NOTE: this selectInput deliberately uses its OWN id
+# ("rsabe_anova_model_display"), NOT "anova_model" — it used to reuse
+# "anova_model" (the same id as the ABE/ABEL/parallel model pickers below),
+# with suspendWhenHidden = FALSE forcing it to render on every uploaded_data
+# change regardless of which be_analysis_type tab was actually active. That
+# silently overwrote input$anova_model with RSABE's auto-choice (e.g. "nlme"
+# for a full-replicate dataset) even while the user was on the ABE tab with
+# "Fixed Effects (lm)" visibly selected, so the ABE analysis actually ran
+# mixed-effects until the user manually re-touched the ABE dropdown. Giving
+# this its own id removes the collision; the RSABE-specific value is read out
+# explicitly (input$rsabe_anova_model_display) when assembling analysis_config
+# below, only when be_analysis_type == "RSABE".
+output$rsabe_anova_model_ui <- renderUI({
+  rtype <- tryCatch({
+    req(values$uploaded_data)
+    rr <- detect_replicate_design(values$uploaded_data)
+    if (isTRUE(rr$is_partial_replicate)) "partial" else "full"
+  }, error = function(e) "partial")
+
+  choice <- if (rtype == "full") {
+    list("Mixed Effects - nlme (REML)" = "nlme")
+  } else {
+    list("Fixed Effects (PROC GLM)" = "fixed")
+  }
+  selectInput("rsabe_anova_model_display", label = NULL, choices = choice, selected = choice[[1]])
+})
+outputOptions(output, "rsabe_anova_model_ui", suspendWhenHidden = FALSE)
+
 # Dynamic alpha display text based on BE analysis type
 output$alpha_display_text <- renderText({
   alpha <- input$alpha_level %||% 0.05
   ci <- (1 - 2 * alpha) * 100
   sprintf("%.0f%% CI (\u03b1 = %.2f one-sided for TOST)", ci, alpha)
-})
-
-# Available PK parameters UI for pk_parameters data type
-output$available_pk_parameters_ui <- renderUI({
-  req(values$uploaded_data, values$data_type == "pk_parameters")
-  
-  data <- values$uploaded_data
-  # Get numeric columns that could be PK parameters - use capitalized column names
-  numeric_cols <- sapply(data, is.numeric)
-  pk_cols <- names(data)[numeric_cols & !names(data) %in% c("Subject", "Sequence", "Period", "dose", "weight", "age")]
-  
-  if (length(pk_cols) > 0) {
-    div(
-      p(strong("Detected PK parameters in your dataset:"), style = "margin-bottom: 10px;"),
-      div(style = "background-color: #f8f9fa; padding: 10px; border-radius: 5px;",
-        paste(pk_cols, collapse = ", ")
-      ),
-      br(),
-      # Update the choices for BE analysis
-      updateCheckboxGroupInput(
-        session, "pk_parameters_for_be",
-        choices = setNames(pk_cols, pk_cols),
-        selected = pk_cols[pk_cols %in% c("AUC", "Cmax", "AUCinf", "AUCt", "CMAX")]
-      )
-    )
-  } else {
-    div(
-      p("No numeric columns detected that could be PK parameters.", 
-        style = "color: #dc3545; font-weight: bold;"),
-      p("Please ensure your data contains numeric PK parameter columns.")
-    )
-  }
 })
 
 # Help modal handlers
@@ -338,7 +373,7 @@ output$settings_summary <- renderUI({
   
   if (data_type == "concentration") {
     auc_method <- if (!is.null(input$auc_method)) input$auc_method else "mixed"
-    lambda_method <- if (!is.null(input$lambda_z_method)) input$lambda_z_method else "aic"
+    lambda_method <- if (!is.null(input$lambda_z_method)) input$lambda_z_method else "ttt"
     
     # Set standard PK parameters (calculated automatically)
     # Use log-transformed parameters for BE analysis as per regulatory requirements
@@ -502,24 +537,15 @@ output$debug_info <- renderUI({
   )
 })
 
-# Add input validation for the AUC method
-validate_auc_method <- function(method) {
-  valid_methods <- c("linear", "log", "mixed", "linear_log")
-  if (!method %in% valid_methods) {
-    stop(paste("Invalid AUC calculation method. Must be one of:", 
-               paste(valid_methods, collapse = ", ")))
-  }
-  return(TRUE)
-}
-
 # Analysis execution
 observeEvent(input$run_analysis, {
   req(values$uploaded_data)
-  
+  .bioeq_t0 <- proc.time()[["elapsed"]]
+
   # Validate that at least one PK parameter is selected for ANOVA
   selected_primary <- input$primary_pk_params %||% c()
   selected_secondary <- input$secondary_pk_params %||% c()
-  
+
   if (length(selected_primary) == 0 && length(selected_secondary) == 0) {
     showNotification(
       "Please select at least one PK parameter for ANOVA analysis.",
@@ -548,7 +574,7 @@ observeEvent(input$run_analysis, {
     study_design = input$study_design %||% "auto",
     be_analysis_type = input$be_analysis_type %||% "ABE",  # NEW: BE analysis type
     auc_method = input$auc_method %||% "mixed",
-    lambda_z_method = input$lambda_z_method %||% "aic",
+    lambda_z_method = input$lambda_z_method %||% "ttt",
     lambda_z_points = input$lambda_z_points %||% 3,
     confidence_level = 90,  # Standard 90% CI for BE (alpha=0.05 two one-sided)
     alpha_level = {
@@ -576,11 +602,41 @@ observeEvent(input$run_analysis, {
     abel_eligible_params = input$abel_eligible_params %||% c("Cmax"),
     pk_parameters = all_pk_params,
     # ANOVA Configuration
-    anova_model = input$anova_model %||% "fixed",
+    # The "Analysis Model" picker is one of four different selectInputs
+    # depending on design/BE type (parallel-locked / ABE / ABEL / RSABE-
+    # auto), each on its OWN input id - never read input$anova_model here
+    # without checking which picker is actually the one on screen. This used
+    # to be a single shared "anova_model" id reused by all four, which meant
+    # whichever one last fired a change event (including ones the user never
+    # saw, e.g. RSABE's auto-selected value re-rendering on every data
+    # change) silently won, regardless of what was visibly selected. See the
+    # comment on output$rsabe_anova_model_ui above and on each selectInput in
+    # analysis_setup_ui.R's "Step 3: ANOVA Configuration" block.
+    anova_model = {
+      be_type <- input$be_analysis_type %||% "ABE"
+      is_parallel <- tryCatch({
+        req(values$uploaded_data)
+        data <- values$uploaded_data
+        treatments_per_subject <- data %>%
+          group_by(Subject) %>%
+          summarise(n_treatments = length(unique(Treatment)), .groups = "drop")
+        !isTRUE(max(treatments_per_subject$n_treatments, na.rm = TRUE) >= 2)
+      }, error = function(e) FALSE)
+
+      if (is_parallel) {
+        input$anova_model_parallel %||% "fixed"
+      } else if (be_type == "RSABE") {
+        input$rsabe_anova_model_display %||% "fixed"
+      } else if (be_type == "ABEL") {
+        input$anova_model_abel %||% "fixed"
+      } else {
+        input$anova_model %||% "fixed"
+      }
+    },
     random_effects = input$random_effects %||% "(1|subject)",
-    # Group Effects Configuration
-    include_group_fixed = input$include_group_fixed %||% FALSE,
-    include_group_random = input$include_group_random %||% FALSE,
+    # Group Effects Configuration - Group is always a fixed effect ("Model II",
+    # see R/simple_anova.R); there is no "random group" option.
+    include_group = input$include_group %||% FALSE,
     include_group_treatment_interaction = input$include_group_treatment_interaction %||% FALSE,
     # Parallel Design Configuration
     welch_correction = as.logical(input$welch_correction_be %||% TRUE),
@@ -592,7 +648,7 @@ observeEvent(input$run_analysis, {
       
       # Safety check - ensure we always have at least some parameters
       if (length(combined_params) == 0) {
-        cat("[WARNING] No PK parameters selected - using defaults\n")
+        bioeq_log("No PK parameters selected - using defaults", "WARNING")
         combined_params <- c("Cmax", "AUC0t", "AUC0inf")
       }
       
@@ -604,7 +660,7 @@ observeEvent(input$run_analysis, {
       manual_pAUC <- isTRUE(input$calculate_pAUC)
       auto_pAUC <- "pAUC" %in% c(input$primary_pk_params, input$secondary_pk_params)
       result <- manual_pAUC || auto_pAUC
-      cat(sprintf("🔧 pAUC Configuration: Manual=%s, Auto=%s, Final=%s\n", manual_pAUC, auto_pAUC, result))
+      bioeq_log(sprintf("pAUC Configuration: Manual=%s, Auto=%s, Final=%s", manual_pAUC, auto_pAUC, result), "DEBUG")
       result
     },
     pAUC_start = input$pAUC_start %||% 0,
@@ -625,28 +681,35 @@ observeEvent(input$run_analysis, {
   
   # Store configuration for results display
   values$analysis_config <- analysis_config
-  
+
+  # Console phase lines mirror this progress bar 1:1 (see bioeq_phase(),
+  # R/analysis_summary.R) so the console and the UI never diverge. Always 5:
+  # Validation / NCA / Carryover / ANOVA / BE assessment - Carryover always
+  # gets a line, even when not enabled (detail says so), rather than
+  # changing the total depending on what ran.
+  .n_phases <- 5L
+  .phase <- 0L
+
   # Show progress
   shinyjs::show("analysis_progress")
-  
+
   tryCatch({
     withProgress(message = 'Running bioequivalence analysis...', value = 0, {
-    
+
     incProgress(0.1, detail = "Validating data and configuration...")
-    Sys.sleep(0.5)
-    
+
     incProgress(0.2, detail = "Detecting study design...")
     if (analysis_config$study_design == "auto") {
       # Auto-detect design logic here
       data <- values$uploaded_data
-      
+
       # Use capitalized column names (Subject, Treatment) as per standardization
       n_treatments <- length(unique(data$Treatment))
-      
+
       # Count treatments per subject without dplyr
       treatments_per_subject <- tapply(data$Treatment, data$Subject, function(x) length(unique(x)))
       is_crossover <- all(treatments_per_subject == n_treatments)
-      
+
       detected_design <- if (!is_crossover) {
         "parallel"
       } else {
@@ -665,13 +728,23 @@ observeEvent(input$run_analysis, {
         }
         if (n_p >= 4) "2x2x4" else if (n_p == 3) "2x2x3" else "2x2x2"
       }
-      
+
       analysis_config$detected_design <- detected_design
-      cat(sprintf("[INFO] Auto-detected design: %s (%d treatments, crossover=%s)\n",
-                  detected_design, n_treatments, is_crossover))
+      bioeq_log(sprintf("Auto-detected design: %s (%d treatments, crossover=%s)",
+                        detected_design, n_treatments, is_crossover), "DEBUG")
     }
-    Sys.sleep(0.5)
-    
+
+    # Header prints first (design, subjects, sequences, NCA/method config),
+    # THEN the phase lines start as one contiguous block below it - Validation
+    # is the first phase line, not printed earlier, so the reader sees the
+    # full run configuration before any phase ticks by, and the [1/5]..[5/5]
+    # list is never split across the header.
+    header_design_info <- tryCatch(detect_replicate_design(values$uploaded_data), error = function(e) NULL)
+    print_analysis_header(analysis_config, values$uploaded_data, header_design_info)
+
+    .phase <- .phase + 1L
+    bioeq_phase(.phase, .n_phases, "Validation", "ok")
+
     incProgress(0.3, detail = paste("Running NCA analysis using", analysis_config$auc_method, "method..."))
     # Here you would call the actual NCA functions from your R package
     # nca_results <- calculate_pk_parameters_batch(values$uploaded_data, analysis_config)
@@ -710,14 +783,14 @@ observeEvent(input$run_analysis, {
           
           # Carryover notification removed; summary is now only in Results view
         } # No pop-up for carryover detection
-        
-        Sys.sleep(0.5)
+
+        .phase <- .phase + 1L
+        bioeq_phase(.phase, .n_phases, "Carryover",
+                    sprintf("%d subject(s) flagged", nrow(carryover_results$flagged_subjects)))
       } else {
         # Data does not contain concentration-time data required for carryover detection
-        cat("ℹ️ Skipping carryover detection: Pre-calculated PK parameter data detected\n")
-        cat("ℹ️ Carryover detection requires Time and Concentration columns\n")
-        cat("ℹ️ Available columns:", paste(names(analysis_data), collapse = ", "), "\n")
-        
+        bioeq_log("Skipping carryover detection: pre-calculated PK parameter data detected (requires Time and Concentration columns)", "DEBUG")
+
         # Create a minimal carryover results object to indicate it was skipped
         values$carryover_results <- list(
           data = analysis_data,
@@ -731,9 +804,14 @@ observeEvent(input$run_analysis, {
           n_cleaned = nrow(analysis_data),
           n_excluded_subjects = 0
         )
+        .phase <- .phase + 1L
+        bioeq_phase(.phase, .n_phases, "Carryover", "skipped (pre-calculated PK data)")
       }
+    } else {
+      .phase <- .phase + 1L
+      bioeq_phase(.phase, .n_phases, "Carryover", "skipped (not enabled)")
     }
-    
+
     # Get the selected AUC method
     auc_method <- input$auc_method %||% "mixed"
     
@@ -749,13 +827,15 @@ observeEvent(input$run_analysis, {
     
     if (has_time && has_concentration && !has_pk_params) {
       # This is concentration-time data - perform NCA analysis
-      cat("📊 Detected concentration-time data - performing NCA analysis...\n")
-      
+      bioeq_log("Detected concentration-time data - performing NCA analysis", "DEBUG")
+
       # ── Handle missing data before NCA ──
       middle_method <- analysis_config$missing_data_middle %||% "complete"
       terminal_method <- analysis_config$missing_data_terminal %||% "complete"
-      cat(sprintf("🔄 Applying missing data handling: middle=%s, terminal=%s\n", middle_method, terminal_method))
-      
+
+      # handle_missing_data() (R/missing_data_handling.R) logs its own
+      # WARNING-level summary when it actually imputes/excludes anything -
+      # not duplicated here.
       missing_result <- handle_missing_data(
         data = analysis_data,
         middle_method = middle_method,
@@ -768,17 +848,15 @@ observeEvent(input$run_analysis, {
       analysis_data <- missing_result$data
       values$missing_data_log <- missing_result$log
       
-      if (nrow(missing_result$log) > 0) {
-        n_imputed <- sum(!missing_result$log$Method %in% c("removed", "unable"))
-        cat(sprintf("📋 Missing data: %d actions taken (%d imputed)\n", 
-                    nrow(missing_result$log), n_imputed))
-      } else {
-        cat("✅ No missing data detected\n")
-      }
-      
+      # "group" (dosing/facility cohort) is optional design metadata — carry it
+      # through the NCA step like Subject/Treatment/Period/Sequence when present,
+      # so it remains available for the group-effect ANOVA option downstream.
+      nca_id_cols <- c("Subject", "Treatment", "Period", "Sequence")
+      if ("group" %in% names(analysis_data)) nca_id_cols <- c(nca_id_cols, "group")
+
       nca_results <- perform_nca_analysis(
         data = analysis_data,  # Use processed data with missing values handled
-        id_cols = c("Subject", "Treatment", "Period", "Sequence"),
+        id_cols = nca_id_cols,
         time_col = "Time",
         conc_col = "Concentration",
         lambda_z_method = analysis_config$lambda_z_method,
@@ -788,18 +866,25 @@ observeEvent(input$run_analysis, {
         pAUC_start = analysis_config$pAUC_start,
         pAUC_end = analysis_config$pAUC_end
       )
-      
+
       # Add missing design variables for ANOVA analysis
       # The NCA analysis might not preserve all design variables, so we add them back
-      if (!("Sequence" %in% names(nca_results)) || !("Period" %in% names(nca_results))) {
-        
+      if (!("Sequence" %in% names(nca_results)) || !("Period" %in% names(nca_results)) ||
+          ("group" %in% names(analysis_data) && !("group" %in% names(nca_results)))) {
+
         # Create unique identifier for merging - use CAPITALIZED column names
         analysis_data$merge_id <- paste(analysis_data$Subject, analysis_data$Treatment, sep = "_")
         nca_results$merge_id <- paste(nca_results$Subject, nca_results$Treatment, sep = "_")
-        
-        # Get design variables from original data
-        design_vars <- analysis_data[!duplicated(analysis_data$merge_id), c("merge_id", "Subject", "Sequence", "Period", "Treatment")]
-        
+
+        # Get design variables from original data. Sequence/Period only exist for
+        # crossover designs - a parallel-design dataset (Subject, Treatment, Time,
+        # Concentration, no Sequence/Period) never has them, so only pull columns
+        # that are actually present in analysis_data to avoid an
+        # "undefined columns selected" error.
+        design_cols <- intersect(c("merge_id", "Subject", "Sequence", "Period", "Treatment"), names(analysis_data))
+        if ("group" %in% names(analysis_data)) design_cols <- c(design_cols, "group")
+        design_vars <- analysis_data[!duplicated(analysis_data$merge_id), design_cols]
+
         # Merge design variables with NCA results
         nca_results <- merge(nca_results, design_vars, by = "merge_id", all.x = TRUE, suffixes = c("", ".design"))
         nca_results$merge_id <- NULL  # Remove temporary merge column
@@ -807,9 +892,11 @@ observeEvent(input$run_analysis, {
       
     } else if (has_pk_params && !has_time && !has_concentration) {
       # This is pre-calculated PK parameter data - format it as NCA results
-      cat("📊 Detected pre-calculated PK parameter data - skipping NCA analysis...\n")
-      cat("📊 Available PK parameters:", paste(names(analysis_data)[grepl(paste(pk_parameter_patterns, collapse = "|"), names(analysis_data), ignore.case = TRUE)], collapse = ", "), "\n")
-      
+      bioeq_log(sprintf("Detected pre-calculated PK parameter data - skipping NCA analysis (available: %s)",
+                        paste(names(analysis_data)[grepl(paste(pk_parameter_patterns, collapse = "|"),
+                                                          names(analysis_data), ignore.case = TRUE)], collapse = ", ")), "DEBUG")
+
+
       # Use the uploaded data directly as "NCA results"
       nca_results <- analysis_data
       
@@ -835,14 +922,14 @@ observeEvent(input$run_analysis, {
             param_values <- nca_results[[match_col]]
             if (is.numeric(param_values) && all(param_values > 0, na.rm = TRUE)) {
               nca_results[[ln_name]] <- log(param_values)
-              cat(sprintf("📊 Added log-transformed parameter: %s (from column '%s')\n", ln_name, match_col))
+              bioeq_log(sprintf("Added log-transformed parameter: %s (from column '%s')", ln_name, match_col), "DEBUG")
             } else if (!is.numeric(param_values)) {
-              cat(sprintf("⚠️ Skipping log transformation for %s: non-numeric data in '%s' (type: %s)\n",
-                          ln_name, match_col, class(param_values)[1]))
+              bioeq_log(sprintf("Skipping log transformation for %s: non-numeric data in '%s' (type: %s)",
+                                ln_name, match_col, class(param_values)[1]), "WARNING")
             } else {
               n_nonpos <- sum(param_values <= 0, na.rm = TRUE)
-              cat(sprintf("⚠️ Skipping log transformation for %s: %d non-positive values in '%s'\n",
-                          ln_name, n_nonpos, match_col))
+              bioeq_log(sprintf("Skipping log transformation for %s: %d non-positive values in '%s'",
+                                ln_name, n_nonpos, match_col), "WARNING")
             }
           }
         }
@@ -850,9 +937,9 @@ observeEvent(input$run_analysis, {
       
     } else {
       # Unclear data type - attempt NCA but handle gracefully
-      cat("⚠️ Uncertain data type - attempting NCA analysis...\n")
-      cat("⚠️ Has time:", has_time, "Has concentration:", has_concentration, "Has PK params:", has_pk_params, "\n")
-      
+      bioeq_log(sprintf("Uncertain data type - attempting NCA analysis (has_time=%s, has_concentration=%s, has_pk_params=%s)",
+                        has_time, has_concentration, has_pk_params), "WARNING")
+
       nca_results <- tryCatch({
         perform_nca_analysis(
           data = analysis_data,
@@ -867,14 +954,15 @@ observeEvent(input$run_analysis, {
           pAUC_end = analysis_config$pAUC_end
         )
       }, error = function(e) {
-        cat("❌ NCA analysis failed:", e$message, "\n")
-        cat("📊 Treating as pre-calculated PK data...\n")
+        bioeq_log(sprintf("NCA analysis failed: %s - treating as pre-calculated PK data", e$message), "ERROR")
         return(analysis_data)  # Use original data if NCA fails
       })
     }
-    
-    Sys.sleep(1.5)
-    
+
+    .phase <- .phase + 1L
+    bioeq_phase(.phase, .n_phases, "NCA",
+                sprintf("%d profiles", if (!is.null(nca_results)) nrow(nca_results) else 0L))
+
     incProgress(0.3, detail = "Performing ANOVA and bioequivalence assessment...")
     
     # Perform simple ANOVA analysis using lm() on selected parameters
@@ -900,7 +988,7 @@ observeEvent(input$run_analysis, {
       
       # Check if selected_params is empty
       if (length(selected_params) == 0) {
-        cat("[ERROR] No parameters selected for analysis!\n")
+        bioeq_log("No parameters selected for analysis", "ERROR")
         anova_results <- list(
           error = "No PK parameters were selected for ANOVA analysis. Please select at least one parameter in Step 2."
         )
@@ -938,13 +1026,12 @@ observeEvent(input$run_analysis, {
           if (non_missing_count >= 4) {  # Need at least 4 observations for ANOVA
             numeric_params <- c(numeric_params, param)
           } else {
-            cat(sprintf("⚠️ Skipping %s: insufficient non-missing values (%d, need at least 4)\n", param, non_missing_count))
+            bioeq_log(sprintf("Skipping %s: insufficient non-missing values (%d, need at least 4)", param, non_missing_count), "WARNING")
           }
         } else {
-          cat(sprintf("⚠️ Skipping %s: non-numeric data (type: %s)\n", param, class(param_values)[1]))
-          if (!is.null(param_values) && length(param_values) > 0) {
-            cat(sprintf("  First few values: %s\n", paste(head(param_values, 3), collapse = ", ")))
-          }
+          bioeq_log(sprintf("Skipping %s: non-numeric data (type: %s, first values: %s)",
+                            param, class(param_values)[1],
+                            if (!is.null(param_values) && length(param_values) > 0) paste(head(param_values, 3), collapse = ", ") else "none"), "WARNING")
         }
       }
       
@@ -973,33 +1060,29 @@ observeEvent(input$run_analysis, {
       if (length(numeric_params) > 0) {
 
         if (is_replicate_design && (is_abel_analysis || is_rsabe_analysis)) {
-          cat(sprintf("[INFO] 📊 Running ANOVA for replicate %s design (%d parameters): %s\n",
-                      analysis_config$be_analysis_type,
-                      length(numeric_params), paste(numeric_params, collapse = ", ")))
-          cat(sprintf("[INFO]    Non-eligible params (e.g. AUC0t under EMA) need ANOVA for fixed ABE CIs.\n"))
+          bioeq_log(sprintf(
+            "Running ANOVA for replicate %s design (%d parameters): %s - non-eligible params (e.g. AUC0t under EMA) need ANOVA for fixed ABE CIs",
+            analysis_config$be_analysis_type, length(numeric_params), paste(numeric_params, collapse = ", ")), "DEBUG")
         } else {
-          cat(sprintf("[INFO] 📊 Running ANOVA for %d parameters: %s\n", 
-                      length(numeric_params), paste(numeric_params, collapse = ", ")))
+          bioeq_log(sprintf("Running ANOVA for %d parameters: %s",
+                            length(numeric_params), paste(numeric_params, collapse = ", ")), "DEBUG")
         }
-        cat(sprintf("[INFO]    Model: %s, Design: %s\n", analysis_config$anova_model, detected_study_design))
-        
+        bioeq_log(sprintf("Model: %s, Design: %s", analysis_config$anova_model, detected_study_design), "DEBUG")
+
         tryCatch({
           
           # Use the ANOVA function with the selected model type and random effects
           # alpha for ANOVA CI: for TOST alpha=0.05 (one-sided) -> CI alpha=0.10 (two-sided 90% CI)
           anova_alpha <- (analysis_config$alpha_level %||% 0.05) * 2
           simple_anova_results <- perform_simple_anova(
-            nca_results, 
+            nca_results,
             numeric_params,  # Use validated numeric parameters
             analysis_config$anova_model,
             analysis_config$random_effects,
-            analysis_config$include_group_fixed,
-            analysis_config$include_group_random,
+            analysis_config$include_group,
             analysis_config$include_group_treatment_interaction,
             alpha = anova_alpha
           )
-          
-          cat(sprintf("[INFO] ✅ ANOVA completed for %d parameters\n", length(simple_anova_results)))
           
           # Wrap results in expected structure for the UI
           anova_results <- list(
@@ -1007,9 +1090,9 @@ observeEvent(input$run_analysis, {
             design = if (is_replicate_design && (is_abel_analysis || is_rsabe_analysis)) detected_study_design else "simple_anova",
             parameters = available_selected_params
           )
-          
+
         }, error = function(e) {
-          cat(sprintf("[ERROR] ❌ ANOVA failed: %s\n", e$message))
+          bioeq_log(sprintf("ANOVA failed: %s", e$message), "ERROR")
           anova_results <<- list(
             anova_results = list(),  # Empty list instead of error
             error = paste("ANOVA failed:", e$message)
@@ -1043,12 +1126,14 @@ observeEvent(input$run_analysis, {
     if (!is.null(anova_results)) {
       values$anova_results <- anova_results
     }
-    
-    Sys.sleep(1.5)
-    
+
+    .phase <- .phase + 1L
+    bioeq_phase(.phase, .n_phases, "ANOVA",
+                sprintf("%d parameters",
+                        length(if (exists("numeric_params")) numeric_params else character())))
+
     incProgress(0.1, detail = "Generating comprehensive results...")
-    Sys.sleep(0.5)
-    
+
     # For demonstration, create enhanced mock results that reflect the configuration
     values$analysis_complete <- TRUE
     
@@ -1089,9 +1174,9 @@ observeEvent(input$run_analysis, {
           
           data.frame(
             Parameter = param,
-            Test_Mean = round(mean(test_vals), 4),
-            Reference_Mean = round(mean(ref_vals), 4),
-            CV_percent = round(cv_pct, 1),
+            Test_Mean = round(mean(test_vals), 2),
+            Reference_Mean = round(mean(ref_vals), 2),
+            CV_percent = round(cv_pct, 2),
             Method = method_label,
             stringsAsFactors = FALSE
           )
@@ -1103,7 +1188,7 @@ observeEvent(input$run_analysis, {
         NULL
       }
     }, error = function(e) {
-      cat(sprintf("[WARNING] Could not compute NCA summary statistics: %s\n", e$message))
+      bioeq_log(sprintf("Could not compute NCA summary statistics: %s", e$message), "WARNING")
       NULL
     })
     
@@ -1126,8 +1211,6 @@ observeEvent(input$run_analysis, {
     # PERFORM REAL BIOEQUIVALENCE ANALYSIS
     # =======================================================================
     
-    cat("🔬 Starting Bioequivalence Analysis...\n")
-    
     tryCatch({
       # Determine study design
       study_design <- analysis_config$detected_design %||% analysis_config$study_design
@@ -1149,15 +1232,13 @@ observeEvent(input$run_analysis, {
       if (values$data_type == "pk_parameters") {
         # PK parameter data: use uploaded data directly (already has Subject, Treatment, Period, Sequence, PK params)
         be_data <- values$uploaded_data
-        cat("📋 Using PK parameter data directly for BE analysis\n")
       } else if (is.data.frame(nca_results) && nrow(nca_results) > 0) {
         # Concentration-time data: use NCA results table directly as the BE input
         be_data <- nca_results
-        cat(sprintf("📋 Using NCA results directly for BE analysis (%d rows)\n", nrow(be_data)))
       } else {
         # Fallback: no NCA results — use uploaded data
         be_data <- values$uploaded_data
-        cat("📋 No NCA results — falling back to uploaded data for BE analysis\n")
+        bioeq_log("No NCA results - falling back to uploaded data for BE analysis", "WARNING")
       }
       
       # Ensure proper column names for BE analysis functions
@@ -1175,26 +1256,17 @@ observeEvent(input$run_analysis, {
         names(be_data)[names(be_data) == "sequence"] <- "Sequence"
       }
       
-      cat(sprintf("📋 BE Data structure: %d rows, %d cols\n", nrow(be_data), ncol(be_data)))
-      cat(sprintf("📋 Columns: %s\n", paste(names(be_data), collapse = ", ")))
-      cat(sprintf("📋 Unique subjects: %d\n", length(unique(be_data$Subject))))
-      
+      bioeq_log(sprintf("BE data: %d rows, %d cols, %d unique subjects (columns: %s)",
+                        nrow(be_data), ncol(be_data), length(unique(be_data$Subject)),
+                        paste(names(be_data), collapse = ", ")), "DEBUG")
+
       # NOTE: Previously we merged NCA results onto raw concentration-time rows here, which
       # caused a Cartesian explosion for replicate designs (joining on (Subject, Treatment)
       # multiplied every conc-time row by the count of NCA rows per pair). be_data is now
       # set above to either uploaded_data (PK data) or nca_results (concentration data),
       # so no further merging is required.
-      
-      # Validate parameter data before BE analysis
-      cat("🔍 Validating parameter data for BE analysis...\n")
-      cat(sprintf("📊 BE data final structure: %d rows, %d columns\n", nrow(be_data), ncol(be_data)))
-      cat(sprintf("📊 Final columns: %s\n", paste(names(be_data), collapse = ", ")))
-      
-      if (nrow(be_data) > 0) {
-        cat("🔍 Sample BE data rows:\n")
-        print(head(be_data[, names(be_data)[1:min(10, ncol(be_data))]], 3))
-      }
-      
+
+
       valid_params <- c()
       
       # Reconstruct the same parameter selection logic used for ANOVA
@@ -1223,59 +1295,33 @@ observeEvent(input$run_analysis, {
       expanded_params <- unique(expanded_params)
       selected_be_params <- intersect(expanded_params, names(be_data))
       
-      cat(sprintf("🔬 BE Analysis - User selected parameters: %s\n", paste(selected_params, collapse = ", ")))
-      cat(sprintf("🔬 BE Analysis - Expanded parameters: %s\n", paste(expanded_params, collapse = ", ")))
-      cat(sprintf("🔬 BE Analysis - Available expanded parameters: %s\n", paste(selected_be_params, collapse = ", ")))
-      
+      bioeq_log(sprintf(
+        "BE Analysis parameters - selected: %s | expanded: %s | available: %s",
+        paste(selected_params, collapse = ", "), paste(expanded_params, collapse = ", "),
+        paste(selected_be_params, collapse = ", ")), "DEBUG")
+
       for (param in selected_be_params) {
         if (param %in% names(be_data)) {
           param_values <- be_data[[param]]
-          
-          # Enhanced debugging
-          cat(sprintf("🔍 Parameter %s detailed analysis:\n", param))
-          cat(sprintf("  - Class: %s\n", class(param_values)))
-          cat(sprintf("  - Mode: %s\n", mode(param_values)))
-          cat(sprintf("  - Length: %d\n", length(param_values)))
-          
-          # Sample values
-          sample_vals <- head(param_values[!is.na(param_values)], 5)
-          cat(sprintf("  - Sample values: %s\n", paste(sample_vals, collapse = ", ")))
-          
-          non_na_count <- sum(!is.na(param_values))
-          numeric_count <- sum(is.numeric(param_values), na.rm = TRUE)
-          positive_count <- 0;
-          
-          cat(sprintf("📊 %s: %d total, %d non-NA, class=%s\n", 
-                      param, length(param_values), non_na_count, class(param_values)[1]))
-          
+
           # Convert to numeric if needed
           if (!is.numeric(param_values)) {
-            cat(sprintf("🔧 Converting %s to numeric (was %s)...\n", param, class(param_values)[1]))
             be_data[[param]] <- as.numeric(as.character(param_values))
             param_values <- be_data[[param]]
-            
-            # Report conversion results
-            new_non_na <- sum(!is.na(param_values))
-            cat(sprintf("  - After conversion: %d non-NA values\n", new_non_na))
           }
-          
-          # Check positive values
+
+          # Check if we have valid numeric data
           if (is.numeric(param_values)) {
-            positive_count <- sum(param_values > 0, na.rm = TRUE)
-            cat(sprintf("  - Positive values: %d\n", positive_count))
-            
-            # Check if we have valid numeric data
             if (sum(!is.na(param_values) & param_values > 0) >= 4) {
               valid_params <- c(valid_params, param)
-              cat(sprintf("✅ %s is valid for BE analysis\n", param))
             } else {
-              cat(sprintf("❌ %s has insufficient valid data for BE analysis\n", param))
+              bioeq_log(sprintf("%s has insufficient valid data for BE analysis", param), "WARNING")
             }
           } else {
-            cat(sprintf("❌ %s could not be converted to numeric\n", param))
+            bioeq_log(sprintf("%s could not be converted to numeric", param), "WARNING")
           }
         } else {
-          cat(sprintf("❌ %s not found in merged data\n", param))
+          bioeq_log(sprintf("%s not found in merged data", param), "WARNING")
         }
       }
       
@@ -1283,9 +1329,9 @@ observeEvent(input$run_analysis, {
         stop("No valid parameters found for BE analysis. Check NCA results and parameter names.")
       }
       
-      cat(sprintf("📊 Analyzing %s design with %d subjects, %d valid parameters\n", 
-                  study_design, length(unique(be_data$Subject)), length(valid_params)))
-      
+      bioeq_log(sprintf("Analyzing %s design with %d subjects, %d valid parameters",
+                        study_design, length(unique(be_data$Subject)), length(valid_params)), "DEBUG")
+
       # Use the new BE analysis routing system
       be_analysis_result <- perform_be_analysis_by_type(
         data = be_data,
@@ -1313,7 +1359,15 @@ observeEvent(input$run_analysis, {
       
       # Store the real BE analysis results and merge ANOVA results
       values$be_results <- be_analysis_result
-      
+
+      # Preserve the BE-engine's own ANOVA/scaling output (RSABE ISC variance /
+      # replicateBE Method A/B) BEFORE the simple-ANOVA overwrite below. The
+      # ANOVA tab uses this for RSABE/ABEL so it can show the purpose-built
+      # scaled formatters (variance components + scaled limits + correct
+      # decision) instead of a fixed-limit ABE table. Keyed by base parameter
+      # name (e.g. "Cmax").
+      values$be_results$scaled_anova <- be_analysis_result$anova_results
+
       # ANOVA tab always shows the user's selected ANOVA model results from perform_simple_anova()
       # (keyed by log-transformed parameter names: lnCmax, lnAUC0t, etc., with full Type III SS).
       # replicateBE runs its own internal ANOVA for ABEL scaling, but that's an implementation
@@ -1323,40 +1377,55 @@ observeEvent(input$run_analysis, {
           length(anova_results$anova_results) > 0) {
         values$anova_results <- anova_results
         values$be_results$anova_results <- anova_results
-        cat(sprintf("[INFO] ✅ ANOVA tab will display simple_anova results (%d parameters)\n",
-                    length(anova_results$anova_results)))
+        bioeq_log(sprintf("ANOVA tab will display simple_anova results (%d parameters)",
+                          length(anova_results$anova_results)), "DEBUG")
       } else if (!is.null(be_analysis_result$anova_results) &&
                  length(be_analysis_result$anova_results) > 0) {
         # Fallback: use whatever the BE engine returned (e.g. replicateBE-derived)
         values$anova_results <- be_analysis_result$anova_results
-        cat(sprintf("[INFO] ⚠️  Falling back to BE-engine ANOVA results (%s)\n",
-                    analysis_config$be_analysis_type))
+        bioeq_log(sprintf("Falling back to BE-engine ANOVA results (%s)", analysis_config$be_analysis_type), "WARNING")
       } else {
-        cat("[WARNING] ⚠️  No ANOVA results available from either source\n")
+        bioeq_log("No ANOVA results available from either source", "WARNING")
       }
-      
-      cat("✅ Bioequivalence Analysis Completed Successfully!\n")
-      
-      # Log results summary
-      if (!is.null(be_analysis_result$confidence_intervals)) {
-        cat("📋 Confidence Intervals Generated:\n")
-        for (param in names(be_analysis_result$confidence_intervals)) {
-          ci <- be_analysis_result$confidence_intervals[[param]]
-          cat(sprintf("  %s: %.2f%% [%.2f%%, %.2f%%]\n", 
-                      param, ci$point_estimate, ci$ci_lower, ci$ci_upper))
+
+      .phase <- .phase + 1L
+      bioeq_phase(.phase, .n_phases, "BE assessment",
+                  sprintf("%d parameters", length(be_analysis_result$confidence_intervals %||% list())))
+
+      # Best-effort Reference/Test intra-subject CV% for the summary's one
+      # line display. compute_reference_anova_variance() (R/simple_anova.R)
+      # requires Treatment coded as literal "R"/"T" (not "Reference"/"Test"),
+      # so recode a throwaway copy of be_data just for this - never touches
+      # be_data/be_analysis_result itself. This is a reporting nicety, not
+      # part of the analysis, so any failure here just means the summary
+      # falls back to its own pooled-MSE approximation - never surfaced as
+      # an analysis error.
+      ref_test_cv <- tryCatch({
+        first_param <- names(be_analysis_result$confidence_intervals)[1]
+        if (!is.null(first_param) && !is.null(be_data) &&
+            all(c("Treatment", first_param) %in% names(be_data))) {
+          rt_data <- be_data
+          rt_data$Treatment <- ifelse(rt_data$Treatment %in% c("Reference", "R"), "R",
+                                ifelse(rt_data$Treatment %in% c("Test", "T"), "T", rt_data$Treatment))
+          rv <- compute_reference_anova_variance(rt_data, first_param)
+          if (!is.null(rv$cv_wR) && !is.na(rv$cv_wR)) list(ref = rv$cv_wR, test = rv$cv_wT) else NULL
+        } else {
+          NULL
         }
-      }
-      
-      if (!is.null(be_analysis_result$be_conclusions)) {
-        be_count <- sum(unlist(be_analysis_result$be_conclusions), na.rm = TRUE)
-        total_count <- length(be_analysis_result$be_conclusions)
-        cat(sprintf("🎯 Bioequivalence: %d of %d parameters meet criteria\n", 
-                    be_count, total_count))
-      }
-      
+      }, error = function(e) NULL)
+
+      # The one user-facing report for this whole run - see
+      # R/analysis_summary.R for why this uses cat() rather than bioeq_log().
+      print_be_analysis_summary(
+        result      = be_analysis_result,
+        elapsed_sec = proc.time()[["elapsed"]] - .bioeq_t0,
+        config      = analysis_config,
+        ref_test_cv = ref_test_cv
+      )
+
     }, error = function(e) {
-      cat(sprintf("❌ Error in BE Analysis: %s\n", e$message))
-      
+      bioeq_log(sprintf("Error in BE Analysis: %s", e$message), "ERROR")
+
       # Create fallback mock results in case of error - PRESERVE ANOVA RESULTS
       values$be_results <- list(
         error = paste("BE Analysis failed:", e$message),
@@ -1384,7 +1453,7 @@ observeEvent(input$run_analysis, {
   
   }, error = function(e) {
     # Handle any unexpected errors during analysis
-    cat(sprintf("❌ Unexpected error during analysis: %s\n", e$message))
+    bioeq_log(sprintf("Unexpected error during analysis: %s", e$message), "ERROR")
     
     # Hide progress indicator
     shinyjs::hide("analysis_progress")
@@ -1413,11 +1482,13 @@ observeEvent(input$run_analysis, {
   
   shinyjs::hide("analysis_progress")
   updateTabItems(session, "sidebar", "results")
-  
-  # Show success notification only if analysis actually completed
-  if (isTRUE(values$analysis_complete)) {
-    showNotification("Analysis completed successfully!", type = "default", duration = 5)
-  }
+
+  # No separate "Analysis completed successfully!" toast here — the
+  # withProgress() bar above already walks through each step and reaches
+  # 100% ("Generating comprehensive results...") right before this point,
+  # and navigating to the Results tab is itself a clear completion signal.
+  # A second toast on top of that was pure duplication (two overlapping
+  # "done" popups for one action).
 })
 
 # Custom template saving

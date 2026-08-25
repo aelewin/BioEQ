@@ -27,22 +27,18 @@ generate_cumulative_be_plots <- function(data, parameters = c("Cmax", "AUC0t", "
                                         anova_method = "fixed", be_limits = c(0.8, 1.25),
                                         interactive = TRUE, study_design = NULL) {
   
-  cat("\n📊 Setting up Cumulative BE Analysis...\n")
-  
   # Validate inputs
   if (is.null(data) || nrow(data) == 0) {
     return(list(error = "No data available for cumulative analysis"))
   }
-  
+
   # Check if study design supports cumulative analysis
   if (!is.null(study_design) && study_design == "parallel") {
     return(list(error = "Cumulative analysis not supported for parallel studies"))
   }
-  
-  cat("Available columns:", paste(names(data), collapse = ", "), "\n")
-  cat("Requested parameters:", paste(parameters, collapse = ", "), "\n")
-  cat("ANOVA method:", anova_method, "\n")
-  cat("Study design:", study_design, "\n")
+
+  bioeq_log(sprintf("Setting up Cumulative BE Analysis: parameters=%s, method=%s, design=%s",
+                    paste(parameters, collapse = ", "), anova_method, study_design), "DEBUG")
   
   # Prepare data structure for cumulative analysis
   tryCatch({
@@ -57,8 +53,8 @@ generate_cumulative_be_plots <- function(data, parameters = c("Cmax", "AUC0t", "
     subjects <- sort(unique(analysis_data$subject))
     n_subjects <- length(subjects)
     
-    cat(sprintf("Found %d subjects for cumulative analysis\n", n_subjects))
-    cat("Available subjects in cumulative data:", paste(subjects, collapse = ", "), "\n")
+    bioeq_log(sprintf("Found %d subjects for cumulative analysis: %s",
+                      n_subjects, paste(subjects, collapse = ", ")), "DEBUG")
     
     # Filter parameters to only those available in data
     available_params <- intersect(parameters, names(analysis_data))
@@ -84,7 +80,7 @@ generate_cumulative_be_plots <- function(data, parameters = c("Cmax", "AUC0t", "
     ))
     
   }, error = function(e) {
-    cat("Error in cumulative analysis setup:", e$message, "\n")
+    bioeq_log(sprintf("Error in cumulative analysis setup: %s", e$message), "ERROR")
     return(list(error = paste("Setup error:", e$message)))
   })
 }
@@ -122,7 +118,7 @@ prepare_cumulative_data <- function(data) {
   missing_cols <- setdiff(required_cols, names(analysis_data))
   
   if (length(missing_cols) > 0) {
-    cat("Missing required columns:", paste(missing_cols, collapse = ", "), "\n")
+    bioeq_log(sprintf("Missing required columns: %s", paste(missing_cols, collapse = ", ")), "WARNING")
     return(NULL)
   }
   
@@ -163,70 +159,6 @@ prepare_cumulative_data <- function(data) {
   return(analysis_data)
 }
 
-#' Calculate Subject-Level T/R Ratios
-#' 
-#' For replicate designs (2x2x3, 2x2x4), calculate subject-level ratios by averaging
-#' Test and Reference periods. For crossover (2x2x2), use single T/R ratio.
-#' 
-#' @param data Standardized PK data with subject, treatment, period columns
-#' @param parameter PK parameter name to calculate ratios for
-#' @return Data frame with one row per subject containing T/R ratio
-calculate_subject_tr_ratios <- function(data, parameter) {
-  
-  if (!parameter %in% names(data)) {
-    cat(sprintf("Parameter %s not found in data\n", parameter))
-    return(NULL)
-  }
-  
-  if (!requireNamespace("dplyr", quietly = TRUE)) {
-    stop("dplyr package required for ratio calculations")
-  }
-  
-  # Detect design type by counting periods per subject
-  periods_per_subject <- data %>%
-    dplyr::group_by(subject) %>%
-    dplyr::summarise(n_periods = dplyr::n(), .groups = "drop") %>%
-    dplyr::pull(n_periods) %>%
-    max()
-  
-  is_replicate <- periods_per_subject > 2
-  
-  cat(sprintf("Detected %s design (%d periods per subject)\n", 
-              ifelse(is_replicate, "replicate", "crossover"), periods_per_subject))
-  
-  # Calculate subject-level statistics
-  subject_ratios <- data %>%
-    dplyr::group_by(subject, treatment) %>%
-    dplyr::summarise(
-      mean_pk = mean(.data[[parameter]], na.rm = TRUE),
-      n_obs = dplyr::n(),
-      .groups = "drop"
-    ) %>%
-    tidyr::pivot_wider(
-      id_cols = subject,
-      names_from = treatment,
-      values_from = c(mean_pk, n_obs)
-    )
-  
-  # Calculate T/R ratio (on original scale if not log-transformed)
-  # Check if parameter is already log-transformed
-  is_log <- grepl("^(ln|log)", parameter, ignore.case = TRUE)
-  
-  if (is_log) {
-    # Already log scale - difference gives log ratio
-    subject_ratios$tr_ratio_pct <- exp(subject_ratios$mean_pk_Test - subject_ratios$mean_pk_Reference) * 100
-  } else {
-    # Original scale - direct ratio
-    subject_ratios$tr_ratio_pct <- (subject_ratios$mean_pk_Test / subject_ratios$mean_pk_Reference) * 100
-  }
-  
-  # Add metadata
-  subject_ratios$is_replicate <- is_replicate
-  subject_ratios$parameter <- parameter
-  
-  return(subject_ratios)
-}
-
 #' Perform Progressive Cumulative BE Analysis
 #' 
 #' Runs complete BE analysis for each subset of subjects in specified order
@@ -240,28 +172,25 @@ calculate_subject_tr_ratios <- function(data, parameter) {
 perform_progressive_be_analysis <- function(data, parameter, subject_order, 
                                           anova_method = "fixed", be_limits = c(0.8, 1.25)) {
   
-  cat(sprintf("\n🔍 Starting Progressive BE Analysis for %s\n", parameter))
-  cat("Subject order:", paste(subject_order, collapse = ", "), "\n")
-  
+  bioeq_log(sprintf("Starting Progressive BE Analysis for %s, subject order: %s",
+                    parameter, paste(subject_order, collapse = ", ")), "DEBUG")
+
   # Ensure we use log-transformed parameters for BE analysis
   log_parameter <- if (startsWith(parameter, "ln")) {
     parameter
   } else {
     paste0("ln", parameter)
   }
-  
+
   # Check if log parameter exists in data
   if (!log_parameter %in% names(data)) {
     if (parameter %in% names(data)) {
-      cat(sprintf("Creating log-transformed parameter: %s\n", log_parameter))
       data[[log_parameter]] <- log(data[[parameter]])
     } else {
-      cat(sprintf("Error: Neither %s nor %s found in data\n", parameter, log_parameter))
+      bioeq_log(sprintf("Neither %s nor %s found in data", parameter, log_parameter), "WARNING")
       return(data.frame())
     }
   }
-  
-  cat(sprintf("Using parameter: %s for progressive analysis\n", log_parameter))
   
   # Initialize results
   cumulative_results <- data.frame(
@@ -280,9 +209,6 @@ perform_progressive_be_analysis <- function(data, parameter, subject_order,
   for (i in 1:length(subject_order)) {
     current_subjects <- subject_order[1:i]
     subset_data <- data[data$subject %in% current_subjects, ]
-    
-    cat(sprintf("  Analyzing subset %d/%d (subjects: %s)...\n", 
-               i, length(subject_order), paste(current_subjects, collapse = ", ")))
     
     tryCatch({
       # Perform complete BE analysis for this subset
@@ -311,8 +237,9 @@ perform_progressive_be_analysis <- function(data, parameter, subject_order,
           stringsAsFactors = FALSE
         ))
         
-        cat(sprintf("    ✓ PE: %.2f%%, CI: [%.2f%%, %.2f%%]\n", 
-                   be_result$point_estimate, be_result$ci_lower, be_result$ci_upper))
+        bioeq_log(sprintf("Subset %d/%d: PE=%.2f%%, CI=[%.2f%%, %.2f%%]",
+                          i, length(subject_order), be_result$point_estimate,
+                          be_result$ci_lower, be_result$ci_upper), "DEBUG")
       } else {
         # Record failed analysis
         cumulative_results <- rbind(cumulative_results, data.frame(
@@ -327,9 +254,9 @@ perform_progressive_be_analysis <- function(data, parameter, subject_order,
           stringsAsFactors = FALSE
         ))
         
-        cat("    ✗ Analysis failed\n")
+        bioeq_log(sprintf("Subset %d/%d: analysis failed", i, length(subject_order)), "DEBUG")
       }
-      
+
     }, error = function(e) {
       # Record error
       cumulative_results <<- rbind(cumulative_results, data.frame(
@@ -344,13 +271,13 @@ perform_progressive_be_analysis <- function(data, parameter, subject_order,
         stringsAsFactors = FALSE
       ))
       
-      cat(sprintf("    ✗ Error: %s\n", e$message))
+      bioeq_log(sprintf("Subset %d/%d: error - %s", i, length(subject_order), e$message), "DEBUG")
     })
   }
-  
+
   successful_analyses <- sum(cumulative_results$analysis_successful, na.rm = TRUE)
-  cat(sprintf("✓ Completed progressive analysis: %d/%d successful\n", 
-             successful_analyses, nrow(cumulative_results)))
+  bioeq_log(sprintf("Completed progressive analysis: %d/%d successful",
+                    successful_analyses, nrow(cumulative_results)), "DEBUG")
   
   return(cumulative_results)
 }
@@ -367,24 +294,24 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
   
   # Validate that we have the parameter
   if (!parameter %in% names(data)) {
-    cat(sprintf("Parameter %s not found in data\n", parameter))
+    bioeq_log(sprintf("Parameter %s not found in data", parameter), "DEBUG")
     return(NULL)
   }
-  
+
   # Remove any missing or invalid values
   valid_data <- data[!is.na(data[[parameter]]) & is.finite(data[[parameter]]), ]
-  
+
   if (nrow(valid_data) < 2) {
-    cat("Insufficient data rows after cleaning\n")
+    bioeq_log("Insufficient data rows after cleaning", "DEBUG")
     return(NULL)
   }
-  
+
   # Check that we have both treatments (support both "T"/"R" and "Test"/"Reference" labels)
   treatments <- unique(valid_data$treatment)
   has_tr <- all(c("T", "R") %in% treatments)
   has_test_ref <- all(c("Test", "Reference") %in% treatments)
   if (length(treatments) < 2 || (!has_tr && !has_test_ref)) {
-    cat("Missing treatment groups - need both Test and Reference (or T and R)\n")
+    bioeq_log("Missing treatment groups - need both Test and Reference (or T and R)", "DEBUG")
     return(NULL)
   }
   test_label <- if (has_tr) "T" else "Test"
@@ -394,26 +321,26 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
   subjects <- unique(valid_data$subject)
   n_subjects <- length(subjects)
   
-  cat(sprintf("    Subset has %d subjects, %d observations\n", n_subjects, nrow(valid_data)))
-  
+  bioeq_log(sprintf("Subset has %d subjects, %d observations", n_subjects, nrow(valid_data)), "DEBUG")
+
   # For single subject, calculate simple ratio (no CI possible)
   if (n_subjects == 1) {
     test_data <- valid_data[valid_data$treatment == test_label, ]
     ref_data <- valid_data[valid_data$treatment == ref_label, ]
-    
+
     if (nrow(test_data) > 0 && nrow(ref_data) > 0) {
       log_ratio <- mean(test_data[[parameter]]) - mean(ref_data[[parameter]])
       pe <- exp(log_ratio) * 100
-      
-      cat(sprintf("    Single subject ratio: %.2f%%\n", pe))
-      
+
+      bioeq_log(sprintf("Single subject ratio: %.2f%%", pe), "DEBUG")
+
       return(list(
         point_estimate = pe,
         ci_lower = pe,  # No CI for single subject
         ci_upper = pe
       ))
     } else {
-      cat("    Single subject missing treatment data\n")
+      bioeq_log("Single subject missing treatment data", "DEBUG")
       return(NULL)
     }
   }
@@ -446,7 +373,7 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
   
   # Check if we have enough data for ANOVA
   if (nrow(anova_data) < 4) {  # Need at least 2 subjects x 2 treatments
-    cat("    Insufficient data for ANOVA analysis\n")
+    bioeq_log("Insufficient data for ANOVA analysis", "DEBUG")
     return(NULL)
   }
   
@@ -456,18 +383,14 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
     summarise(n_treatments = n(), .groups = 'drop')
   
   if (any(subject_treatment_counts$n_treatments < 2)) {
-    cat("    Unbalanced design - some subjects missing treatments\n")
+    bioeq_log("Unbalanced design - some subjects missing treatments", "DEBUG")
     return(NULL)
   }
-  
-  cat(sprintf("    Prepared ANOVA data: %d rows for %d subjects\n", 
-             nrow(anova_data), n_subjects))
-  
+
+  bioeq_log(sprintf("Prepared ANOVA data: %d rows for %d subjects", nrow(anova_data), n_subjects), "DEBUG")
+
   # Try to use existing ANOVA function
   tryCatch({
-    cat(sprintf("    Attempting ANOVA with %d rows, columns: %s\n", 
-               nrow(anova_data), paste(names(anova_data), collapse = ", ")))
-    
     anova_result <- perform_simple_anova(
       nca_data = anova_data,
       parameters = parameter,
@@ -477,27 +400,25 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
     if (!is.null(anova_result[[parameter]]) && is.null(anova_result[[parameter]]$error)) {
       result <- anova_result[[parameter]]
       
-      cat(sprintf("    ANOVA success: PE=%.2f%%, CI=[%.2f%%, %.2f%%]\n", 
-                 result$pe_estimate, result$ci_lower, result$ci_upper))
-      
+      bioeq_log(sprintf("ANOVA success: PE=%.2f%%, CI=[%.2f%%, %.2f%%]",
+                        result$pe_estimate, result$ci_lower, result$ci_upper), "DEBUG")
+
       return(list(
         point_estimate = result$pe_estimate,
         ci_lower = result$ci_lower,
         ci_upper = result$ci_upper
       ))
     } else {
-      cat("    ANOVA analysis returned null or error result\n")
+      bioeq_log("ANOVA analysis returned null or error result", "DEBUG")
       # Fall through to manual calculation
     }
-    
+
   }, error = function(e) {
-    cat(sprintf("    ANOVA error: %s\n", e$message))
+    bioeq_log(sprintf("ANOVA error: %s", e$message), "DEBUG")
     # Fall through to manual calculation
   })
-  
+
   # Manual BE calculation as fallback
-  cat("    Using manual BE calculation...\n")
-  
   tryCatch({
     # Get Test and Reference values for each subject
     test_data <- anova_data[anova_data$treatment == "Test", ]
@@ -508,7 +429,7 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
     ref_subjects <- sort(ref_data$subject)
     
     if (!identical(test_subjects, ref_subjects)) {
-      cat("    Subject mismatch between treatments\n")
+      bioeq_log("Subject mismatch between treatments", "DEBUG")
       return(NULL)
     }
     
@@ -521,7 +442,7 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
     ref_values <- ref_data[[parameter]]
     
     if (length(test_values) != length(ref_values) || length(test_values) < 2) {
-      cat("    Insufficient paired data for calculation\n")
+      bioeq_log("Insufficient paired data for calculation", "DEBUG")
       return(NULL)
     }
     
@@ -545,17 +466,17 @@ perform_subset_be_analysis <- function(data, parameter, anova_method = "fixed") 
     ci_lower <- exp(ci_lower_log) * 100
     ci_upper <- exp(ci_upper_log) * 100
     
-    cat(sprintf("    Manual calculation: PE=%.2f%%, CI=[%.2f%%, %.2f%%] (n=%d)\n", 
-               pe, ci_lower, ci_upper, n))
-    
+    bioeq_log(sprintf("Manual calculation: PE=%.2f%%, CI=[%.2f%%, %.2f%%] (n=%d)",
+                      pe, ci_lower, ci_upper, n), "DEBUG")
+
     return(list(
       point_estimate = pe,
       ci_lower = ci_lower,
       ci_upper = ci_upper
     ))
-    
+
   }, error = function(e2) {
-    cat(sprintf("    Manual calculation also failed: %s\n", e2$message))
+    bioeq_log(sprintf("Manual calculation also failed: %s", e2$message), "DEBUG")
     return(NULL)
   })
 }

@@ -160,6 +160,7 @@ tryCatch({
 .source_R <- function(fname) sys.source(file.path(.BIOEQ_R_DIR, fname), envir = globalenv())
 .source_R("bioeq_main.R")
 .source_R("nca_functions.R")
+.source_R("nca_pknca.R")            # PKNCA-backed NCA engine
 .source_R("be_analysis.R")
 .source_R("rsabe_analysis.R")            # RSABE analysis (FDA linearized + ncTOST)
 .source_R("simple_anova.R")              # Simple ANOVA using lm()
@@ -172,10 +173,20 @@ tryCatch({
 .source_R("validation_runner.R")         # Black-box validation engine
 .source_R("anomaly_detection.R")         # Fraud / anomaly detection analytics
 .source_R("randomization.R")             # Randomization engine
+.source_R("analysis_summary.R")          # Console summary report + phase-line helper
 
-# Source template configuration
-source("templates/report_generation.R", local = TRUE)
+# Console diagnostics are routed through bioeq_log(..., "DEBUG") (R/bioeq_main.R)
+# and hidden at the default log_level ("INFO") - see bioeq_debug_on()/
+# bioeq_debug_off(). Set BIOEQ_LOG_LEVEL=DEBUG in the environment before
+# launching to bring them back without touching code, e.g. for a support
+# session: `BIOEQ_LOG_LEVEL=DEBUG R -e "shiny::runApp('shiny')"`.
+if (nzchar(Sys.getenv("BIOEQ_LOG_LEVEL"))) {
+  set_bioeq_config("log_level", toupper(Sys.getenv("BIOEQ_LOG_LEVEL")))
+}
+
+# Source report generation utilities
 source("utils/sas_style_report.R", local = TRUE)
+source("utils/sample_size_report.R", local = TRUE)
 
 # Source UI and server components
 source("ui/main_ui.R", local = TRUE)
@@ -194,6 +205,25 @@ source("server/randomization_server.R",     local = TRUE)
 
 # Define utility operators and functions
 `%||%` <- function(a, b) if (is.null(a)) b else a
+
+# Serve the repo-root docs/ statically so the root README's relative image
+# links (docs/images/*.gif) resolve when the README is rendered inline on
+# the Help & Support tab (includeMarkdown() renders the markdown but does
+# not rewrite relative asset paths for Shiny's web server). Handles both
+# launch conventions: cwd == repo root (shiny::runApp("shiny")) or
+# cwd == shiny/ (running app.R directly from inside shiny/).
+.bioeq_docs_dir <- if (dir.exists("docs")) "docs" else file.path("..", "docs")
+if (dir.exists(.bioeq_docs_dir)) shiny::addResourcePath("docs", .bioeq_docs_dir)
+
+# Root project README, shown inline on the Help & Support tab. shiny::runApp()
+# changes the working directory to the app dir (shiny/) while serving, which
+# also has its own (dev-oriented) README.md - check the repo-root one first,
+# since that's the actual project overview this is meant to show.
+.bioeq_readme_path <- if (file.exists(file.path("..", "README.md"))) {
+  file.path("..", "README.md")
+} else {
+  "README.md"
+}
 
 # Define UI
 ui <- dashboardPage(
@@ -221,8 +251,8 @@ ui <- dashboardPage(
       id = "sidebar",
       menuItem("Data Upload", tabName = "upload", icon = icon("upload")),
       menuItem("Analysis Setup", tabName = "setup", icon = icon("cogs")),
-      menuItem("Results", tabName = "results", icon = icon("chart-line")),
-      menuItem("Plots", tabName = "plots", icon = icon("chart-area")),
+      menuItem("Results", tabName = "results", icon = icon("chart-bar")),
+      menuItem("Plots", tabName = "plots", icon = icon("chart-line")),
       menuItem("Exports & Reports", tabName = "exports", icon = icon("download")),
       menuItem("Validation", tabName = "validation", icon = icon("check-circle")),
       br(),
@@ -236,7 +266,7 @@ ui <- dashboardPage(
     div(
       style = "position: fixed; bottom: 15px; left: 15px; right: 15px; text-align: center; 
                border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;",
-      p("Version BETA", style = "color: #a0aec0; font-size: 11px; margin: 5px 0; font-weight: 500;"),
+      p(paste0("Version ", get_bioeq_config("bioeq_version") %||% "1.0.0"), style = "color: #a0aec0; font-size: 11px; margin: 5px 0; font-weight: 500;"),
       p("© 2025 BioEQ Team", style = "color: #a0aec0; font-size: 11px; margin: 0; font-weight: 500;")
     )
   ),
@@ -316,10 +346,10 @@ ui <- dashboardPage(
     
     # Custom CSS for responsive design
     tags$head(
-      tags$title("BioEQ - BETA"),
+      tags$title("BioEQ"),
       # Force the browser tab title even after shinydashboard overwrites it
       # with a serialized version of the dashboardHeader `title` HTML.
-      tags$script(HTML("document.title = 'BioEQ - BETA';")),  
+      tags$script(HTML("document.title = 'BioEQ';")),
       tags$link(rel = "icon", href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧪</text></svg>"),
       tags$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
       tags$link(rel = "stylesheet", type = "text/css", href = "custom.css"),
@@ -942,45 +972,67 @@ ui <- dashboardPage(
       # Help Tab
       tabItem(
         tabName = "help",
+
+        # Title banner - same gradient-header pattern as every other module,
+        # icon matching the sidebar's "Help & Support" menuItem icon.
+        div(
+          class = "help-header",
+          style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+          h3(icon("question-circle"), " Help & Support",
+             style = "margin: 0; font-weight: 700;"),
+          p("Getting-started guidance, data templates, and where to go for support.",
+            style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
+        ),
+
+        # Quick Links - one horizontal row across the top.
         fluidRow(
           box(
-            title = "Help & Support", 
-            status = "info", 
+            title = "Quick Links",
+            status = "warning",
             solidHeader = TRUE,
-            width = 8,
-            h4("Getting Started"),
-            p("Follow these steps to perform bioequivalence analysis:"),
-            tags$ol(
-              tags$li(tags$strong("Upload Data:"), " Upload your concentration-time data in CSV format"),
-              tags$li(tags$strong("Configure Analysis:"), " Select study design and analysis parameters"),
-              tags$li(tags$strong("Review Results:"), " Examine NCA parameters and ANOVA results")
-            ),
-            br(),
-            h4("Data Format Requirements"),
-            p("Your CSV file should contain the following columns:"),
-            tags$ul(
-              tags$li(tags$strong("Subject:"), " Unique subject identifier (1, 2, 3, ...)"),
-              tags$li(tags$strong("Treatment:"), " Treatment code (R for Reference, T for Test)"),
-              tags$li(tags$strong("Time:"), " Sampling time in hours (0, 0.25, 0.5, 1, ...)"),
-              tags$li(tags$strong("Concentration:"), " Drug concentration in ng/mL")
+            width = 12,
+            div(style = "display: flex; flex-wrap: wrap; gap: 10px;",
+              tags$span(class = "btn btn-default disabled",
+                        style = "flex: 1 1 180px; pointer-events: none; opacity: 0.65;",
+                        icon("book"), " User Manual ", tags$small("(Coming Soon)")),
+              tags$span(class = "btn btn-default disabled",
+                        style = "flex: 1 1 180px; pointer-events: none; opacity: 0.65;",
+                        icon("video"), " Video Tutorials ", tags$small("(Coming Soon)")),
+              tags$a(href = "mailto:support@bioeq.com",
+                     class = "btn btn-warning", style = "flex: 1 1 180px;",
+                     icon("envelope"), " Contact Support"),
+              downloadButton("download_template", "CSV Template (Concentration-Time)",
+                              class = "btn btn-outline-primary",
+                              style = "flex: 1 1 220px;"),
+              downloadButton("download_pk_template", "CSV Template (PK Parameters)",
+                              class = "btn btn-outline-primary",
+                              style = "flex: 1 1 220px;")
             )
-          ),
+          )
+        ),
+
+        # README, from "## Data Format" onward only - a user reading this has
+        # already loaded the app, so the install/launch/overview sections
+        # above that point in the source README don't apply here.
+        fluidRow(
           box(
-            title = "Quick Links", 
-            status = "warning", 
+            title = "Application Information",
+            status = "primary",
             solidHeader = TRUE,
-            width = 4,
-            tags$a(href = "#", class = "btn btn-primary btn-block", 
-                   icon("download"), " Download Example Data"),
-            br(),
-            tags$a(href = "#", class = "btn btn-info btn-block", 
-                   icon("book"), " User Manual"),
-            br(),
-            tags$a(href = "#", class = "btn btn-success btn-block", 
-                   icon("video"), " Video Tutorials"),
-            br(),
-            tags$a(href = "mailto:support@bioeq.com", class = "btn btn-warning btn-block", 
-                   icon("envelope"), " Contact Support")
+            width = 12,
+            if (file.exists(.bioeq_readme_path)) {
+              readme_lines <- readLines(.bioeq_readme_path, warn = FALSE)
+              start_idx <- which(grepl("^##\\s+Data Format", readme_lines))[1]
+              if (!is.na(start_idx)) {
+                shiny::markdown(readme_lines[start_idx:length(readme_lines)])
+              } else {
+                # Heading not found (README restructured) - show the whole
+                # thing rather than silently show nothing.
+                shiny::markdown(readme_lines)
+              }
+            } else {
+              p(class = "text-muted", "README.md not found.")
+            }
           )
         )
       )
@@ -1688,7 +1740,118 @@ server <- function(input, output, session) {
     }
   )
 
-  # ── 6. SAS-style Bioequivalence Analysis Report (HTML) ──
+  # ── 6. Missing Data Handling Log ──
+  output$download_missing_data_log <- downloadHandler(
+    filename = function() paste0("missing_data_log_", Sys.Date(), ".csv"),
+    content = function(file) {
+      log_df <- values$missing_data_log
+      if (is.null(log_df) || nrow(log_df) == 0) {
+        log_df <- data.frame(Note = "No missing/BLQ data points were imputed or removed in this analysis.",
+                             stringsAsFactors = FALSE)
+      }
+      meta <- build_metadata("Missing Data Handling Log")
+      meta <- c(meta,
+                paste0("Middle-Point Method: ", values$analysis_config$missing_data_middle %||% "Unknown"),
+                paste0("Terminal-Point Method: ", values$analysis_config$missing_data_terminal %||% "Unknown"))
+      write_export_csv(log_df, file, meta)
+      showNotification("Missing data log exported.", type = "message")
+    }
+  )
+
+  # ── 7. Carryover Detection Summary ──
+  output$download_carryover_summary <- downloadHandler(
+    filename = function() paste0("carryover_summary_", Sys.Date(), ".csv"),
+    content = function(file) {
+      co <- values$carryover_results
+      details_df <- co$carryover_details %||% co$carryover_data
+      if (is.null(details_df) || nrow(details_df) == 0) {
+        details_df <- data.frame(Note = "Carryover detection was not performed, or no periods were eligible for assessment (e.g. parallel design / no Period > 1 data).",
+                                 stringsAsFactors = FALSE)
+      }
+      meta <- build_metadata("Carryover Detection Summary")
+      meta <- c(meta,
+                paste0("Threshold (% of Cmax): ", values$analysis_config$carryover_threshold %||% "Unknown"),
+                paste0("Subjects Excluded: ", co$n_excluded_subjects %||% 0))
+      write_export_csv(details_df, file, meta)
+      showNotification("Carryover summary exported.", type = "message")
+    }
+  )
+
+  # ── 9. Concentration-Time Profile Plots (PDF) ──
+  # Mean profile page(s) (pooled T/R, plus T1/T2/R1/R2 for replicate designs),
+  # followed by one full page per individual subject - each plot gets its own
+  # page, nothing is combined onto a shared grid. Linear scale first, then the
+  # same set again on a natural log scale.
+  output$download_concentration_profiles_pdf <- downloadHandler(
+    filename = function() paste0("concentration_time_profiles_", Sys.Date(), ".pdf"),
+    content = function(file) {
+      req(values$uploaded_data)
+      raw <- values$uploaded_data
+      has_conc_time <- any(c("time", "Time", "TIME") %in% names(raw)) &&
+        any(c("concentration", "Concentration", "CONCENTRATION", "conc", "Conc") %in% names(raw))
+
+      grDevices::pdf(file, width = 11, height = 8.5)
+      on.exit(grDevices::dev.off(), add = TRUE)
+
+      if (!has_conc_time) {
+        plot.new()
+        text(0.5, 0.5, paste(
+          "Concentration-time profile plots are not available:",
+          "this analysis was run from pre-calculated PK parameters",
+          "(no raw concentration-time data to plot).", sep = "\n"))
+      } else {
+        plot_data <- .prepare_plot_data_for_export(raw)
+        for (log_scale in c(FALSE, TRUE)) {
+          for (p in plot_mean_profiles_export(plot_data, log_scale = log_scale)) print(p)
+          for (p in plot_individual_profiles_paginated(plot_data, log_scale = log_scale)) print(p)
+        }
+      }
+      showNotification("Concentration-time profile plots exported.", type = "message")
+    }
+  )
+
+  # ── 10. Lambda Z Regression Plots (PDF) ──
+  # Reuses create_lambda_z_regression_plots() verbatim - the exact function
+  # and data sources (raw uploaded_data + nca_results$subject_data) already
+  # driving the live "Lambda Z Regression" tab - paginated the same way.
+  output$download_lambda_z_plots_pdf <- downloadHandler(
+    filename = function() paste0("lambda_z_regression_plots_", Sys.Date(), ".pdf"),
+    content = function(file) {
+      req(values$nca_results, values$uploaded_data)
+      nca_res <- values$nca_results
+      subject_data <- if (is.data.frame(nca_res)) nca_res else nca_res$subject_data
+      req(subject_data)
+
+      grDevices::pdf(file, width = 11, height = 8.5)
+      on.exit(grDevices::dev.off(), add = TRUE)
+
+      if (is.null(subject_data) || !("lambda_z_terminal_times" %in% names(subject_data))) {
+        plot.new()
+        text(0.5, 0.5, "No lambda_z terminal-phase data available for this analysis.")
+      } else {
+        subject_data <- subject_data[order(suppressWarnings(as.numeric(as.character(subject_data$Subject)))), ]
+        subjects <- unique(as.character(subject_data$Subject))
+        per_page <- 8
+        n_pages <- max(1, ceiling(length(subjects) / per_page))
+        for (page in seq_len(n_pages)) {
+          start <- (page - 1) * per_page + 1
+          end <- min(page * per_page, length(subjects))
+          page_subjects <- subjects[start:end]
+          page_subject_data <- subject_data[subject_data$Subject %in% page_subjects, ]
+          p <- create_lambda_z_regression_plots(
+            conc_data = values$uploaded_data,
+            nca_subject_data = page_subject_data,
+            subjects = page_subjects,
+            ncol = 4
+          )
+          print(p)
+        }
+      }
+      showNotification("Lambda Z regression plots exported.", type = "message")
+    }
+  )
+
+  # ── 8. SAS-style Bioequivalence Analysis Report (HTML) ──
   output$download_sas_style_report <- downloadHandler(
     filename = function() paste0("BioEQ_BE_Report_", Sys.Date(), ".html"),
     content = function(file) {
@@ -1698,7 +1861,8 @@ server <- function(input, output, session) {
           be_results      = values$be_results,
           nca_results     = values$nca_results,
           analysis_config = values$analysis_config,
-          output_file     = file
+          output_file     = file,
+          data_type       = values$data_type
         )
         showNotification("BE analysis report generated.", type = "message")
       }, error = function(e) {

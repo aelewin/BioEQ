@@ -2,7 +2,10 @@
 # Modern plotting functions for bioequivalence analysis with dual-output support (static & interactive)
 
 # Required packages for plotting
-required_packages <- c("ggplot2", "plotly", "dplyr", "tidyr", "gridExtra", "htmlwidgets")
+# NOTE: gridExtra was removed from this list in the 2026-08 dependency audit —
+# it was attached at startup but no gridExtra function (grid.arrange/
+# arrangeGrob/tableGrob) is called anywhere in BioEQ.
+required_packages <- c("ggplot2", "plotly", "dplyr", "tidyr", "htmlwidgets")
 
 # Check and install missing packages
 for (pkg in required_packages) {
@@ -284,37 +287,6 @@ shiny_plot_pk_boxplots <- function(data, parameters = c("AUC0t", "Cmax"),
   })
 }
 
-#' Shiny-safe plot wrapper for forest plots
-#'
-#' @param be_results Results from perform_be_analysis
-#' @param parameters Vector of parameters to include (default: all available)
-#' @param be_limits Bioequivalence limits (default: c(0.8, 1.25))
-#' @param interactive Logical, whether to create interactive plotly plot (default TRUE)
-#' @param height Plot height in pixels for Shiny (default 400)
-#' @return List with plot object and any error/warning messages
-#' @export
-shiny_plot_forest_be <- function(be_results, parameters = NULL, be_limits = c(0.8, 1.25), 
-                                interactive = TRUE, height = 400) {
-  tryCatch({
-    if (!inherits(be_results, "bioeq")) {
-      return(list(plot = NULL, error = "Input must be a bioeq object from perform_be_analysis", warnings = NULL))
-    }
-    
-    # Create the plot
-    plot_obj <- plot_forest_be(be_results, parameters, be_limits, interactive)
-    
-    # Configure for Shiny output
-    if (interactive && inherits(plot_obj, "plotly")) {
-      plot_obj <- configure_plotly_for_shiny(plot_obj, height)
-    }
-    
-    return(list(plot = plot_obj, error = NULL, warnings = NULL))
-    
-  }, error = function(e) {
-    return(list(plot = NULL, error = paste("Plot generation failed:", e$message), warnings = NULL))
-  })
-}
-
 #' Create interactive plot for selected individual subjects only
 #' 
 #' @param data Data frame with concentration-time data
@@ -449,7 +421,7 @@ create_individual_concentration_plot <- function(data, selected_subjects = NULL,
     return(p)
     
   }, error = function(e) {
-    cat("Error in create_individual_concentration_plot:", e$message, "\n")
+    bioeq_log(sprintf("Error in create_individual_concentration_plot: %s", e$message), "ERROR")
     stop(paste("Failed to create individual concentration plot:", e$message))
   })
 }
@@ -463,100 +435,6 @@ if (!require("plotly", quietly = TRUE)) {
   message("Installing plotly package for interactive plots...")
   install.packages("plotly", dependencies = TRUE)
   library(plotly)
-}
-
-#' Export plot to specified format
-#'
-#' @param plot_object ggplot2 or plotly object
-#' @param filename Output filename (with or without extension)
-#' @param format Output format: "png", "pdf", "html", "auto"
-#' @param width Plot width in inches
-#' @param height Plot height in inches
-#' @param dpi Resolution for raster formats
-#' @export
-export_plot <- function(plot_object, filename, format = "auto", 
-                       width = 10, height = 6, dpi = 300) {
-  # Determine format from filename if auto
-  if (format == "auto") {
-    ext <- tools::file_ext(filename)
-    format <- if (ext %in% c("png", "pdf", "html")) ext else "png"
-  }
-  
-  # Ensure filename has correct extension
-  if (!grepl(paste0("\\.", format, "$"), filename)) {
-    filename <- paste0(tools::file_path_sans_ext(filename), ".", format)
-  }
-  
-  # Create directory if it doesn't exist
-  dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
-  
-  if (inherits(plot_object, "plotly")) {
-    # Handle plotly objects
-    if (format == "html") {
-      tryCatch({
-        htmlwidgets::saveWidget(plot_object, filename, 
-                               selfcontained = TRUE, 
-                               libdir = NULL)
-      }, error = function(e) {
-        if (grepl("pandoc", e$message, ignore.case = TRUE)) {
-          warning("Pandoc not available. Saving as non-self-contained HTML.")
-          htmlwidgets::saveWidget(plot_object, filename, 
-                                 selfcontained = FALSE, 
-                                 libdir = paste0(tools::file_path_sans_ext(filename), "_files"))
-        } else {
-          stop(e)
-        }
-      })
-    } else {
-      # Convert plotly to static format via orca or kaleido
-      tryCatch({
-        plotly::save_image(plot_object, filename, 
-                          width = width * dpi, height = height * dpi)
-      }, error = function(e) {
-        warning("Could not save plotly as static image. Install orca or kaleido. Saving as HTML instead.")
-        html_file <- paste0(tools::file_path_sans_ext(filename), ".html")
-        tryCatch({
-          htmlwidgets::saveWidget(plot_object, html_file, 
-                                 selfcontained = TRUE, libdir = NULL)
-        }, error = function(e2) {
-          if (grepl("pandoc", e2$message, ignore.case = TRUE)) {
-            warning("Pandoc not available. Saving as non-self-contained HTML.")
-            htmlwidgets::saveWidget(plot_object, html_file, 
-                                   selfcontained = FALSE, 
-                                   libdir = paste0(tools::file_path_sans_ext(html_file), "_files"))
-          } else {
-            stop(e2)
-          }
-        })
-      })
-    }
-  } else if (inherits(plot_object, "ggplot")) {
-    # Handle ggplot2 objects
-    if (format == "html") {
-      # Convert ggplot to plotly then save as HTML
-      p_ly <- ggplotly(plot_object)
-      tryCatch({
-        htmlwidgets::saveWidget(p_ly, filename, 
-                               selfcontained = TRUE, libdir = NULL)
-      }, error = function(e) {
-        if (grepl("pandoc", e$message, ignore.case = TRUE)) {
-          warning("Pandoc not available. Saving as non-self-contained HTML.")
-          htmlwidgets::saveWidget(p_ly, filename, 
-                                 selfcontained = FALSE, 
-                                 libdir = paste0(tools::file_path_sans_ext(filename), "_files"))
-        } else {
-          stop(e)
-        }
-      })
-    } else {
-      ggsave(filename, plot_object, width = width, height = height, dpi = dpi)
-    }
-  } else {
-    stop("plot_object must be a ggplot2 or plotly object")
-  }
-  
-  message("Plot saved: ", filename)
-  return(invisible(filename))
 }
 
 #' Plot concentration-time profile
@@ -595,29 +473,31 @@ plot_concentration_time_static <- function(data, log_scale = FALSE, individual =
   }
   
   if (mean_profile) {
+    # Group by NOMINAL time (see .derive_nominal_time()), not the exact
+    # recorded Time - actual-vs-planned sampling deviations otherwise
+    # fragment the mean into spurious near-duplicate points. Individual
+    # profiles above intentionally keep the exact actual Time.
+    nominal_map <- .derive_nominal_time(data$Time)
+    data$NominalTime <- unname(nominal_map[as.character(data$Time)])
+
     mean_data <- data %>%
-      group_by(Time, Treatment) %>%
+      group_by(NominalTime, Treatment) %>%
       summarise(
         Mean_Conc = mean(Concentration, na.rm = TRUE),
-        SE = sd(Concentration, na.rm = TRUE) / sqrt(n()),
         .groups = 'drop'
       )
-    
-    p <- p + geom_line(data = mean_data, aes(x = Time, y = Mean_Conc), linewidth = 1.2)
-    p <- p + geom_point(data = mean_data, aes(x = Time, y = Mean_Conc), size = 2)
-    p <- p + geom_errorbar(data = mean_data, 
-                          aes(x = Time, y = Mean_Conc, 
-                              ymin = Mean_Conc - SE, ymax = Mean_Conc + SE),
-                          width = 0.1, alpha = 0.7)
+
+    p <- p + geom_line(data = mean_data, aes(x = NominalTime, y = Mean_Conc), linewidth = 1.2)
+    p <- p + geom_point(data = mean_data, aes(x = NominalTime, y = Mean_Conc), size = 2)
   }
-  
+
   # Get user-specified units from global options if available
   concentration_label <- getOption("bioeq.concentration.label", "Concentration (ng/mL)")
   time_label <- getOption("bioeq.time.label", "Time (h)")
-  
+
   if (log_scale) {
     p <- p + scale_y_log10()
-    p <- p + labs(y = paste0(gsub(" \\(.*\\)", "", concentration_label), " (log scale)"))
+    p <- p + labs(y = paste0(gsub(" \\(.*\\)", "", concentration_label), " (natural log scale)"))
   } else {
     p <- p + labs(y = concentration_label)
   }
@@ -722,12 +602,18 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
   }
 
   if (mean_profile) {
-    # Mean profiles always by Treatment (T/R overall — all replicates pooled)
+    # Mean profiles always by Treatment (T/R overall — all replicates pooled).
+    # Group by NOMINAL time (see .derive_nominal_time()), not the exact
+    # recorded Time - actual-vs-planned sampling deviations otherwise
+    # fragment the mean into spurious near-duplicate points. Individual
+    # traces above intentionally keep the exact actual Time.
+    nominal_map <- .derive_nominal_time(data$Time)
+    data$NominalTime <- unname(nominal_map[as.character(data$Time)])
+
     mean_data <- data %>%
-      group_by(Time, Treatment) %>%
+      group_by(NominalTime, Treatment) %>%
       summarise(
         Mean_Conc = mean(Concentration, na.rm = TRUE),
-        SE        = sd(Concentration,   na.rm = TRUE) / sqrt(n()),
         N         = n(),
         .groups   = 'drop'
       )
@@ -738,15 +624,8 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
       if (is.na(color_val)) color_val <- "#1F78B4"
 
       p <- p %>% add_trace(
-        x = form_data$Time,
+        x = form_data$NominalTime,
         y = form_data$Mean_Conc,
-        error_y = list(
-          type      = "data",
-          array     = form_data$SE,
-          color     = color_val,
-          thickness = 2,
-          width     = 3
-        ),
         type = "scatter", mode = "lines+markers",
         line   = list(color = color_val, width = 3),
         marker = list(color = color_val, size  = 8),
@@ -769,8 +648,8 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
   concentration_label <- getOption("bioeq.concentration.label", "Concentration")
   time_label <- getOption("bioeq.time.label", "Time")
   
-  y_title <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (log scale)") else concentration_label
-  
+  y_title <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (natural log scale)") else concentration_label
+
   p <- p %>% layout(
     title = list(
       text = "Concentration-Time Profiles",
@@ -800,47 +679,6 @@ plot_concentration_time_interactive <- function(data, log_scale = FALSE, individ
   )
   
   return(p)
-}
-
-#' Plot bioequivalence analysis results
-#'
-#' @param be_results Results from perform_be_analysis
-#' @export
-plot_be_results <- function(be_results) {
-  if (!inherits(be_results, "bioeq")) {
-    stop("Input must be a bioeq object from perform_be_analysis")
-  }
-  
-  # Extract PK parameters
-  pk_data <- be_results$pk_parameters
-  
-  # Create plots for each parameter
-  plots <- list()
-  
-  for (param in c("AUC0t", "AUC0inf", "Cmax", "Tmax")) {
-    if (param %in% names(pk_data)) {
-      plot_data <- pk_data %>%
-        select(Subject, Period, Treatment, all_of(param)) %>%
-        rename(Value = all_of(param))
-      
-      p <- ggplot(plot_data, aes(x = Treatment, y = Value, fill = Treatment)) +
-        geom_boxplot(alpha = 0.7) +
-        geom_point(position = position_jitter(width = 0.2), alpha = 0.6) +
-        labs(title = paste("Individual", param, "Values"),
-             y = param, x = "Treatment") +
-        theme_minimal() +
-        theme(legend.position = "none") +
-        scale_fill_brewer(type = "qual", palette = "Set2")
-      
-      if (param != "Tmax") {
-        p <- p + scale_y_log10() + labs(y = paste(param, "(log scale)"))
-      }
-      
-      plots[[param]] <- p
-    }
-  }
-  
-  return(plots)
 }
 
 #' Plot confidence intervals for bioequivalence
@@ -1020,644 +858,6 @@ plot_be_confidence_intervals_interactive <- function(be_results) {
         )
       )
     )
-  
-  return(p)
-}
-
-#' Plot sample size curves
-#'
-#' @param cv_range Range of CV values to plot
-#' @param power Target power (default 0.8)
-#' @param theta0 True ratio (default 0.95)
-#' @param alpha Significance level (default 0.05)
-#' @export
-plot_sample_size_curve <- function(cv_range = seq(0.1, 0.5, 0.01), 
-                                  power = 0.8, theta0 = 0.95, alpha = 0.05) {
-  
-  sample_sizes <- sapply(cv_range, function(cv) {
-    result <- calculate_sample_size(cv = cv, power = power, theta0 = theta0, alpha = alpha)
-    # Handle different return structures for different designs
-    if (!is.null(result$n_subjects)) {
-      return(result$n_subjects)  # For crossover designs
-    } else if (!is.null(result$n_per_group)) {
-      return(result$n_per_group * 2)  # For parallel designs (total sample size)
-    } else if (!is.null(result$n_total)) {
-      return(result$n_total)  # Alternative total sample size field
-    } else {
-      return(NA)  # Fallback if structure is unexpected
-    }
-  })
-  
-  plot_data <- data.frame(
-    CV = cv_range * 100,  # Convert to percentage
-    SampleSize = sample_sizes
-  )
-  
-  p <- ggplot(plot_data, aes(x = CV, y = SampleSize)) +
-    geom_line(linewidth = 1, color = "blue") +
-    geom_point(alpha = 0.6, color = "blue") +
-    labs(title = paste("Sample Size Requirements for", power * 100, "% Power"),
-         subtitle = paste("θ₀ =", theta0, ", α =", alpha),
-         x = "Coefficient of Variation (%)", 
-         y = "Total Sample Size") +
-    theme_minimal() +
-    scale_x_continuous(breaks = seq(10, 50, 5)) +
-    scale_y_continuous(breaks = seq(0, max(sample_sizes, na.rm = TRUE), 10))
-  
-  return(p)
-}
-
-#' Plot power curves
-#'
-#' @param n_per_group Sample size per group
-#' @param cv Coefficient of variation
-#' @param theta_range Range of true ratios to plot
-#' @param alpha Significance level (default 0.05)
-#' @export
-plot_power_curve <- function(n_per_group, cv, theta_range = seq(0.8, 1.25, 0.01), alpha = 0.05) {
-  
-  powers <- sapply(theta_range, function(theta) {
-    result <- calculate_power(n_per_group = n_per_group, cv = cv, theta0 = theta, alpha = alpha)
-    return(result$power)
-  })
-  
-  plot_data <- data.frame(
-    TrueRatio = theta_range,
-    Power = powers
-  )
-  
-  p <- ggplot(plot_data, aes(x = TrueRatio, y = Power)) +
-    geom_line(linewidth = 1, color = "darkgreen") +
-    geom_hline(yintercept = 0.8, linetype = "dashed", color = "red", alpha = 0.7) +
-    geom_vline(xintercept = c(0.8, 1.25), linetype = "dashed", color = "blue", alpha = 0.7) +
-    labs(title = paste("Power Curve (n =", n_per_group, "per group, CV =", cv * 100, "%)"),
-         subtitle = "Red line: 80% power, Blue lines: bioequivalence limits",
-         x = "True Test/Reference Ratio", 
-         y = "Power") +
-    theme_minimal() +
-    scale_x_continuous(breaks = seq(0.8, 1.25, 0.05)) +
-    scale_y_continuous(breaks = seq(0, 1, 0.1), labels = scales::percent)
-  
-  return(p)
-}
-
-#' Create diagnostic plots for bioequivalence analysis
-#'
-#' @param be_results Results from perform_be_analysis
-#' @export
-plot_be_diagnostics <- function(be_results) {
-  if (!inherits(be_results, "bioeq")) {
-    stop("Input must be a bioeq object from perform_be_analysis")
-  }
-  
-  pk_data <- be_results$pk_parameters
-  plots <- list()
-  
-  # Residual plots for each parameter
-  for (param in c("AUC0t", "AUC0inf", "Cmax")) {
-    if (param %in% names(pk_data)) {
-      # Create a simple linear model for residuals
-      formula_str <- paste("log(", param, ") ~ Treatment + Subject + Period")
-      model_data <- pk_data[!is.na(pk_data[[param]]) & pk_data[[param]] > 0, ]
-      
-      if (nrow(model_data) > 0) {
-        model <- lm(as.formula(formula_str), data = model_data)
-        
-        diag_data <- data.frame(
-          Fitted = fitted(model),
-          Residuals = residuals(model),
-          Parameter = param
-        )
-        
-        p <- ggplot(diag_data, aes(x = Fitted, y = Residuals)) +
-          geom_point(alpha = 0.6) +
-          geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-          geom_smooth(method = "loess", se = FALSE, color = "blue") +
-          labs(title = paste("Residual Plot -", param),
-               x = "Fitted Values", y = "Residuals") +
-          theme_minimal()
-        
-        plots[[paste0(param, "_residuals")]] <- p
-      }
-    }
-  }
-  
-  return(plots)
-}
-
-#' Generate a comprehensive bioequivalence report plot
-#'
-#' @param be_results Results from perform_be_analysis
-#' @export
-plot_be_summary <- function(be_results) {
-  if (!inherits(be_results, "bioeq")) {
-    stop("Input must be a bioeq object from perform_be_analysis")
-  }
-  
-  # Create multiple plots and arrange them
-  ci_plot <- plot_be_confidence_intervals(be_results)
-  be_plots <- plot_be_results(be_results)
-  
-  # Return list of plots for manual arrangement
-  summary_plots <- list(
-    confidence_intervals = ci_plot,
-    parameter_distributions = be_plots
-  )
-  
-  return(summary_plots)
-}
-
-#' Plot individual subject test vs reference comparison
-#'
-#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
-#' @param log_scale Logical, whether to use log scale for concentration
-#' @param facet_wrap Logical, whether to use facet_wrap for individual subjects
-#' @param ncol Number of columns for faceting (default 4)
-#' @param interactive Logical, whether to create interactive plotly plot
-#' @export
-plot_subject_comparison <- function(data, log_scale = FALSE, facet_wrap = TRUE, ncol = 4, interactive = FALSE) {
-  if (interactive) {
-    return(plot_subject_comparison_interactive(data, log_scale, facet_wrap, ncol))
-  } else {
-    return(plot_subject_comparison_static(data, log_scale, facet_wrap, ncol))
-  }
-}
-
-#' Plot individual subject test vs reference comparison (static version)
-#'
-#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
-#' @param log_scale Logical, whether to use log scale for concentration
-#' @param facet_wrap Logical, whether to use facet_wrap for individual subjects
-#' @param ncol Number of columns for faceting (default 4)
-#' @export
-plot_subject_comparison_static <- function(data, log_scale = FALSE, facet_wrap = TRUE, ncol = 4) {
-  validate_conc_time_data(data)
-  
-  # Ensure we have both Test and Reference data
-  if (!all(c("Test", "Reference") %in% data$Treatment)) {
-    stop("Data must contain both 'Test' and 'Reference' formulations")
-  }
-  
-  p <- ggplot(data, aes(x = Time, y = Concentration, color = Treatment)) +
-    geom_line(aes(group = interaction(Subject, Treatment)), linewidth = 0.8) +
-    geom_point(aes(group = interaction(Subject, Treatment)), size = 1.2) +
-    scale_color_manual(values = c("Reference" = "#E31A1C", "Test" = "#1F78B4"),
-                       labels = c("Reference", "Test")) +
-    labs(x = "Time", 
-         title = "Individual Subject Comparison: Test vs Reference",
-         subtitle = "Concentration-Time Profiles by Subject") +
-    theme_minimal() +
-    theme(
-      legend.position = "bottom",
-      plot.margin = margin(t = 10, r = 10, b = 30, l = 10, unit = "pt"),
-      strip.text = element_text(size = 8, face = "bold")
-    )
-  
-  if (facet_wrap) {
-    subject_levels <- sort(as.numeric(unique(data$Subject)))
-    data$Subject <- factor(data$Subject, levels = subject_levels)
-    p <- p + facet_wrap(~ paste("Subject", Subject), ncol = ncol, scales = "free_y")
-  }
-  
-  if (log_scale) {
-    p <- p + scale_y_log10() + labs(y = "Concentration (log scale)")
-  } else {
-    p <- p + labs(y = "Concentration")
-  }
-  
-  return(p)
-}
-
-#' Plot individual subject test vs reference comparison (interactive version)
-#'
-#' @param data Data frame with Time, Concentration, Subject, and Treatment columns
-#' @param log_scale Logical, whether to use log scale for concentration
-#' @param facet_wrap Logical, whether to use facet_wrap for individual subjects
-#' @param ncol Number of columns for faceting (default 4)
-#' @export
-plot_subject_comparison_interactive <- function(data, log_scale = FALSE, facet_wrap = TRUE, ncol = 4) {
-  validate_conc_time_data(data)
-  
-  # Ensure we have both Test and Reference data
-  if (!all(c("Test", "Reference") %in% data$Treatment)) {
-    stop("Data must contain both 'Test' and 'Reference' formulations")
-  }
-  
-  if (facet_wrap) {
-    # For now, create a single plot with all subjects but with text annotations to identify subjects
-    # This avoids complex subplot issues while maintaining functionality
-    p <- plot_ly()
-    
-    for (subj in sort(as.numeric(unique(data$Subject)))) {
-      for (form in unique(data$Treatment)) {
-        subj_data <- data[data$Subject == subj & data$Treatment == form, ]
-        if (nrow(subj_data) > 0) {
-          color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
-          
-          p <- p %>% add_trace(
-            x = subj_data$Time, 
-            y = subj_data$Concentration,
-            type = "scatter", mode = "lines+markers",
-            line = list(color = color_val, width = 1.5),
-            marker = list(color = color_val, size = 5),
-            name = paste(form, "- Subject", subj),
-            legendgroup = form,
-            showlegend = (subj == unique(data$Subject)[1] && form %in% c("Reference", "Test")),
-            hovertemplate = paste(
-              "<b>Subject:</b>", subj, "<br>",
-              "<b>Treatment:</b>", form, "<br>",
-              "<b>Time:</b> %{x}<br>",
-              "<b>Concentration:</b> %{y}<br>",
-              "<extra></extra>"
-            )
-          )
-        }
-      }
-    }
-    
-    p <- p %>% layout(
-      title = list(
-        text = "Individual Subject Comparison: Test vs Reference",
-        font = list(size = 16)
-      ),
-      xaxis = list(title = "Time"),
-      yaxis = list(
-        title = if (log_scale) "Concentration (log scale)" else "Concentration",
-        type = if (log_scale) "log" else "linear"
-      ),
-      hovermode = "closest",
-      legend = list(
-        orientation = "h",
-        x = 0.5,
-        xanchor = "center",
-        y = -0.1
-      )
-    )
-    
-  } else {
-    # Single plot with all subjects
-    p <- plot_ly()
-    
-    for (subj in unique(data$Subject)) {
-      for (form in unique(data$Treatment)) {
-        subj_data <- data[data$Subject == subj & data$Treatment == form, ]
-        if (nrow(subj_data) > 0) {
-          color_val <- if (form == "Reference") "#E31A1C" else "#1F78B4"
-          
-          p <- p %>% add_trace(
-            x = subj_data$Time, 
-            y = subj_data$Concentration,
-            type = "scatter", mode = "lines+markers",
-            line = list(color = color_val, width = 1),
-            marker = list(color = color_val, size = 4),
-            name = paste(form, "- Subject", subj),
-            legendgroup = form,
-            showlegend = subj == unique(data$Subject)[1],
-            hovertemplate = paste(
-              "<b>Subject:</b>", subj, "<br>",
-              "<b>Treatment:</b>", form, "<br>",
-              "<b>Time:</b> %{x}<br>",
-              "<b>Concentration:</b> %{y}<br>",
-              "<extra></extra>"
-            )
-          )
-        }
-      }
-    }
-    
-    p <- p %>% layout(
-      title = list(
-        text = "Individual Subject Comparison: Test vs Reference",
-        font = list(size = 16)
-      ),
-      xaxis = list(title = "Time"),
-      yaxis = list(
-        title = if (log_scale) "Concentration (log scale)" else "Concentration",
-        type = if (log_scale) "log" else "linear"
-      ),
-      hovermode = "closest",
-      legend = list(
-        orientation = "h",
-        x = 0.5,
-        xanchor = "center",
-        y = -0.1
-      )
-    )
-  }
-  
-  return(p)
-}
-
-#' Plot bioavailability ratios for each subject
-#'
-#' @param data PK parameter data with Subject, Treatment, and PK parameters
-#' @param parameter PK parameter to plot ("AUC0t", "AUC0inf", "Cmax")
-#' @export
-plot_subject_ratios <- function(data, parameter = "AUC0t") {
-  if (!parameter %in% names(data)) {
-    stop("Parameter '", parameter, "' not found in data")
-  }
-  
-  # Calculate ratios (Test/Reference) for each subject
-  wide_data <- data %>%
-    select(Subject, Treatment, all_of(parameter)) %>%
-    reshape2::dcast(Subject ~ Treatment, value.var = parameter) %>%
-    mutate(Ratio = Test / Reference,
-           Ratio_Percent = Ratio * 100)
-  
-  # Remove subjects with missing data
-  wide_data <- wide_data[complete.cases(wide_data), ]
-  
-  if (nrow(wide_data) == 0) {
-    stop("No complete data pairs found for ratio calculation")
-  }
-  
-  # Create the plot
-  p <- ggplot(wide_data, aes(x = factor(Subject), y = Ratio_Percent)) +
-    geom_hline(yintercept = 100, linetype = "solid", color = "gray50", alpha = 0.7) +
-    geom_hline(yintercept = c(80, 125), linetype = "dashed", color = "red", alpha = 0.7) +
-    geom_point(size = 3, color = "#1F78B4", alpha = 0.8) +
-    geom_segment(aes(xend = factor(Subject), y = 100, yend = Ratio_Percent), 
-                 color = "#1F78B4", alpha = 0.6, linewidth = 0.8) +
-    labs(x = "Subject", 
-         y = paste("Test/Reference Ratio (%) for", parameter),
-         title = paste("Individual Subject Ratios:", parameter),
-         subtitle = "Red dashed lines show bioequivalence limits (80-125%)") +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    coord_cartesian(ylim = c(min(70, min(wide_data$Ratio_Percent) * 0.95), 
-                            max(130, max(wide_data$Ratio_Percent) * 1.05)))
-  
-  return(p)
-}
-
-#' Plot test vs reference scatter plot with identity line
-#'
-#' @param data PK parameter data with Subject, Treatment, and PK parameters  
-#' @param parameter PK parameter to plot ("AUC0t", "AUC0inf", "Cmax")
-#' @param log_scale Logical, whether to use log scale
-#' @export
-plot_test_vs_reference <- function(data, parameter = "AUC0t", log_scale = TRUE) {
-  if (!parameter %in% names(data)) {
-    stop("Parameter '", parameter, "' not found in data")
-  }
-  
-  # Create wide format for scatter plot
-  wide_data <- data %>%
-    select(Subject, Treatment, all_of(parameter)) %>%
-    reshape2::dcast(Subject ~ Treatment, value.var = parameter)
-  
-  # Remove subjects with missing data
-  wide_data <- wide_data[complete.cases(wide_data), ]
-  
-  if (nrow(wide_data) == 0) {
-    stop("No complete data pairs found for scatter plot")
-  }
-  
-  # Calculate the range for axes
-  if (log_scale) {
-    all_values <- c(wide_data$Test, wide_data$Reference)
-    axis_min <- min(all_values, na.rm = TRUE) * 0.8
-    axis_max <- max(all_values, na.rm = TRUE) * 1.2
-  } else {
-    all_values <- c(wide_data$Test, wide_data$Reference)
-    axis_min <- min(all_values, na.rm = TRUE) * 0.9
-    axis_max <- max(all_values, na.rm = TRUE) * 1.1
-  }
-  
-  p <- ggplot(wide_data, aes(x = Reference, y = Test)) +
-    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red", linewidth = 1) +
-    geom_point(size = 3, alpha = 0.7, color = "#1F78B4") +
-    geom_text(aes(label = Subject), vjust = -0.5, hjust = 0.5, size = 3, alpha = 0.8) +
-    labs(title = paste("Test vs Reference:", parameter),
-         subtitle = "Red dashed line represents perfect agreement (Test = Reference)",
-         x = paste("Reference", parameter),
-         y = paste("Test", parameter)) +
-    theme_minimal() +
-    theme(aspect.ratio = 1)
-  
-  if (log_scale) {
-    p <- p + 
-      scale_x_log10(limits = c(axis_min, axis_max)) +
-      scale_y_log10(limits = c(axis_min, axis_max)) +
-      labs(x = paste("Reference", parameter, "(log scale)"),
-           y = paste("Test", parameter, "(log scale)"))
-  } else {
-    p <- p + 
-      coord_cartesian(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max))
-  }
-  
-  return(p)
-}
-
-#' Plot individual subject T/R ratios with cumulative trend and BE limits
-#'
-#' Creates a comprehensive plot showing individual subject T/R ratios as scatter points,
-#' connected by lines, with a cumulative trend line showing the overall T/R ratio
-#' as each subject is analyzed sequentially, plus bioequivalence limit lines.
-#'
-#' @param data PK parameter data with Subject, Treatment, and PK parameters
-#' @param parameter PK parameter to plot ("AUC0t", "AUC0inf", "Cmax")
-#' @param subject_order Optional vector specifying the order of subjects for analysis.
-#'                      If NULL, subjects are ordered by their Subject ID (1, 2, 3, ...)
-#' @param be_limits Bioequivalence limits (default c(0.8, 1.25))
-#' @param interactive Logical, whether to create interactive plot (default FALSE)
-#' @export
-plot_subject_tr_ratios_with_trend <- function(data, parameter = "AUC0t", 
-                                             subject_order = NULL,
-                                             be_limits = c(0.8, 1.25),
-                                             interactive = FALSE) {
-  
-  if (!parameter %in% names(data)) {
-    stop("Parameter '", parameter, "' not found in data")
-  }
-  
-  # Calculate ratios (Test/Reference) for each subject
-  wide_data <- data %>%
-    select(Subject, Treatment, all_of(parameter)) %>%
-    reshape2::dcast(Subject ~ Treatment, value.var = parameter) %>%
-    mutate(Ratio = Test / Reference,
-           Ratio_Percent = Ratio * 100)
-  
-  # Remove subjects with missing data
-  wide_data <- wide_data[complete.cases(wide_data), ]
-  
-  if (nrow(wide_data) == 0) {
-    stop("No complete data pairs found for ratio calculation")
-  }
-  
-  # Order subjects according to specified order or default (numerical Subject ID)
-  if (is.null(subject_order)) {
-    # Ensure Subject is numeric for proper ordering
-    wide_data$Subject <- as.numeric(wide_data$Subject)
-    wide_data <- wide_data[order(wide_data$Subject), ]
-  } else {
-    # Validate subject_order
-    missing_subjects <- setdiff(subject_order, wide_data$Subject)
-    if (length(missing_subjects) > 0) {
-      warning("Subjects not found in data: ", paste(missing_subjects, collapse = ", "))
-    }
-    valid_order <- intersect(subject_order, wide_data$Subject)
-    remaining_subjects <- setdiff(wide_data$Subject, valid_order)
-    # Sort remaining subjects numerically
-    remaining_subjects <- sort(as.numeric(remaining_subjects))
-    final_order <- c(valid_order, remaining_subjects)
-    wide_data <- wide_data[match(final_order, wide_data$Subject), ]
-  }
-  
-  # Add analysis order (position in the ordered sequence)
-  wide_data$Analysis_Order <- 1:nrow(wide_data)
-  
-  # Calculate cumulative T/R ratios (geometric means)
-  wide_data$Cumulative_Test <- cumsum(log(wide_data$Test))
-  wide_data$Cumulative_Ref <- cumsum(log(wide_data$Reference))
-  wide_data$Cumulative_Ratio <- exp((wide_data$Cumulative_Test - wide_data$Cumulative_Ref) / wide_data$Analysis_Order) * 100
-  
-  # Convert BE limits to percentage
-  be_lower <- be_limits[1] * 100
-  be_upper <- be_limits[2] * 100
-  
-  # Calculate dynamic y-axis limits based on actual data range
-  all_y_values <- c(wide_data$Ratio_Percent, wide_data$Cumulative_Ratio, be_lower, be_upper, 100)
-  y_min <- min(all_y_values, na.rm = TRUE)
-  y_max <- max(all_y_values, na.rm = TRUE)
-  y_range <- y_max - y_min
-  
-  # Add 10% padding on each side, with minimum range of 20%
-  y_padding <- max(y_range * 0.1, 10)
-  y_limit_min <- y_min - y_padding
-  y_limit_max <- y_max + y_padding
-  
-  if (interactive) {
-    # Create interactive plotly version
-    if (!requireNamespace("plotly", quietly = TRUE)) {
-      stop("plotly package is required for interactive plots. Install with: install.packages('plotly')")
-    }
-    
-    p <- plotly::plot_ly() %>%
-      # Add BE limit lines first (background)
-      plotly::add_lines(
-        x = c(0.5, nrow(wide_data) + 0.5), 
-        y = c(be_lower, be_lower),
-        line = list(color = "red", dash = "dash", width = 2),
-        name = paste0("BE Lower Limit (", be_lower, "%)"),
-        hovertemplate = paste0("BE Lower Limit: ", be_lower, "%<extra></extra>")
-      ) %>%
-      plotly::add_lines(
-        x = c(0.5, nrow(wide_data) + 0.5), 
-        y = c(be_upper, be_upper),
-        line = list(color = "red", dash = "dash", width = 2),
-        name = paste0("BE Upper Limit (", be_upper, "%)"),
-        hovertemplate = paste0("BE Upper Limit: ", be_upper, "%<extra></extra>")
-      ) %>%
-      # Add unity line
-      plotly::add_lines(
-        x = c(0.5, nrow(wide_data) + 0.5), 
-        y = c(100, 100),
-        line = list(color = "gray", dash = "solid", width = 1),
-        name = "Unity (100%)",
-        hovertemplate = "Unity: 100%<extra></extra>"
-      ) %>%
-      # Add individual subject ratios as scatter plot with connecting lines
-      plotly::add_trace(
-        data = wide_data,
-        x = ~Analysis_Order,
-        y = ~Ratio_Percent,
-        type = "scatter",
-        mode = "markers+lines",
-        marker = list(size = 8, color = "#1F78B4", opacity = 0.8),
-        line = list(color = "#1F78B4", width = 2, dash = "dot"),
-        name = "Individual T/R Ratios",
-        hovertemplate = paste0(
-          "<b>Subject: %{text}</b><br>",
-          "T/R Ratio: %{customdata:.2f}%<br>",
-          "<extra></extra>"
-        ),
-        text = wide_data$Subject,
-        customdata = wide_data$Ratio_Percent
-      ) %>%
-      # Add cumulative trend line
-      plotly::add_trace(
-        data = wide_data,
-        x = ~Analysis_Order,
-        y = ~Cumulative_Ratio,
-        type = "scatter",
-        mode = "lines",
-        line = list(color = "#E31A1C", width = 3),
-        name = "Cumulative T/R Ratio",
-        hovertemplate = paste0(
-          "<b>Cumulative Analysis</b><br>",
-          "Through Subject: %{text}<br>",
-          "Subjects Included: %{x}<br>",
-          "Overall T/R Ratio: %{y:.1f}%<br>",
-          "<extra></extra>"
-        ),
-        text = wide_data$Subject
-      ) %>%
-      plotly::layout(
-        title = list(
-          text = paste0("Individual Subject T/R Ratios with Cumulative Trend<br>", 
-                       "<sub>Parameter: ", parameter, "</sub>"),
-          font = list(size = 16)
-        ),
-        xaxis = list(
-          title = "Subject",
-          tickmode = "array",
-          tickvals = wide_data$Analysis_Order,
-          ticktext = as.character(wide_data$Subject),
-          type = "category"
-        ),
-        yaxis = list(
-          title = "Test/Reference Ratio (%)",
-          range = c(y_limit_min, y_limit_max)
-        ),
-        hovermode = "closest",
-        legend = list(
-          orientation = "v",
-          x = 1.02,
-          y = 1
-        )
-      )
-      
-  } else {
-    # Create static ggplot2 version
-    p <- ggplot(wide_data, aes(x = Analysis_Order)) +
-      # Add BE limit lines
-      geom_hline(yintercept = be_lower, linetype = "dashed", color = "red", 
-                 alpha = 0.7, linewidth = 1) +
-      geom_hline(yintercept = be_upper, linetype = "dashed", color = "red", 
-                 alpha = 0.7, linewidth = 1) +
-      # Add unity line
-      geom_hline(yintercept = 100, linetype = "solid", color = "gray50", 
-                 alpha = 0.5, linewidth = 0.8) +
-      # Add individual subject ratios with connecting line
-      geom_line(aes(y = Ratio_Percent), color = "#1F78B4", linewidth = 1, 
-                linetype = "dotted", alpha = 0.7) +
-      geom_point(aes(y = Ratio_Percent), size = 3, color = "#1F78B4", 
-                 alpha = 0.8) +
-      # Add cumulative trend line
-      geom_line(aes(y = Cumulative_Ratio), color = "#E31A1C", linewidth = 2) +
-      # Styling
-      labs(
-        x = "Subject", 
-        y = "Test/Reference Ratio (%)",
-        title = paste("T/R Ratios for", parameter),
-        subtitle = paste0("Red dashed lines: BE limits (", be_lower, "-", be_upper, "%)",
-                         " | Blue dots: Individual ratios | Red line: Cumulative ratio")
-      ) +
-      theme_minimal() +
-      theme(
-        axis.text.x = element_text(angle = 45, hjust = 1),
-        panel.grid.minor = element_blank()
-      ) +
-      # Custom x-axis labels showing subject numbers in correct order
-      scale_x_continuous(
-        breaks = wide_data$Analysis_Order,
-        labels = as.character(wide_data$Subject)
-      ) +
-      # Y-axis limits - dynamically adjusted to show all data
-      coord_cartesian(ylim = c(y_limit_min, y_limit_max))
-  }
   
   return(p)
 }
@@ -1860,518 +1060,6 @@ plot_pk_boxplots_static <- function(data, parameters = c("AUC0t", "Cmax"),
   return(p)
 }
 
-#' Create interactive forest plot for bioequivalence assessment
-#'
-#' @param be_results Results from perform_be_analysis
-#' @param parameters Vector of parameters to include (default: all available)
-#' @param be_limits Bioequivalence limits (default: c(0.8, 1.25))
-#' @param interactive Logical, whether to create interactive plotly plot (default TRUE)
-#' @export
-plot_forest_be <- function(be_results, parameters = NULL, be_limits = c(0.8, 1.25), 
-                          interactive = TRUE) {
-  
-  if (interactive) {
-    return(plot_forest_be_interactive(be_results, parameters, be_limits))
-  } else {
-    return(plot_forest_be_static(be_results, parameters, be_limits))
-  }
-}
-
-#' Create interactive forest plot for bioequivalence assessment (interactive version)
-#'
-#' @param be_results Results from perform_be_analysis
-#' @param parameters Vector of parameters to include
-#' @param be_limits Bioequivalence limits
-#' @export
-plot_forest_be_interactive <- function(be_results, parameters = NULL, be_limits = c(0.8, 1.25)) {
-  
-  if (!inherits(be_results, "bioeq")) {
-    stop("Input must be a bioeq object from perform_be_analysis")
-  }
-  
-  ci_data <- be_results$confidence_intervals
-  
-  if (is.null(parameters)) {
-    parameters <- names(ci_data)
-  }
-  
-  # Filter for requested parameters
-  ci_data <- ci_data[parameters]
-  
-  if (length(ci_data) == 0) {
-    stop("No valid parameters found in bioequivalence results")
-  }
-  
-  # Prepare data for forest plot
-  plot_data <- data.frame(
-    Parameter = names(ci_data),
-    Lower = sapply(ci_data, function(x) x$ci_lower),
-    Upper = sapply(ci_data, function(x) x$ci_upper),
-    Estimate = sapply(ci_data, function(x) x$point_estimate),
-    stringsAsFactors = FALSE
-  )
-  
-  # Add bioequivalence assessment
-  plot_data$BE_Status <- ifelse(
-    plot_data$Lower >= (be_limits[1] * 100) & plot_data$Upper <= (be_limits[2] * 100),
-    "Bioequivalent", "Not Bioequivalent"
-  )
-  
-  # Reverse order for better visualization (top to bottom)
-  plot_data$y_pos <- nrow(plot_data):1
-  
-  # Create forest plot
-  p <- plot_ly() %>%
-    # Add confidence interval lines
-    add_segments(
-      data = plot_data,
-      x = ~Lower, xend = ~Upper,
-      y = ~y_pos, yend = ~y_pos,
-      line = list(
-        width = 4,
-        color = ifelse(plot_data$BE_Status == "Bioequivalent", "#2E8B57", "#DC143C")
-      ),
-      hovertemplate = paste(
-        "<b>%{customdata}</b><br>",
-        "90% CI: %{x:.1f}% - %{customdata2:.1f}%<br>",
-        "Point Estimate: %{customdata3:.1f}%<br>",
-        "Status: %{customdata4}<br>",
-        "<extra></extra>"
-      ),
-      customdata = plot_data$Parameter,
-      customdata2 = plot_data$Upper,
-      customdata3 = plot_data$Estimate,
-      customdata4 = plot_data$BE_Status,
-      name = "90% Confidence Intervals",
-      showlegend = FALSE
-    ) %>%
-    # Add point estimates
-    add_markers(
-      data = plot_data,
-      x = ~Estimate, y = ~y_pos,
-      marker = list(
-        size = 10,
-        color = ifelse(plot_data$BE_Status == "Bioequivalent", "#2E8B57", "#DC143C"),
-        symbol = "diamond",
-        line = list(width = 2, color = "white")
-      ),
-      hovertemplate = paste(
-        "<b>%{customdata}</b><br>",
-        "Point Estimate: %{x:.1f}%<br>",
-        "90% CI: %{customdata2:.1f}% - %{customdata3:.1f}%<br>",
-        "Status: %{customdata4}<br>",
-        "<extra></extra>"
-      ),
-      customdata = plot_data$Parameter,
-      customdata2 = plot_data$Lower,
-      customdata3 = plot_data$Upper,
-      customdata4 = plot_data$BE_Status,
-      name = "Point Estimates",
-      showlegend = FALSE
-    ) %>%
-    # Add bioequivalence limit lines
-    add_lines(x = rep(c(plot_data$Parameter[1], plot_data$Parameter[length(plot_data$Parameter)]), 1),
-             y = rep(be_limits[1] * 100, 2), 
-             line = list(color = "red", dash = "dash", width = 2),
-             name = "BE Lower Limit",
-             showlegend = FALSE,
-             hovertemplate = paste0("BE Lower Limit: ", be_limits[1] * 100, "%<extra></extra>")) %>%
-    add_lines(x = rep(c(plot_data$Parameter[1], plot_data$Parameter[length(plot_data$Parameter)]), 1),
-             y = rep(be_limits[2] * 100, 2), 
-             line = list(color = "red", dash = "dash", width = 2),
-             name = "BE Upper Limit",
-             showlegend = FALSE,
-             hovertemplate = paste0("BE Upper Limit: ", be_limits[2] * 100, "%<extra></extra>")) %>%
-    add_lines(x = rep(c(plot_data$Parameter[1], plot_data$Parameter[length(plot_data$Parameter)]), 1),
-             y = rep(100, 2), 
-             line = list(color = "gray", dash = "solid", width = 1),
-             name = "Unity",
-             showlegend = FALSE,
-             hovertemplate = "Unity: 100%<extra></extra>") %>%
-    layout(
-      title = list(
-        text = "Forest Plot - Bioequivalence Assessment",
-        font = list(size = 16)
-      ),
-      xaxis = list(
-        title = "Test/Reference Ratio (%) with 90% CI",
-        range = c(70, 140),
-        showgrid = TRUE,
-        gridcolor = 'rgba(128,128,128,0.2)'
-      ),
-      yaxis = list(
-        title = "",
-        tickmode = "array",
-        tickvals = plot_data$y_pos,
-        ticktext = plot_data$Parameter,
-        showgrid = FALSE
-      ),
-      hovermode = "closest",
-      annotations = list(
-        list(
-          x = be_limits[1] * 100, y = max(plot_data$y_pos) + 0.5,
-          text = paste0(be_limits[1] * 100, "%"), showarrow = FALSE,
-          font = list(color = "red", size = 12)
-        ),
-        list(
-          x = be_limits[2] * 100, y = max(plot_data$y_pos) + 0.5,
-          text = paste0(be_limits[2] * 100, "%"), showarrow = FALSE,
-          font = list(color = "red", size = 12)
-        ),
-        list(
-          x = 100, y = max(plot_data$y_pos) + 0.5,
-          text = "100%", showarrow = FALSE,
-          font = list(color = "gray", size = 12)
-        )
-      ),
-      plot_bgcolor = 'rgba(0,0,0,0)',
-      paper_bgcolor = 'rgba(0,0,0,0)'
-    )
-  
-  return(p)
-}
-
-#' Create static forest plot for bioequivalence assessment (static version)
-#'
-#' @param be_results Results from perform_be_analysis
-#' @param parameters Vector of parameters to include
-#' @param be_limits Bioequivalence limits
-#' @export
-plot_forest_be_static <- function(be_results, parameters = NULL, be_limits = c(0.8, 1.25)) {
-  
-  if (!inherits(be_results, "bioeq")) {
-    stop("Input must be a bioeq object from perform_be_analysis")
-  }
-  
-  ci_data <- be_results$confidence_intervals
-  
-  if (is.null(parameters)) {
-    parameters <- names(ci_data)
-  }
-  
-  # Filter for requested parameters
-  ci_data <- ci_data[parameters]
-  
-  if (length(ci_data) == 0) {
-    stop("No valid parameters found in bioequivalence results")
-  }
-  
-  # Prepare data for forest plot
-  plot_data <- data.frame(
-    Parameter = factor(names(ci_data), levels = rev(names(ci_data))),
-    Lower = sapply(ci_data, function(x) x$ci_lower),
-    Upper = sapply(ci_data, function(x) x$ci_upper),
-    Estimate = sapply(ci_data, function(x) x$point_estimate),
-    stringsAsFactors = FALSE
-  )
-  
-  # Add bioequivalence assessment
-  plot_data$BE_Status <- ifelse(
-    plot_data$Lower >= (be_limits[1] * 100) & plot_data$Upper <= (be_limits[2] * 100),
-    "Bioequivalent", "Not Bioequivalent"
-  )
-  
-  p <- ggplot(plot_data, aes(x = Estimate, y = Parameter, color = BE_Status)) +
-    geom_vline(xintercept = c(be_limits[1] * 100, be_limits[2] * 100), 
-               linetype = "dashed", color = "red", linewidth = 1) +
-    geom_vline(xintercept = 100, linetype = "solid", color = "gray") +
-    geom_errorbarh(aes(xmin = Lower, xmax = Upper), height = 0.2, linewidth = 1.5) +
-    geom_point(size = 4, shape = 18) +
-    scale_color_manual(values = c("Bioequivalent" = "#2E8B57", "Not Bioequivalent" = "#DC143C")) +
-    labs(
-      title = "Forest Plot - Bioequivalence Assessment",
-      x = "Test/Reference Ratio (%) with 90% CI",
-      y = "",
-      color = "BE Status"
-    ) +
-    theme_minimal() +
-    theme(
-      legend.position = "bottom",
-      plot.margin = margin(t = 10, r = 10, b = 30, l = 10, unit = "pt"),
-      panel.grid.major.x = element_line(color = "gray"),
-      panel.grid.major.y = element_blank()
-    ) +
-    coord_cartesian(xlim = c(70, 140))
-  
-  return(p)
-}
-
-#' Create interactive ANOVA diagnostic plots
-#'
-#' @param be_results Results from perform_be_analysis containing ANOVA results
-#' @param parameters Vector of parameters to create diagnostics for (default: all available)
-#' @param interactive Logical, whether to create interactive plotly plot (default TRUE)
-#' @export
-plot_anova_diagnostics <- function(be_results, parameters = NULL, interactive = TRUE) {
-  
-  if (interactive) {
-    return(plot_anova_diagnostics_interactive(be_results, parameters))
-  } else {
-    return(plot_anova_diagnostics_static(be_results, parameters))
-  }
-}
-
-#' Create interactive ANOVA diagnostic plots (interactive version)
-#'
-#' @param be_results Results from perform_be_analysis containing ANOVA results
-#' @param parameters Vector of parameters to create diagnostics for
-#' @export
-plot_anova_diagnostics_interactive <- function(be_results, parameters = NULL) {
-  
-  if (!inherits(be_results, "bioeq")) {
-    stop("Input must be a bioeq object from perform_be_analysis")
-  }
-  
-  if (!is.null(be_results$anova_results)) {
-    anova_data <- be_results$anova_results
-  } else {
-    stop("No ANOVA results found in bioequivalence results")
-  }
-  
-  if (is.null(parameters)) {
-    parameters <- names(anova_data)
-  }
-  
-  # Filter for requested parameters
-  anova_data <- anova_data[parameters]
-  
-  if (length(anova_data) == 0) {
-    stop("No valid parameters found in ANOVA results")
-  }
-  
-  diagnostic_plots <- list()
-  
-  for (param in names(anova_data)) {
-    param_results <- anova_data[[param]]
-    
-    if (!is.null(param_results$residuals) && !is.null(param_results$fitted)) {
-      residuals <- param_results$residuals
-      fitted <- param_results$fitted
-      
-      # 1. Residuals vs Fitted
-      residual_plot <- plot_ly(
-        x = fitted, y = residuals,
-        type = "scatter", mode = "markers",
-        marker = list(size = 6, color = "#1F78B4", opacity = 0.7),
-        hovertemplate = paste(
-          "<b>Residuals vs Fitted</b><br>",
-          "Fitted: %{x:.3f}<br>",
-          "Residual: %{y:.3f}<br>",
-          "<extra></extra>"
-        ),
-        name = "Residuals"
-      ) %>%
-        add_hline(y = 0, line = list(color = "red", dash = "dash")) %>%
-        layout(
-          title = list(text = paste("Residuals vs Fitted -", param), font = list(size = 14)),
-          xaxis = list(title = "Fitted Values"),
-          yaxis = list(title = "Residuals")
-        )
-      
-      # 2. Q-Q Plot
-      if (length(residuals) > 2) {
-        # Calculate theoretical quantiles
-        n <- length(residuals)
-        theoretical <- qnorm((1:n - 0.5) / n)
-        sample_quantiles <- sort(residuals)
-        
-        qq_plot <- plot_ly(
-          x = theoretical, y = sample_quantiles,
-          type = "scatter", mode = "markers",
-          marker = list(size = 6, color = "#E31A1C", opacity = 0.7),
-          hovertemplate = paste(
-            "<b>Q-Q Plot</b><br>",
-            "Theoretical: %{x:.3f}<br>",
-            "Sample: %{y:.3f}<br>",
-            "<extra></extra>"
-          ),
-          name = "Sample vs Theoretical"
-        ) %>%
-          add_trace(
-            x = range(theoretical), y = range(theoretical),
-            type = "scatter", mode = "lines",
-            line = list(color = "red", dash = "dash"),
-            name = "Theoretical Line",
-            hovertemplate = "Perfect Normal Distribution<extra></extra>"
-          ) %>%
-          layout(
-            title = list(text = paste("Q-Q Plot -", param), font = list(size = 14)),
-            xaxis = list(title = "Theoretical Quantiles"),
-            yaxis = list(title = "Sample Quantiles")
-          )
-        
-        # 3. Scale-Location Plot (sqrt(|residuals|) vs fitted)
-        sqrt_abs_residuals <- sqrt(abs(residuals))
-        scale_location_plot <- plot_ly(
-          x = fitted, y = sqrt_abs_residuals,
-          type = "scatter", mode = "markers",
-          marker = list(size = 6, color = "#2E8B57", opacity = 0.7),
-          hovertemplate = paste(
-            "<b>Scale-Location Plot</b><br>",
-            "Fitted: %{x:.3f}<br>",
-            "√|Residuals|: %{y:.3f}<br>",
-            "<extra></extra>"
-          ),
-          name = "√|Residuals|"
-        ) %>%
-          layout(
-            title = list(text = paste("Scale-Location Plot -", param), font = list(size = 14)),
-            xaxis = list(title = "Fitted Values"),
-            yaxis = list(title = "√|Residuals|")
-          )
-        
-        # Store plots for this parameter
-        diagnostic_plots[[param]] <- list(
-          residual_plot = residual_plot,
-          qq_plot = qq_plot,
-          scale_location_plot = scale_location_plot
-        )
-      }
-    }
-  }
-  
-  if (length(diagnostic_plots) == 0) {
-    stop("No diagnostic plots could be created - insufficient ANOVA data")
-  }
-  
-  # Create subplot layout
-  if (length(parameters) == 1) {
-    param <- parameters[1]
-    if (!is.null(diagnostic_plots[[param]])) {
-      subplot_result <- plotly::subplot(
-        diagnostic_plots[[param]]$residual_plot,
-        diagnostic_plots[[param]]$qq_plot,
-        diagnostic_plots[[param]]$scale_location_plot,
-        nrows = 2, ncols = 2,
-        subplot_titles = c("Residuals vs Fitted", "Q-Q Plot", "Scale-Location")
-      ) %>%
-        layout(
-          title = list(
-            text = paste("ANOVA Diagnostic Plots -", param),
-            font = list(size = 16)
-          ),
-          showlegend = FALSE
-        )
-    }
-  } else {
-    # For multiple parameters, create a grid layout
-    all_plots <- list()
-    plot_titles <- c()
-    
-    for (param in names(diagnostic_plots)) {
-      if (!is.null(diagnostic_plots[[param]])) {
-        all_plots <- c(all_plots, diagnostic_plots[[param]]$residual_plot, 
-                       diagnostic_plots[[param]]$qq_plot, 
-                       diagnostic_plots[[param]]$scale_location_plot)
-        plot_titles <- c(plot_titles, 
-                         paste("Residuals vs Fitted -", param), 
-                         paste("Q-Q Plot -", param), 
-                         paste("Scale-Location Plot -", param))
-      }
-    }
-    
-    # Combine all plots into a single subplot
-    subplot_result <- plotly::subplot(
-      all_plots, nrows = length(parameters), 
-      titleX = TRUE, titleY = TRUE, 
-      margin = 0.05
-    ) %>%
-      layout(
-        title = list(
-          text = "ANOVA Diagnostic Plots",
-          font = list(size = 16)
-        ),
-        showlegend = FALSE
-      )
-  }
-  
-  return(subplot_result)
-}
-
-#' Create static ANOVA diagnostic plots (static version)
-#'
-#' @param be_results Results from perform_be_analysis containing ANOVA results
-#' @param parameters Vector of parameters to create diagnostics for (default: all available)
-#' @export
-plot_anova_diagnostics_static <- function(be_results, parameters = NULL) {
-  
-  if (!inherits(be_results, "bioeq")) {
-    stop("Input must be a bioeq object from perform_be_analysis")
-  }
-  
-  if (!is.null(be_results$anova_results)) {
-    anova_data <- be_results$anova_results
-  } else {
-    stop("No ANOVA results found in bioequivalence results")
-  }
-  
-  if (is.null(parameters)) {
-    parameters <- names(anova_data)
-  }
-  
-  # Filter for requested parameters
-  anova_data <- anova_data[parameters]
-  
-  if (length(anova_data) == 0) {
-    stop("No valid parameters found in ANOVA results")
-  }
-  
-  diagnostic_plots <- list()
-  
-  for (param in names(anova_data)) {
-    param_results <- anova_data[[param]]
-    
-    if (!is.null(param_results$residuals) && !is.null(param_results$fitted)) {
-      residuals <- param_results$residuals
-      fitted <- param_results$fitted
-      
-      # 1. Residuals vs Fitted
-      p1 <- ggplot(data.frame(Fitted = fitted, Residuals = residuals), aes(x = Fitted, y = Residuals)) +
-        geom_point(alpha = 0.6) +
-        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-        geom_smooth(method = "loess", se = FALSE, color = "blue") +
-        labs(title = paste("Residuals vs Fitted -", param),
-             x = "Fitted Values", y = "Residuals") +
-        theme_minimal()
-      
-      # 2. Q-Q Plot
-      if (length(residuals) > 2) {
-        # Calculate theoretical quantiles
-        n <- length(residuals)
-        theoretical <- qnorm((1:n - 0.5) / n)
-        sample_quantiles <- sort(residuals)
-        
-        p2 <- ggplot(data.frame(Theoretical = theoretical, Sample = sample_quantiles), aes(x = Theoretical, y = Sample)) +
-          geom_point(alpha = 0.6, color = "#E31A1C") +
-          geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
-          labs(title = paste("Q-Q Plot -", param),
-               x = "Theoretical Quantiles", y = "Sample Quantiles") +
-          theme_minimal()
-      } else {
-        p2 <- NULL
-      }
-      
-      # 3. Scale-Location Plot (sqrt(|residuals|) vs fitted)
-      sqrt_abs_residuals <- sqrt(abs(residuals))
-      p3 <- ggplot(data.frame(Fitted = fitted, `√|Residuals|` = sqrt_abs_residuals), aes(x = Fitted, y = `√|Residuals|`)) +
-        geom_point(alpha = 0.6, color = "#2E8B57") +
-        labs(title = paste("Scale-Location Plot -", param),
-             x = "Fitted Values", y = "√|Residuals|") +
-        theme_minimal()
-      
-      # Combine plots for this parameter
-      if (!is.null(p2)) {
-        diagnostic_plots[[param]] <- gridExtra::grid.arrange(p1, p2, p3, nrow = 2)
-      } else {
-        diagnostic_plots[[param]] <- p1
-      }
-    }
-  }
-  
-  # Arrange all diagnostic plots in a grid
-  gridExtra::grid.arrange(grobs = diagnostic_plots, ncol = 2)
-}
-
 #' Simple T/R ratio plot for individual subjects
 #'
 #' @param data Data frame with subject, treatment, and PK parameters
@@ -2386,9 +1074,10 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     ln_param <- paste0("ln", parameter)
     if (ln_param %in% names(data)) {
       param_name <- ln_param
-      cat("Using log-transformed parameter:", ln_param, "\n")
+      bioeq_log(sprintf("Using log-transformed parameter: %s", ln_param), "DEBUG")
     } else {
-      cat("Available columns:", paste(names(data), collapse = ", "), "\n")
+      bioeq_log(sprintf("Parameter not found: %s or %s - available columns: %s",
+                        parameter, ln_param, paste(names(data), collapse = ", ")), "ERROR")
       stop("Parameter not found: ", parameter, " or ", ln_param)
     }
   }
@@ -2402,7 +1091,7 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     # Get unique combinations (removes duplicate rows from concentration-time data)
     distinct(subject, treatment, .keep_all = TRUE)
   
-  cat("PK data after selecting unique combinations:", nrow(pk_data), "rows\n")
+  bioeq_log(sprintf("PK data after selecting unique combinations: %d rows", nrow(pk_data)), "DEBUG")
   
   # Convert to wide format: one row per subject with Test and Reference columns
   tr_data <- pk_data %>%
@@ -2413,8 +1102,8 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     ) %>%
     filter(!is.na(Test), !is.na(Reference))
   
-  cat("T/R data after reshaping:", nrow(tr_data), "subjects\n")
-  
+  bioeq_log(sprintf("T/R data after reshaping: %d subjects", nrow(tr_data)), "DEBUG")
+
   # Handle log-transformed data
   if (grepl("^ln", param_name)) {
     tr_data <- tr_data %>%
@@ -2423,11 +1112,11 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
         Ref_orig = exp(Reference),
         TR_Ratio = (Test_orig / Ref_orig) * 100
       )
-    cat("Used log-transformed data, converted to original scale\n")
+    bioeq_log("Used log-transformed data, converted to original scale", "DEBUG")
   } else {
     tr_data <- tr_data %>%
       mutate(TR_Ratio = (Test / Reference) * 100)
-    cat("Used original scale data\n")
+    bioeq_log("Used original scale data", "DEBUG")
   }
   
   # Apply subject ordering (preserve numerical ordering) - INCLUDE ALL SUBJECTS
@@ -2452,20 +1141,18 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
     tr_data <- tr_data %>%
       arrange(match(subject_numeric, final_order))
     
-    cat("Final subject order:", paste(final_order, collapse = ", "), "\n")
-    cat("Subjects after ordering:", paste(tr_data$subject_numeric, collapse = ", "), "\n")
+    bioeq_log(sprintf("Final subject order: %s", paste(final_order, collapse = ", ")), "DEBUG")
   } else {
     # Default: order ALL subjects numerically
     tr_data <- tr_data %>%
       arrange(subject_numeric)
-    
-    cat("Subjects ordered numerically:", paste(tr_data$subject_numeric, collapse = ", "), "\n")
   }
-  
+
   # Add plotting position
   tr_data$plot_position <- 1:nrow(tr_data)
-  
-  cat("Final plot data:", nrow(tr_data), "subjects\n")
+
+  bioeq_log(sprintf("Final plot data: %d subjects (order: %s)",
+                    nrow(tr_data), paste(tr_data$subject_numeric, collapse = ", ")), "DEBUG")
   
   if (nrow(tr_data) == 0) {
     stop("No data available for plotting after filtering")
@@ -2499,7 +1186,7 @@ create_simple_tr_plot <- function(data, parameter, subject_order = NULL) {
       plot.title = element_text(hjust = 0.5)
     )
   
-  cat("Plot created successfully\n")
+  bioeq_log("Plot created successfully", "DEBUG")
   return(p)
 }
 
@@ -2690,6 +1377,192 @@ create_lambda_z_regression_plots <- function(conc_data, nca_subject_data,
       axis.title = element_text(size = 9),
       plot.margin = margin(5, 5, 5, 5)
     )
-  
+
   return(p)
+}
+
+# =============================================================================
+# PLOT EXPORT HELPERS (Exports & Reports "Plot Exports (PDF)" card)
+# =============================================================================
+
+#' Prepare uploaded concentration-time data for the static export plots below:
+#' standardizes column names, maps Treatment T/R -> Test/Reference (needed for
+#' BIOEQ_COLORS lookups), and derives a TreatmentPeriod (T1/T2/R1/R2) label
+#' for replicate designs (>2 periods). This mirrors, line-for-line, the
+#' preprocessing block inside shiny/server/plots_server.R's generate_all_plots()
+#' reactive - kept as a separate function here (rather than refactoring that
+#' reactive) so the export handlers can reuse it without touching the live
+#' interactive Plots tab.
+#' @keywords internal
+.prepare_plot_data_for_export <- function(conc_data) {
+  col_mapping <- list(
+    "Time" = c("time", "Time", "TIME"),
+    "Concentration" = c("concentration", "Concentration", "CONCENTRATION", "conc", "Conc"),
+    "Subject" = c("subject", "Subject", "SUBJECT", "subj", "Subj", "ID", "id"),
+    "Treatment" = c("treatment", "Treatment", "TREATMENT", "formulation", "FORMULATION", "trt", "Trt")
+  )
+  data <- conc_data
+  for (std_name in names(col_mapping)) {
+    found <- intersect(col_mapping[[std_name]], names(conc_data))
+    if (length(found) > 0) names(data)[names(data) == found[1]] <- std_name
+  }
+
+  if ("Treatment" %in% names(data)) {
+    data$Treatment <- ifelse(data$Treatment == "T", "Test",
+                       ifelse(data$Treatment == "R", "Reference", data$Treatment))
+  }
+
+  if ("Period" %in% names(data) && length(unique(data$Period)) > 2) {
+    if ("Sequence" %in% names(data)) {
+      tp_map <- data %>%
+        dplyr::distinct(Sequence, Treatment, Period) %>%
+        dplyr::arrange(Sequence, Treatment, as.numeric(Period)) %>%
+        dplyr::group_by(Sequence, Treatment) %>%
+        dplyr::mutate(rep_num = dplyr::row_number()) %>%
+        dplyr::ungroup() %>%
+        dplyr::mutate(TreatmentPeriod = paste0(ifelse(Treatment == "Test", "T", "R"), rep_num)) %>%
+        dplyr::select(Sequence, Treatment, Period, TreatmentPeriod)
+      data <- dplyr::left_join(data, tp_map, by = c("Sequence", "Treatment", "Period"))
+    } else {
+      tp_map <- data %>%
+        dplyr::distinct(Treatment, Period) %>%
+        dplyr::arrange(Treatment, as.numeric(Period)) %>%
+        dplyr::group_by(Treatment) %>%
+        dplyr::mutate(rep_num = dplyr::row_number()) %>%
+        dplyr::ungroup() %>%
+        dplyr::mutate(TreatmentPeriod = paste0(ifelse(Treatment == "Test", "T", "R"), rep_num)) %>%
+        dplyr::select(Treatment, Period, TreatmentPeriod)
+      data <- dplyr::left_join(data, tp_map, by = c("Treatment", "Period"))
+    }
+  }
+
+  data
+}
+
+#' Derive a "nominal time" for mean-profile grouping from a vector of actual
+#' recorded sampling times. Real BE data often has a handful of points where
+#' the recorded time is the ACTUAL draw time rather than the planned/nominal
+#' one (e.g. 1.267 instead of 1.25, 4.351 instead of 4.334) - grouping a mean
+#' profile by exact Time then fragments each nominal timepoint into several
+#' near-singleton groups, producing a jagged/spiky mean line. There is no
+#' separate planned-time column in BioEQ's schema, so this reconstructs the
+#' nominal schedule from the data itself: distinct times within `tol` of each
+#' other (default 0.05h = 3 min - comfortably above realistic actual-time
+#' deviations, comfortably below the tightest real nominal spacing seen in
+#' practice, e.g. 15 min) are merged into one cluster, and each cluster's
+#' representative nominal time is whichever exact value occurs most often
+#' across the dataset (the value the majority of subjects actually hit).
+#' @param time_values Numeric vector of recorded times (with duplicates)
+#' @param tol Merge tolerance in the same units as `time_values` (hours)
+#' @return named numeric vector: as.character(actual time) -> nominal time
+#' @keywords internal
+.derive_nominal_time <- function(time_values, tol = 0.05) {
+  time_values <- time_values[!is.na(time_values)]
+  freq <- table(time_values)
+  u <- sort(unique(time_values))
+  if (length(u) <= 1) return(setNames(u, as.character(u)))
+
+  cluster_id <- cumsum(c(1L, diff(u) > tol))
+  nominal_by_cluster <- vapply(split(u, cluster_id), function(vals) {
+    counts <- freq[as.character(vals)]
+    as.numeric(names(counts)[which.max(counts)])
+  }, numeric(1))
+
+  lookup <- nominal_by_cluster[as.character(cluster_id)]
+  setNames(unname(lookup), as.character(u))
+}
+
+#' Build one or two static mean concentration-time profile plots for export.
+#' Always returns a pooled Test-vs-Reference mean plot. If `data` carries a
+#' TreatmentPeriod column (added by .prepare_plot_data_for_export() for
+#' replicate designs), also returns a second plot split by T1/T2/R1/R2.
+#' Points are grouped by NOMINAL time (see .derive_nominal_time()), not the
+#' exact recorded Time, so that actual-vs-planned sampling deviations don't
+#' fragment the mean into spurious near-duplicate points. Individual subject
+#' profiles (plot_individual_profiles_paginated()) intentionally keep the
+#' exact actual Time - only the mean is nominal-time-binned. No error
+#' bars/CI are drawn - just the mean line, to keep the plot readable.
+#' @param data Concentration-time data, already run through
+#'   .prepare_plot_data_for_export()
+#' @param log_scale Logical, whether to use natural log scale for concentration
+#' @param nominal_tol Merge tolerance (hours) for deriving nominal time - see
+#'   .derive_nominal_time()
+#' @return list of 1-2 ggplot objects, each a full standalone page
+#' @export
+plot_mean_profiles_export <- function(data, log_scale = FALSE, nominal_tol = 0.05) {
+  concentration_label <- getOption("bioeq.concentration.label", "Concentration (ng/mL)")
+  time_label <- getOption("bioeq.time.label", "Time (h)")
+  y_lab <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (natural log scale)") else concentration_label
+
+  nominal_map <- .derive_nominal_time(data$Time, tol = nominal_tol)
+  data$NominalTime <- unname(nominal_map[as.character(data$Time)])
+
+  build_one <- function(group_col, title_suffix) {
+    mean_data <- data %>%
+      dplyr::group_by(.data[[group_col]], NominalTime) %>%
+      dplyr::summarise(
+        Mean_Conc = mean(Concentration, na.rm = TRUE),
+        .groups = "drop"
+      )
+    names(mean_data)[names(mean_data) == group_col] <- "Group"
+    color_vals <- BIOEQ_COLORS[intersect(names(BIOEQ_COLORS), unique(mean_data$Group))]
+
+    p <- ggplot(mean_data, aes(x = NominalTime, y = Mean_Conc, color = Group)) +
+      geom_line(linewidth = 1.2) +
+      geom_point(size = 2) +
+      scale_color_manual(values = color_vals, name = NULL) +
+      labs(x = time_label, y = y_lab,
+           title = paste("Mean Concentration-Time Profile", title_suffix)) +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            plot.margin = margin(t = 10, r = 10, b = 40, l = 10, unit = "pt"))
+    if (log_scale) p <- p + scale_y_log10()
+    p
+  }
+
+  plots <- list(build_one("Treatment", "(Test vs. Reference, all periods pooled)"))
+  if ("TreatmentPeriod" %in% names(data) && !all(is.na(data$TreatmentPeriod))) {
+    plots[[length(plots) + 1]] <- build_one("TreatmentPeriod", "(T1 / T2 / R1 / R2)")
+  }
+  plots
+}
+
+#' Build one full-page ggplot per subject (not faceted/grouped with other
+#' subjects onto a shared page). Colors by TreatmentPeriod (T1/T2/R1/R2) when
+#' present (replicate design), else by Treatment (Test/Reference). Individual
+#' profiles intentionally keep the exact actual Time (see
+#' plot_mean_profiles_export(), which bins the mean to nominal time instead).
+#' @param data Concentration-time data, already run through
+#'   .prepare_plot_data_for_export()
+#' @param log_scale Logical, whether to use natural log scale for concentration
+#' @return list of ggplot objects, one per subject, one subject per page
+#' @export
+plot_individual_profiles_paginated <- function(data, log_scale = FALSE) {
+  concentration_label <- getOption("bioeq.concentration.label", "Concentration (ng/mL)")
+  time_label <- getOption("bioeq.time.label", "Time (h)")
+  y_lab <- if (log_scale) paste0(gsub(" \\(.*\\)", "", concentration_label), " (natural log scale)") else concentration_label
+
+  has_tp <- "TreatmentPeriod" %in% names(data) && !all(is.na(data$TreatmentPeriod))
+  color_col <- if (has_tp) "TreatmentPeriod" else "Treatment"
+
+  subjects <- unique(data$Subject)
+  subj_sort_key <- suppressWarnings(as.numeric(as.character(subjects)))
+  subjects <- if (!anyNA(subj_sort_key)) subjects[order(subj_sort_key)] else sort(subjects)
+
+  lapply(subjects, function(subj) {
+    subj_data <- data[data$Subject == subj, ]
+    color_vals <- BIOEQ_COLORS[intersect(names(BIOEQ_COLORS), unique(subj_data[[color_col]]))]
+
+    p <- ggplot(subj_data, aes(x = Time, y = Concentration, color = .data[[color_col]])) +
+      geom_line(linewidth = 0.8) +
+      geom_point(size = 1.5) +
+      scale_color_manual(values = color_vals, name = NULL) +
+      labs(x = time_label, y = y_lab,
+           title = paste("Individual Subject Profile - Subject", subj)) +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            plot.margin = margin(t = 10, r = 10, b = 40, l = 10, unit = "pt"))
+    if (log_scale) p <- p + scale_y_log10()
+    p
+  })
 }

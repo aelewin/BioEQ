@@ -45,9 +45,6 @@ anomaly_detection_server <- function(id, uploaded_data) {
       as.data.frame(d)
     })
 
-    # Treatment filter UI removed — all profiles included by default.
-    output$treatment_filter_ui <- renderUI({ NULL })
-
     # Filtered data: optionally drop zero/negative concentration points
     filtered_data <- reactive({
       d <- source_data()
@@ -168,9 +165,14 @@ anomaly_detection_server <- function(id, uploaded_data) {
           tags$li(strong("Cross-correlation lag:"), " the timepoint offset at which the two profiles best align."),
           tags$li(strong("Cross-correlation peak:"), " correlation at that optimal lag (must be > 0)."),
           tags$li(strong("shift_r\u00B2 (sort key):"), " r\u00B2 of the two profiles AFTER applying the optimal lag. ",
-                  "Only a true time-shifted copy gives shift_r\u00B2 \u2248 1; coincidental shape matches give shift_r\u00B2 << 1.")
+                  "Only a true time-shifted copy gives shift_r\u00B2 \u2248 1; coincidental shape matches give shift_r\u00B2 << 1."),
+          tags$li(strong("DTW distance / lag:"), " Dynamic Time Warping's own nonlinear best-alignment distance and ",
+                  "offset, shown alongside the cross-correlation columns as corroborating evidence \u2014 a small DTW ",
+                  "distance on a pair that already cleared the gate strengthens the case; it does not gate on its own.")
         ),
-        p(em("Gated to |lag| \u2265 1, peak > 0, and shift_r\u00B2 \u2265 0.90 so only genuine shifted copies appear."))
+        p(em("Gated to |lag| \u2265 1, peak > 0, and shift_r\u00B2 \u2265 0.90 so only genuine shifted copies appear. ",
+             "An empty table is the expected result for clean data \u2014 it means no pair matched this closely, ",
+             "not that the analysis failed."))
       ),
       dynamics = tagList(
         h4("Dynamic pattern match"),
@@ -219,6 +221,14 @@ anomaly_detection_server <- function(id, uploaded_data) {
       })
     })
 
+    # Batteries that gate rows to NA (only "lag" today) can legitimately
+    # return zero qualifying rows on clean data — that's a finding ("no
+    # matches this strict"), not a failure, so the empty-table message must
+    # say so rather than reading like the comparison didn't run.
+    gated_zero_message <- list(
+      lag = "No time-shifted duplicate pairs detected — 0 pairs met the |lag| ≥ 1, peak > 0, shift_r² ≥ 0.90 criteria. This is the expected result for clean data, not an error."
+    )
+
     output$pair_table <- DT::renderDataTable({
       pr <- pair_results()
       validate(need(!is.null(pr), "Choose a comparison and click 'Run Comparison'."))
@@ -239,10 +249,12 @@ anomaly_detection_server <- function(id, uploaded_data) {
       # Rename id1/id2 for display only (after index math)
       names(df)[names(df) == "id1"] <- "Profile 1"
       names(df)[names(df) == "id2"] <- "Profile 2"
+      zero_msg <- gated_zero_message[[pr$key]] %||% "No data available in table"
       DT::datatable(df, selection = "single", rownames = FALSE,
                     options = list(pageLength = 10, scrollX = TRUE,
                                    dom = "rtip",
-                                   order = list(list(score_idx, "desc")))) |>
+                                   order = list(list(score_idx, "desc")),
+                                   language = list(zeroRecords = zero_msg))) |>
         DT::formatRound(columns = num_cols, digits = 3)
     })
 

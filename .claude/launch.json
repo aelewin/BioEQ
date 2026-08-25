@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bioeq-shiny",
+      "runtimeExecutable": "R",
+      "runtimeArgs": ["-e", "shiny::runApp('shiny', host='127.0.0.1', port=4000)"],
+      "port": 4000
+    }
+  ]
+}

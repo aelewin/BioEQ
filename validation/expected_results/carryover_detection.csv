@@ -1,0 +1,7 @@
+parameter,scope,subject,treatment,expected_value,tolerance_type,tolerance_value,unit,reference_source,notes
+carryover_detected,subject,A,,FALSE,exact,,,"BioEQ detect_carryover() (R/carryover_detection.R)","Period 2 pre-dose (2) / Period 2 Cmax (1000) = 0.2%, well below the 5% threshold."
+percent_of_cmax,subject,A,,0.2,absolute,0.01,percent,"BioEQ detect_carryover() (R/carryover_detection.R)","2/1000*100 = 0.2%."
+carryover_detected,subject,B,,TRUE,exact,,,"BioEQ detect_carryover() (R/carryover_detection.R)","Period 2 pre-dose (80) / Period 2 Cmax (1000) = 8.0%, above the 5% threshold - flagged for exclusion."
+percent_of_cmax,subject,B,,8,absolute,0.01,percent,"BioEQ detect_carryover() (R/carryover_detection.R)","80/1000*100 = 8.0%."
+carryover_detected,subject,C,,FALSE,exact,,,"BioEQ detect_carryover() (R/carryover_detection.R)","Period 2 pre-dose (50) / Period 2 Cmax (1000) = exactly 5.0% - the rule requires STRICTLY greater than the threshold, so this boundary case is NOT flagged."
+percent_of_cmax,subject,C,,5,absolute,0.01,percent,"BioEQ detect_carryover() (R/carryover_detection.R)","50/1000*100 = 5.0% exactly (boundary case for the > vs >= rule)."

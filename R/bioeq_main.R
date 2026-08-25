@@ -31,12 +31,8 @@ NULL
   bioeq_version = "1.0.0",
   
   # Module settings
-  required_modules = c("utils.R", "nca_functions.R", "be_analysis.R", "statistics.R", "plotting.R"),
-  optional_modules = c(),
-  
-  # Demo settings
-  demo_cache_enabled = TRUE,
-  demo_cleanup_enabled = TRUE
+  required_modules = c("utils.R", "nca_functions.R", "nca_pknca.R", "be_analysis.R", "statistics.R", "plotting.R"),
+  optional_modules = c()
 )
 
 #' Get BioEQ Configuration
@@ -108,6 +104,26 @@ bioeq_log <- function(message, level = "INFO", use_emoji = NULL) {
   cat(prefix, message, "\n", sep = "")
 }
 
+#' Turn on DEBUG-level console logging
+#'
+#' The analysis pipeline routes internal diagnostics (column mappings, model
+#' fit internals, per-parameter variable checks, etc.) through bioeq_log(...,
+#' "DEBUG"), which is silent at the default log_level ("INFO"). Call this to
+#' bring those diagnostics back when troubleshooting; call bioeq_debug_off()
+#' to return to the quiet default.
+#' @export
+bioeq_debug_on <- function() {
+  set_bioeq_config("log_level", "DEBUG")
+  invisible(TRUE)
+}
+
+#' Turn off DEBUG-level console logging (back to the default)
+#' @export
+bioeq_debug_off <- function() {
+  set_bioeq_config("log_level", "INFO")
+  invisible(TRUE)
+}
+
 #' Progress Bar Helper
 #' @param total Total number of steps
 #' @param title Progress bar title
@@ -137,11 +153,14 @@ create_progress_bar <- function(total, title = "Progress") {
 #' Load Required Packages with Progress Indicator
 #' @keywords internal
 load_bioeq_dependencies <- function() {
-  required_packages <- c(
-    "nlme", "ggplot2", "dplyr", "reshape2", 
-    "plotrix", "ICSNP", "coin", "gdata", "png"
-  )
-  
+  # Trimmed to what R/ and shiny/ actually call (verified via repo-wide grep,
+  # 2026-08 dead code audit — see bioeq-dead-code-audit-2026-08 memory).
+  # plotrix/ICSNP/coin/gdata/reshape2/png were a stale hard requirement from
+  # an earlier version of the analysis code and are unused today; keeping
+  # them here made init_bioeq() fail outright on a machine that only has the
+  # Shiny app's own dependencies installed.
+  required_packages <- c("nlme", "ggplot2", "dplyr")
+
   optional_packages <- c("progress", "plotly")
   
   bioeq_log("Loading required packages...", "INFO")
@@ -248,10 +267,8 @@ init_bioeq <- function() {
 #' @export
 help_bioeq <- function() {
   cat("🧬 BioEQ - Available Functions:\n\n")
-  cat("📊 NON-COMPARTMENTAL ANALYSIS:\n")
-  cat("  • calculate_nca()     - Perform NCA analysis\n")
-  cat("  • estimate_lambda_z() - Lambda_z estimation\n")
-  cat("  • calculate_auc()     - AUC calculations\n\n")
+  cat("📊 NON-COMPARTMENTAL ANALYSIS (via the PKNCA package):\n")
+  cat("  • perform_nca_analysis() - AUC, Cmax/Tmax, lambda_z/half-life per profile\n\n")
   
   cat("🔬 BIOEQUIVALENCE ANALYSIS:\n")
   cat("  • perform_be_analysis() - Main BE analysis function\n")
@@ -266,9 +283,7 @@ help_bioeq <- function() {
   cat("  • confidence_intervals() - 90% CI calculation\n\n")
   
   cat("📋 DATA UTILITIES:\n")
-  cat("  • validate_be_data()  - Data validation (requires design)\n")
-  cat("  • format_be_data()    - Data formatting\n")
-  cat("  • load_example_data() - Load example datasets\n\n")
+  cat("  • validate_be_data()  - Data validation (requires design)\n\n")
   
   cat("📊 PLOTTING & REPORTING:\n")
   cat("  • plot_concentration_time() - Concentration-time plots\n")
@@ -321,250 +336,6 @@ analyze_be_study <- function(data, design = "2x2x2", alpha = 0.05, be_limits = c
   
   bioeq_log("Bioequivalence analysis completed!", "INFO")
   return(result)
-}
-
-# =============================================================================
-# DEMO FUNCTIONS
-# =============================================================================
-
-#' Run Basic Bioequivalence Demo
-#' @keywords internal
-run_basic_demo <- function() {
-  bioeq_log("Running basic bioequivalence analysis demo", "INFO")
-  
-  cat("📊 BASIC BIOEQUIVALENCE ANALYSIS DEMO\n")
-  cat("-------------------------------------\n")
-  
-  # Generate example data
-  demo_data <- load_example_data("standard_2x2x2")
-  cat("✓ Generated 2x2x2 crossover study data\n")
-  cat("  - Subjects:", demo_data$n_subjects, "\n")
-  cat("  - True ratio:", demo_data$true_ratio, "\n")
-  cat("  - CV:", demo_data$cv_intra, "\n\n")
-  
-  # Perform BE analysis
-  be_results <- perform_be_analysis(demo_data$pk_parameters, design = "2x2x2")
-  cat("✓ Bioequivalence analysis completed\n\n")
-  
-  # Show results summary
-  print(be_results)
-  
-  # Create plots
-  cat("\n📈 Creating visualization plots...\n")
-  conc_plot <- plot_concentration_time(demo_data$concentration_data, log_scale = TRUE)
-  ci_plot <- plot_be_confidence_intervals(be_results)
-  
-  cat("✓ Plots created successfully\n\n")
-  
-  # Cleanup if enabled
-  if (get_bioeq_config("demo_cleanup_enabled")) {
-    rm(demo_data, be_results, conc_plot, ci_plot, envir = parent.frame())
-    bioeq_log("Demo objects cleaned up", "DEBUG")
-  }
-}
-
-#' Run Sample Size Calculation Demo
-#' @keywords internal
-run_sample_size_demo <- function() {
-  bioeq_log("Running sample size calculation demo", "INFO")
-  
-  cat("🧮 SAMPLE SIZE CALCULATION DEMO\n")
-  cat("-------------------------------\n")
-  
-  cv_values <- c(0.15, 0.20, 0.25, 0.30)
-  cat("Sample size requirements for 80% power:\n")
-  
-  pb <- create_progress_bar(length(cv_values), "Sample size calculations")
-  
-  for (cv in cv_values) {
-    if (!is.null(pb)) pb$tick()
-    ss_result <- calculate_sample_size(cv = cv, power = 0.8, theta0 = 0.95)
-    # Handle different return value structures
-    n_value <- if ("n_per_group" %in% names(ss_result)) {
-      ss_result$n_per_group
-    } else if ("n_subjects" %in% names(ss_result)) {
-      ss_result$n_subjects
-    } else {
-      "Unknown"
-    }
-    cat(sprintf("  CV = %02.0f%%: n = %s per group\n", cv * 100, n_value))
-  }
-  cat("\n")
-}
-
-#' Run Advanced Analysis Demo
-#' @keywords internal
-run_advanced_demo <- function() {
-  bioeq_log("Running advanced analysis demo", "INFO")
-  
-  cat("🔬 ADVANCED ANALYSIS DEMO\n")
-  cat("-------------------------\n")
-  
-  # Replicate design demo
-  cat("📋 Replicate Design (2x2x4) Analysis:\n")
-  replicate_data <- generate_replicate_data(n_subjects = 24, cv_intra = 0.35, true_ratio = 0.90)
-  cat("  Generated", nrow(replicate_data$pk_parameters), "observations\n")
-  
-  replicate_results <- perform_be_analysis(replicate_data$pk_parameters, design = "replicate")
-  cat("  ✓ Replicate analysis completed (may use scaled BE limits)\n\n")
-  
-  # Parallel design demo
-  cat("📋 Parallel Design Analysis:\n")
-  parallel_data <- generate_parallel_data(n_per_group = 30, cv_inter = 0.25, true_ratio = 0.95)
-  cat("  Generated", nrow(parallel_data$pk_parameters), "subjects\n")
-  
-  parallel_results <- perform_be_analysis(parallel_data$pk_parameters, design = "parallel")
-  cat("  ✓ Parallel analysis completed\n\n")
-  
-  # Special scenarios
-  cat("📋 Special Scenarios:\n")
-  high_cv_data <- load_example_data("high_cv")
-  cat("✓ Generated high CV study data (CV =", high_cv_data$cv_intra, ")\n")
-  
-  failed_data <- load_example_data("failed_be")
-  cat("✓ Generated failed BE scenario (ratio =", failed_data$true_ratio, ")\n")
-  
-  cat("✓ Advanced scenarios ready for analysis\n\n")
-  
-  # Cleanup if enabled
-  if (get_bioeq_config("demo_cleanup_enabled")) {
-    rm(replicate_data, replicate_results, parallel_data, parallel_results, 
-       high_cv_data, failed_data, envir = parent.frame())
-    bioeq_log("Advanced demo objects cleaned up", "DEBUG")
-  }
-}
-
-#' Run BioEQ Demo
-#'
-#' @param demo_type Type of demo ("basic", "advanced", "sample_size", "all")
-#' @export
-run_bioeq_demo <- function(demo_type = "basic") {
-  # Input validation
-  valid_types <- c("basic", "advanced", "sample_size", "all")
-  if (!demo_type %in% valid_types) {
-    stop("demo_type must be one of: ", paste(valid_types, collapse = ", "))
-  }
-  
-  bioeq_log(paste("Starting BioEQ demo:", demo_type), "INFO")
-  
-  cat("🎬 BioEQ Demo:", demo_type, "\n")
-  cat("========================\n\n")
-  
-  if (demo_type %in% c("basic", "all")) {
-    run_basic_demo()
-  }
-  
-  if (demo_type %in% c("sample_size", "all")) {
-    run_sample_size_demo()
-  }
-  
-  if (demo_type %in% c("advanced", "all")) {
-    run_advanced_demo()
-  }
-  
-  cat("🎯 Demo completed! Use the generated data for further analysis.\n")
-  bioeq_log("Demo completed successfully", "INFO")
-}
-
-#' Test BioEQ Installation
-#'
-#' @export
-test_bioeq <- function() {
-  cat("🧪 Testing BioEQ Installation\n")
-  cat("=============================\n\n")
-  
-  tests_passed <- 0
-  total_tests <- 0
-  
-  # Test 1: Load modules
-  total_tests <- total_tests + 1
-  tryCatch({
-    source_bioeq_modules()
-    cat("✅ Test 1: Module loading - PASSED\n")
-    tests_passed <- tests_passed + 1
-  }, error = function(e) {
-    cat("❌ Test 1: Module loading - FAILED\n")
-    cat("   Error:", e$message, "\n")
-  })
-  
-  # Test 2: Generate example data
-  total_tests <- total_tests + 1
-  tryCatch({
-    test_data <- generate_2x2x2_data(n_subjects = 12)
-    cat("✅ Test 2: Data generation - PASSED\n")
-    tests_passed <- tests_passed + 1
-  }, error = function(e) {
-    cat("❌ Test 2: Data generation - FAILED\n")
-    cat("   Error:", e$message, "\n")
-  })
-  
-  # Test 3: NCA calculations
-  total_tests <- total_tests + 1
-  tryCatch({
-    time <- c(0, 1, 2, 4, 8, 12, 24)
-    conc <- c(0, 100, 150, 120, 80, 40, 10)
-    auc <- calculate_auc_trap(time, conc)
-    if (is.numeric(auc) && auc > 0) {
-      cat("✅ Test 3: NCA calculations - PASSED\n")
-      tests_passed <- tests_passed + 1
-    } else {
-      cat("❌ Test 3: NCA calculations - FAILED (invalid result)\n")
-    }
-  }, error = function(e) {
-    cat("❌ Test 3: NCA calculations - FAILED\n")
-    cat("   Error:", e$message, "\n")
-  })
-  
-  # Test 4: BE analysis
-  total_tests <- total_tests + 1
-  tryCatch({
-    if (exists("test_data")) {
-      be_result <- perform_be_analysis(test_data$pk_parameters, design = "2x2x2")
-      if (inherits(be_result, "bioeq")) {
-        cat("✅ Test 4: BE analysis - PASSED\n")
-        tests_passed <- tests_passed + 1
-      } else {
-        cat("❌ Test 4: BE analysis - FAILED (invalid result)\n")
-      }
-    } else {
-      cat("❌ Test 4: BE analysis - SKIPPED (no test data)\n")
-    }
-  }, error = function(e) {
-    cat("❌ Test 4: BE analysis - FAILED\n")
-    cat("   Error:", e$message, "\n")
-  })
-  
-  # Test 5: Statistical functions
-  total_tests <- total_tests + 1
-  tryCatch({
-    ss_result <- calculate_sample_size(cv = 0.25, power = 0.8)
-    if (is.list(ss_result) && "n_subjects" %in% names(ss_result)) {
-      cat("✅ Test 5: Statistical functions - PASSED\n")
-      tests_passed <- tests_passed + 1
-    } else {
-      cat("❌ Test 5: Statistical functions - FAILED (invalid result)\n")
-    }
-  }, error = function(e) {
-    cat("❌ Test 5: Statistical functions - FAILED\n")
-    cat("   Error:", e$message, "\n")
-  })
-  
-  # Summary
-  cat("\n📊 Test Summary\n")
-  cat("---------------\n")
-  cat("Tests passed:", tests_passed, "/", total_tests, "\n")
-  
-  if (tests_passed == total_tests) {
-    cat("🎉 All tests PASSED! BioEQ is ready to use.\n")
-  } else {
-    cat("⚠️  Some tests FAILED. Check the errors above.\n")
-  }
-  
-  return(list(
-    tests_passed = tests_passed,
-    total_tests = total_tests,
-    success_rate = tests_passed / total_tests
-  ))
 }
 
 # Auto-initialize when sourced

@@ -15,15 +15,23 @@
 #
 # Regulatory constants:
 #   - θ_s = ln(1.25)/σ_w0 = 0.2231/0.25 ≈ 0.8924 (FDA scaling proportionality constant)
-#   - σ_w0 = 0.25 (FDA regulatory cutoff SD, s²_w0 = 0.0625, CV_wR ≈ 25.4%)
+#   - σ_w0 = 0.25 — the criterion constant used INSIDE the scaled-limits
+#     formula only (s²_w0 = 0.0625, CV ≈ 25.4%). This is NOT the switching
+#     threshold that decides whether RSABE scaling applies to a drug — that
+#     decision uses a separate, higher threshold: s_wR ≥ 0.294 (CV_wR ≈ 30%,
+#     s²_wR ≈ 0.0864). See s_wR_switch / s2_wR_switch below, where that
+#     threshold is actually applied.
 #   - Point estimate constraint: 80-125% (FDA requirement)
 #
 # The linearized criterion: η = d² − θ²_s · σ²_wR
-#   At the switching boundary (σ_wR = σ_w0 = 0.25):
+#   Evaluated at σ_wR = σ_w0 = 0.25, the formula's scaled limits happen to
+#   collapse exactly to standard ABE limits — a mathematical property of the
+#   constant, not the switching decision itself:
 #     θ_s · σ_w0 = 0.8924 × 0.25 = 0.2231 = ln(1.25)
-#     → scaled limits collapse to standard ABE limits: exp(±0.2231) = [80%, 125%]
-#   When σ_wR > σ_w0 (HV drug):
-#     θ_s · σ_wR > ln(1.25) → limits expand beyond 80-125%
+#     → exp(±0.2231) = [80%, 125%]
+#   When σ_wR > σ_w0, θ_s · σ_wR > ln(1.25) → the formula's limits mathematically
+#   expand beyond 80-125% — but RSABE scaling is only actually applied once
+#   σ_wR reaches the real switching threshold, σ_wR ≥ 0.294.
 #
 # =============================================================================
 
@@ -75,15 +83,16 @@ hedges_correction <- function(df) {
 #' formulas retain the z terms.
 #'
 #' @param design_info Design info from detect_replicate_design()
-#' @param isc_result ISC variance results (provides s2_wR, s2_wT, n_R, n_T)
+#' @param refvar_result Reference/Test intra-subject variance results, from
+#'   compute_reference_anova_variance() (provides s2_wR, s2_wT, n_R, n_T)
 #' @return List with K, z, df_nct (degrees of freedom for noncentral t)
 #' @export
-compute_K_constant <- function(design_info, isc_result) {
+compute_K_constant <- function(design_info, refvar_result) {
   
-  s2_wR <- isc_result$s2_wR
-  s2_wT <- isc_result$s2_wT
-  n_R <- isc_result$n_R  # Number of subjects with replicated R
-  n_T <- isc_result$n_T  # Number of subjects with replicated T
+  s2_wR <- refvar_result$s2_wR
+  s2_wT <- refvar_result$s2_wT
+  n_R <- refvar_result$n_R  # Number of subjects with replicated R
+  n_T <- refvar_result$n_T  # Number of subjects with replicated T
   
   design_type <- design_info$design_type
   n_total <- design_info$n_subjects_total
@@ -95,10 +104,10 @@ compute_K_constant <- function(design_info, isc_result) {
   # assume homoscedasticity (z = 1) in that case.
   if (!is.na(s2_wT) && s2_wR > 0 && s2_wT > 0) {
     z <- sqrt(s2_wT / s2_wR)
-    cat(sprintf("    Heteroscedasticity ratio: z = s_WT/s_WR = %.4f\n", z))
+    bioeq_log(sprintf("Heteroscedasticity ratio z = s_WT/s_WR = %.4f", z), "DEBUG")
   } else {
     z <- 1.0
-    cat("    Assuming homoscedasticity (z = 1) — s²_wT not available\n")
+    bioeq_log("Assuming homoscedasticity (z=1) - s2_wT not available", "DEBUG")
   }
   
   z2 <- z^2
@@ -156,7 +165,7 @@ compute_K_constant <- function(design_info, isc_result) {
       K <- sqrt((z2 + 0.5) / n_per_seq)
       # df for s_WR: only subjects in sequences with replicated R
       # In TRR/RTR/RRT, 2 out of 3 sequences have replicated R
-      # df = n_R (from ISC, already computed correctly)
+      # df = n_R (already computed correctly by compute_reference_anova_variance())
       df_nct <- n_R
     } else {
       n_per_seq <- n_total / 3
@@ -181,7 +190,7 @@ compute_K_constant <- function(design_info, isc_result) {
       K <- sqrt(0.75 * (z2 + 1) / n_per_seq)
       # For TRT/RTR, s_WR comes from RTR sequence only
       # df = number of subjects in the sequence with replicated R minus 1
-      # The ISC already handles this — use n_R from ISC
+      # compute_reference_anova_variance() already handles this — use its n_R
       df_nct <- n_R
     } else {
       n_per_seq <- n_total / 2
@@ -197,15 +206,13 @@ compute_K_constant <- function(design_info, isc_result) {
     # This works for any design but requires the ANOVA SE to be trustworthy.
     # -----------------------------------------------------------------------
     design_label <- "Generic (K estimated from SE_d / s_WR)"
-    cat("    ⚠️  Unknown design type for K constant — estimating from SE_d/s_WR\n")
+    bioeq_log("Unknown design type for K constant - estimating from SE_d/s_WR", "WARNING")
     K <- NA_real_  # Will be filled in by the caller from SE_d / s_WR
     df_nct <- n_R  # Best available DF for s_WR
   }
-  
-  cat(sprintf("    Design: %s\n", design_label))
-  if (!is.na(K)) {
-    cat(sprintf("    K = %.6f, df_nct = %d\n", K, df_nct))
-  }
+
+  bioeq_log(sprintf("Design: %s%s", design_label,
+                     if (!is.na(K)) sprintf(" | K=%.6f, df_nct=%d", K, df_nct) else ""), "DEBUG")
   
   return(list(
     K = K,
@@ -216,136 +223,167 @@ compute_K_constant <- function(design_info, isc_result) {
 }
 
 
+
+
 # =============================================================================
-# SECTION 1: VARIANCE ESTIMATION (Intra-Subject Contrasts)
+# SECTION 1B: FDA GUIDANCE — PER-SUBJECT REFERENCE-SCALED CONTRASTS
+# =============================================================================
+#
+# The FDA's own worked example (Progesterone Capsules product-specific
+# guidance, "Method for Statistical Analysis Using the Reference-Scaled
+# Average Bioequivalence Approach," Recommended Apr 2010 / Revised Feb 2011)
+# does NOT fit a multi-term ANOVA on the raw per-period observations for
+# either the treatment-effect estimate or s²_wR. It first collapses each
+# subject's data to two per-subject derived quantities:
+#
+#   D_ij = R_ij1 - R_ij2          (a subject's two Reference replicates,
+#                                   differenced; chronological order)
+#   I_ij = T_ij - (R_ij1+R_ij2)/2  (partial replicate, one Test period), or
+#   I_ij = (T_ij1+T_ij2)/2 - (R_ij1+R_ij2)/2 (full replicate, two Test periods)
+#
+# and then fits a SINGLE-TERM model, `~ Sequence` only, on each of I and D
+# (PROC GLM for the partial 3-way example; PROC MIXED with DDFM=SATTERTH but
+# no RANDOM/REPEATED statement for the full 4-way example — with no random
+# effect declared, PROC MIXED's REML residual variance is numerically
+# identical to PROC GLM's OLS residual MS here, so both collapse to the same
+# `lm(~ Sequence)` computation in R). Only subjects with >=2 valid Reference
+# observations contribute (this is also how the FDA guidance's 2x2x3
+# TRT/RTR design note — "s_wR comes from RTR sequence only" — falls out
+# automatically, with no separate design-specific branch needed).
+#
+# This function builds those per-subject I/D pairs generically for any
+# replicate design (2x3x3 partial, 2x2x4 full, 2x2x3, or an arbitrary
+# multi-sequence variant), and — where a subject also has 2 Test periods —
+# the analogous Test-side contrast D_T = T_ij1 - T_ij2, used only to obtain
+# s²_wT/df_wT for the heteroscedasticity ratio (compute_K_constant()); it
+# plays no role in the FDA guidance's own worked example, which is silent on
+# s²_wT entirely.
 # =============================================================================
 
-#' Compute Intra-Subject Contrasts (ISC) for Variance Estimation
-#' 
-#' ISC avoids convergence issues with mixed models by computing 
-#' within-subject differences directly. FDA-preferred approach.
-#' 
-#' For full replicate (2x2x4, e.g., TRTR/RTRT):
-#'   d_Ri = (R_period1 - R_period2) for each subject i
-#'   d_Ti = (T_period1 - T_period2) for each subject i
-#'   s²_wR = (1/(2*n_R)) * Σ d²_Ri
-#'   s²_wT = (1/(2*n_T)) * Σ d²_Ti
-#'   df_wR = n_R, df_wT = n_T
+#' Build Per-Subject Reference-Scaled Contrasts (FDA Guidance Method)
 #'
-#' For partial replicate (2x2x3, e.g., TRR/RTR):
-#'   Only reference is replicated:
-#'   d_Ri = R_1 - R_2 for each subject with two R periods
-#'   s²_wR = (1/(2*n_R)) * Σ d²_Ri
-#'   df_wR = n_R
-#'   s²_wT cannot be estimated from partial replicate
-#'
-#' @param data Data frame with Subject, Treatment, Period, Sequence columns
-#'        and the PK parameter column (log-transformed)
+#' @param data Data frame with Subject, Sequence, Period, Treatment, and the
+#'   log-transformed parameter column
 #' @param param_col Name of the log-transformed parameter column
-#' @return List with s2_wR, s2_wT, df_wR, df_wT, individual contrasts
+#' @return Data frame with one row per qualifying subject: Subject, Sequence,
+#'   I (treatment contrast), D (Reference replicate difference), D_T
+#'   (Test replicate difference, NA unless the subject has 2 Test periods)
 #' @export
-compute_isc_variance <- function(data, param_col) {
-  
-  cat("  📊 Computing Intra-Subject Contrasts (ISC)...\n")
-  
-  # Ensure proper types
-  data$Subject <- as.character(data$Subject)
-  data$Treatment <- as.character(data$Treatment)
-  data$Period <- as.character(data$Period)
-  
-  # Separate Reference and Test observations
-  ref_data <- data[data$Treatment == "R", ]
-  test_data <- data[data$Treatment == "T", ]
-  
-  # ---- Reference within-subject variance ----
-  # Group by subject, compute contrasts for subjects with >= 2 reference periods
-  ref_by_subject <- split(ref_data, ref_data$Subject)
-  
-  ref_contrasts <- c()
-  ref_subjects_used <- c()
-  
-  for (subj in names(ref_by_subject)) {
-    subj_ref <- ref_by_subject[[subj]]
-    if (nrow(subj_ref) >= 2) {
-      # Sort by period to ensure consistent ordering
-      subj_ref <- subj_ref[order(subj_ref$Period), ]
-      vals <- subj_ref[[param_col]]
-      
-      if (all(!is.na(vals))) {
-        # Contrast: difference between replicate administrations
-        d_R <- vals[1] - vals[2]
-        ref_contrasts <- c(ref_contrasts, d_R)
-        ref_subjects_used <- c(ref_subjects_used, subj)
-      }
+build_rsabe_subject_contrasts <- function(data, param_col,
+                                           subject_col = "Subject",
+                                           sequence_col = "Sequence",
+                                           period_col = "Period",
+                                           treatment_col = "Treatment") {
+
+  data <- data[!is.na(data[[param_col]]), ]
+  trt_upper <- toupper(as.character(data[[treatment_col]]))
+  is_ref  <- trt_upper %in% c("R", "REFERENCE", "REF")
+  is_test <- trt_upper %in% c("T", "TEST")
+
+  subjects <- unique(as.character(data[[subject_col]]))
+  out <- vector("list", length(subjects))
+  k <- 0L
+
+  for (subj in subjects) {
+    sd_mask <- as.character(data[[subject_col]]) == subj
+    r_rows <- data[sd_mask & is_ref, , drop = FALSE]
+    t_rows <- data[sd_mask & is_test, , drop = FALSE]
+
+    if (nrow(r_rows) < 2) next  # needs a replicated Reference to contribute
+
+    r_rows <- r_rows[order(r_rows[[period_col]]), ]
+    R1 <- r_rows[[param_col]][1]
+    R2 <- r_rows[[param_col]][2]
+
+    if (nrow(t_rows) >= 2) {
+      t_rows <- t_rows[order(t_rows[[period_col]]), ]
+      T1 <- t_rows[[param_col]][1]
+      T2 <- t_rows[[param_col]][2]
+      T_mean <- (T1 + T2) / 2
+      D_T <- T1 - T2
+    } else if (nrow(t_rows) == 1) {
+      T_mean <- t_rows[[param_col]][1]
+      D_T <- NA_real_
+    } else {
+      next  # no Test observation at all — can't form I_ij
     }
+
+    seq_val <- as.character(r_rows[[sequence_col]][1])
+    k <- k + 1L
+    out[[k]] <- data.frame(
+      Subject = subj, Sequence = seq_val,
+      I = T_mean - (R1 + R2) / 2,
+      D = R1 - R2,
+      D_T = D_T,
+      stringsAsFactors = FALSE
+    )
   }
-  
-  n_R <- length(ref_contrasts)
-  
-  if (n_R < 2) {
-    stop("Insufficient Reference replicates for ISC variance estimation. ",
-         "Need at least 2 subjects with replicated Reference periods. Found: ", n_R)
-  }
-  
-  # s²_wR = (1/(2*n_R)) * Σ d²_Ri
-  s2_wR <- sum(ref_contrasts^2) / (2 * n_R)
-  df_wR <- n_R  # degrees of freedom
-  
-  # CV_wR from variance: CV = sqrt(exp(s²_w) - 1) * 100
-  cv_wR <- sqrt(exp(s2_wR) - 1) * 100
-  
-  cat(sprintf("    Reference: n_R=%d, s²_wR=%.6f, CV_wR=%.2f%%\n", n_R, s2_wR, cv_wR))
-  
-  # ---- Test within-subject variance ----
-  test_by_subject <- split(test_data, test_data$Subject)
-  
-  test_contrasts <- c()
-  test_subjects_used <- c()
-  
-  for (subj in names(test_by_subject)) {
-    subj_test <- test_by_subject[[subj]]
-    if (nrow(subj_test) >= 2) {
-      subj_test <- subj_test[order(subj_test$Period), ]
-      vals <- subj_test[[param_col]]
-      
-      if (all(!is.na(vals))) {
-        d_T <- vals[1] - vals[2]
-        test_contrasts <- c(test_contrasts, d_T)
-        test_subjects_used <- c(test_subjects_used, subj)
-      }
-    }
-  }
-  
-  n_T <- length(test_contrasts)
-  s2_wT <- NA
-  df_wT <- NA
-  cv_wT <- NA
-  is_partial <- (n_T < 2)
-  
-  if (n_T >= 2) {
-    s2_wT <- sum(test_contrasts^2) / (2 * n_T)
-    df_wT <- n_T
-    cv_wT <- sqrt(exp(s2_wT) - 1) * 100
-    cat(sprintf("    Test: n_T=%d, s²_wT=%.6f, CV_wT=%.2f%%\n", n_T, s2_wT, cv_wT))
-  } else {
-    cat(sprintf("    Test: n_T=%d (partial replicate — s²_wT not estimable)\n", n_T))
-  }
-  
-  return(list(
-    s2_wR = s2_wR,
-    s2_wT = s2_wT,
-    cv_wR = cv_wR,
-    cv_wT = cv_wT,
-    df_wR = df_wR,
-    df_wT = df_wT,
-    n_R = n_R,
-    n_T = n_T,
-    ref_contrasts = ref_contrasts,
-    test_contrasts = test_contrasts,
-    ref_subjects = ref_subjects_used,
-    test_subjects = test_subjects_used,
-    is_partial_replicate = is_partial
-  ))
+
+  out <- out[seq_len(k)]
+  if (length(out) == 0) return(NULL)
+  do.call(rbind, out)
+}
+
+
+#' Fit the FDA Guidance's Sequence-Only Model for the I_ij Contrast
+#'
+#' Reproduces SAS's `proc glm; class seq; model ilat=seq; estimate 'average'
+#' intercept 1 seq (1/m ... 1/m);` (partial replicate) / the equivalent
+#' `proc mixed ... ddfm=satterth` call with no RANDOM/REPEATED statement
+#' (full replicate) — an EQUALLY-WEIGHTED marginal mean of I across Sequence
+#' levels (not the raw sample mean, which would over-weight larger
+#' sequences), with its SE and CI obtained directly from the linear model's
+#' variance-covariance matrix via the averaging contrast.
+#'
+#' @param values Numeric vector of per-subject I_ij values
+#' @param sequence Character/factor vector of each subject's Sequence
+#' @param alpha One-sided alpha (default 0.05 -> 90% two-sided CI, matching
+#'   the FDA guidance's `alpha=0.1` CLPARM call)
+#' @return List with estimate, se, df, ci_lower, ci_upper, model
+#' @export
+fit_rsabe_seq_mean <- function(values, sequence, alpha = 0.05) {
+  seqf <- factor(sequence)
+  df_fit <- data.frame(y = values, seq = seqf)
+  model <- lm(y ~ seq, data = df_fit)
+  df_resid <- df.residual(model)
+
+  levs <- levels(seqf)
+  newdata <- data.frame(seq = factor(levs, levels = levs))
+  X <- model.matrix(~seq, data = newdata)
+  Xavg <- colMeans(X)  # equal 1/m weight per Sequence level
+
+  estimate <- as.numeric(Xavg %*% coef(model))
+  se <- as.numeric(sqrt(t(Xavg) %*% vcov(model) %*% Xavg))
+  t_crit <- qt(1 - alpha, df_resid)
+
+  list(
+    estimate = estimate, se = se, df = as.integer(df_resid),
+    ci_lower = estimate - t_crit * se, ci_upper = estimate + t_crit * se,
+    model = model
+  )
+}
+
+
+#' Fit the FDA Guidance's Sequence-Only Model for the D_ij Contrast
+#'
+#' Reproduces SAS's `proc glm; class seq; model dlat=seq;` (partial
+#' replicate) / `proc mixed ... ddfm=satterth` with no RANDOM/REPEATED
+#' statement (full replicate) — both reduce to an ordinary `lm(D ~ Sequence)`
+#' since there is no random effect to estimate (each subject contributes
+#' exactly one D value). Var(D_ij) = 2*sigma^2_wR (difference of two iid
+#' replicate measurements), so s²_wR = Residual Mean Sq / 2.
+#'
+#' @param values Numeric vector of per-subject D_ij (or D_T) values
+#' @param sequence Character/factor vector of each subject's Sequence
+#' @return List with s2 (=s²_wR or s²_wT), df, model
+#' @export
+fit_rsabe_seq_variance <- function(values, sequence) {
+  seqf <- factor(sequence)
+  model <- lm(values ~ seqf)
+  at <- anova(model)
+  s2 <- at["Residuals", "Mean Sq"] / 2
+  dfw <- at["Residuals", "Df"]
+  list(s2 = s2, df = as.integer(dfw), model = model)
 }
 
 
@@ -364,8 +402,6 @@ compute_isc_variance <- function(data, param_col) {
 #' @return List with d_hat (treatment diff), se_d, df_d, model details
 #' @export
 fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
-  
-  cat(sprintf("  🔧 Fitting %s model for treatment effect...\n", anova_model))
   
   # Prepare data
   model_data <- data[!is.na(data[[param_col]]), ]
@@ -389,32 +425,51 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
   # Response variable
   model_data$y <- model_data[[param_col]]
   
+  # Comprehensive SAS-style ANOVA breakdown (Sequence/Subject(Sequence)/Period/
+  # Treatment/Residual, Type III SS, plus the Subject(Seq)-as-error-term test for
+  # Sequence) — a parallel/accompanying table alongside RSABE's own Howe UCB /
+  # ncTOST / ISC-based scaling decision (which is computed separately, unaffected
+  # by this). Reuses the exact same builder ABE's perform_simple_anova() uses, so
+  # the underlying model always determines it — never independently recomputed.
+  anova_comprehensive <- NULL
+  subj_seq_analysis <- NULL
+  type3_ss <- NULL
+
   if (anova_model == "fixed") {
     # Fixed effects model: y ~ seq + subj:seq + prd + drug
     model <- lm(y ~ seq + subj:seq + prd + drug, data = model_data, na.action = na.omit)
     model_summary <- summary(model)
     anova_table <- anova(model)
-    
+
     coeffs <- coef(model)
     if (!(drug_coef_name %in% names(coeffs))) {
       stop("Treatment coefficient '", drug_coef_name, "' not found in model")
     }
-    
+
     d_hat <- coeffs[[drug_coef_name]]
     se_d <- model_summary$coefficients[drug_coef_name, "Std. Error"]
     df_d <- anova_table["Residuals", "Df"]
     residual_mse <- anova_table["Residuals", "Mean Sq"]
-    
-    cat(sprintf("    Fixed model: d̂=%.6f, SE=%.6f, df=%d\n", d_hat, se_d, df_d))
-    
+
+    bioeq_log(sprintf("Fixed model: d_hat=%.6f, SE=%.6f, df=%d", d_hat, se_d, df_d), "DEBUG")
+
+    built <- tryCatch(build_crossover_anova_tables(model), error = function(e) NULL)
+    if (!is.null(built)) {
+      anova_comprehensive <- built$comprehensive_anova
+      subj_seq_analysis <- built$subj_seq_analysis
+    }
+
   } else {
     # Mixed effects model using nlme
-    # Note: RSABE only supports fixed and nlme. If user selected satterthwaite or 
-    # kenward-roger, map to nlme with a warning (RSABE variance estimation uses ISC
-    # not the ANOVA model, so the DF approximation method is less critical here).
+    # Note: RSABE only supports fixed and nlme. If user selected satterthwaite or
+    # kenward-roger, map to nlme with a warning (RSABE's intra-subject reference
+    # variance is estimated via a separate Reference-only ANOVA — see
+    # compute_reference_anova_variance() — not this treatment-effect model, so
+    # the DF approximation method chosen here is less critical).
     if (anova_model %in% c("satterthwaite", "kenward-roger")) {
-      cat(sprintf("    ⚠️  RSABE does not support '%s' DF approximation. Using nlme (REML) instead.\n", anova_model))
-      cat("    Note: RSABE variance is estimated via ISC, not from the ANOVA model.\n")
+      bioeq_log(sprintf(
+        "RSABE does not support '%s' DF approximation - using nlme (REML) instead (s2_wR/CVwR come from a separate Reference-only ANOVA, not this model)",
+        anova_model), "WARNING")
     }
     
     if (!requireNamespace("nlme", quietly = TRUE)) {
@@ -440,13 +495,30 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
     residual_mse <- model_summary$sigma^2
     
     anova_table <- anova(model)
-    
-    cat(sprintf("    Mixed model: d̂=%.6f, SE=%.6f, df=%d\n", d_hat, se_d, df_d))
+
+    # Type III (marginal) tests of fixed effects — the mixed-model equivalent of
+    # the fixed branch's comprehensive table above (SAS PROC MIXED "Type 3 Tests
+    # of Fixed Effects"): Sequence, Period, Treatment each with numDF/denDF/F/p.
+    type3_ss <- tryCatch(anova(model, type = "marginal"), error = function(e) anova_table)
+
+    bioeq_log(sprintf("Mixed model: d_hat=%.6f, SE=%.6f, df=%d", d_hat, se_d, df_d), "DEBUG")
   }
-  
+
   # Point estimate (geometric mean ratio)
   pe_ratio <- exp(d_hat) * 100  # as percentage
-  
+
+  # Least-squares means for Reference and Test — the population-average log-scale
+  # mean for each treatment from this SAME model, marginalized over seq/period
+  # (and, for the fixed model, the subj:seq nesting) via emmeans. By construction
+  # LSMean(Test) - LSMean(Reference) equals d_hat exactly; this just makes the
+  # two individual means visible (and their geometric-mean back-transforms),
+  # matching how SAS PROC GLM/MIXED reports FORM LSMEANs alongside the estimate.
+  drug_levels <- levels(model_data$drug)
+  lsmeans_result <- compute_lsmeans_ci(model, drug_levels[1], drug_levels[2], level = 0.90)
+  if (is.null(lsmeans_result)) {
+    bioeq_log("Could not compute LSMeans via emmeans", "WARNING")
+  }
+
   return(list(
     d_hat = d_hat,
     se_d = se_d,
@@ -455,6 +527,10 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
     residual_mse = residual_mse,
     model = model,
     anova_table = anova_table,
+    anova_comprehensive = anova_comprehensive,
+    subj_seq_analysis = subj_seq_analysis,
+    type3_ss = type3_ss,
+    lsmeans_result = lsmeans_result,
     anova_model = anova_model,
     drug_coef_name = drug_coef_name,
     n_observations = nrow(model_data),
@@ -467,152 +543,102 @@ fit_rsabe_model <- function(data, param_col, anova_model = "fixed") {
 # SECTION 3: FDA LINEARIZED SCALED CRITERION (Howe UCB)
 # =============================================================================
 
-#' FDA Linearized RSABE Test
+#' FDA Linearized RSABE Test (Howe UCB)
 #'
-#' The linearized criterion is:
-#'   η = d² − θ²_s · s²_wR
-#' where:
-#'   d = μ_T − μ_R (log-scale treatment difference)
-#'   θ_s = ln(1.25)/σ_w0 = 0.2231/0.25 ≈ 0.8924
-#'   s²_wR = within-subject variance for Reference
+#' Reproduces the exact worked example in FDA's Progesterone Capsules
+#' product-specific guidance ("Method for Statistical Analysis Using the
+#' Reference-Scaled Average Bioequivalence Approach," Recommended Apr 2010 /
+#' Revised Feb 2011), verified line-by-line against that guidance's SAS code
+#' for both the partial-replicate (3-way, PROC GLM) and full-replicate
+#' (4-way, PROC MIXED) examples:
 #'
-#' If η ≤ 0, the test product is within the scaled limits.
-#' The 95% upper confidence bound (UCB) of η is computed using
-#' the Howe approximation.
+#'   x       = d̂² − SE_d²                         (bias-corrected point
+#'                                                   estimate of d²; d̂² alone
+#'                                                   is a biased estimator
+#'                                                   since E[d̂²]=d²+Var(d̂))
+#'   boundx  = max(|d̂ − t·SE_d|, |d̂ + t·SE_d|)²   (90% two-sided CI on d̂,
+#'                                                   i.e. t = t_{1-α,df_d},
+#'                                                   squared at whichever
+#'                                                   bound is farther from 0)
+#'   y       = −θ² · s²_wR
+#'   boundy  = y · df_wR / χ²_{1-α,df_wR}           (UPPER chi-square
+#'                                                   percentile in the
+#'                                                   denominator — SAS
+#'                                                   `cinv(0.95, df)`)
+#'   critbound (UCB) = (x+y) + sqrt((boundx−x)² + (boundy−y)²)
 #'
-#' Howe UCB:
-#'   UCB = d² − t²_α · SE²_d + θ²_s · s²_wR · (df_wR / χ²_{α,df_wR} − 1)
-#'         + max(0, d² − t²_α · SE²_d) - if using exact Howe
+#' RSABE is demonstrated if critbound ≤ 0.
 #'
-#' Simplified (FDA recommended):
-#'   UCB = (|d| + t_α · SE_d)² − θ²_s · s²_wR · (df_wR / χ²_{1-α,df_wR})
-#'   -- wait, use the proper Howe formulation --
-#' 
-#' The proper Howe (1974) upper confidence bound for η = d² - θ²·σ² is:
-#'   UCB = max(0, |d̂| - t_{α,df_d}·SE_d)² - θ² · s²_wR · df_wR / χ²_{1-α,df_wR}
-#'   -- when UCB < 0, H0 rejected (RSABE demonstrated)
+#' d_hat/se_d/df_d and s2_wR/df_wR must come from the FDA guidance's own
+#' per-subject contrast models (see build_rsabe_subject_contrasts(),
+#' fit_rsabe_seq_mean(), fit_rsabe_seq_variance()) — NOT from a general
+#' multi-term ANOVA on the raw observations, which the guidance's worked
+#' example does not use for this calculation.
 #'
-#' Actually, the widely used formulation from the FDA SAS code and
-#' Davit et al. (2012) is:
-#'   Let x1 = d̂² - t²_{α,df_d} · SE²_d       (component for d²)
-#'   Let x2 = θ² · s²_wR · df_wR / χ²_{α,df_wR} (lower bound for θ²·σ²)
-#'   Let x3 = θ² · s²_wR                        (point estimate of θ²·σ²)
-#'   Let x4 = d̂²                                (point estimate of d²)
-#'   
-#'   η̂ = x4 - x3   (point estimate of criterion)
-#'   UCB = x1 - x2  (upper confidence bound via Howe) -- NO.
-#'
-#' Per the FDA progesterone guidance SAS code and Tóthfalusi (2016):
-#' The linearized scaled criterion η = (μ_T - μ_R)² - θ²·σ²_wR
-#' The UCB is constructed as:
-#'   UCB = d̂² + SE²_d·(df_d/χ²_{1-α,df_d} - 1) - θ²·s²_wR·(df_wR / χ²_{α,df_wR})
-#' 
-#' Actually the most commonly cited implementation from Tóthfalusi (2016) eq. 6:
-#'   UCB = d̂² - t²_{α,df_d}·SE²_d - θ²·s²_wR·(df_wR / χ²_{α,df_wR} − 1) 
-#'   -- not this either. Let me use the definitive formulation.
-#'
-#' DEFINITIVE formulation per FDA SAS code (Davit 2012, FDA guidance):
-#'   η̂ = d̂² - θ² · s²_wR  (point estimate)
-#'   
-#'   Variance components of η:
-#'     Var(d̂²) approximated, Var(s²_wR) from chi-squared
-#'   
-#'   UCB uses Howe's method:
-#'     C_L = 1 - df_wR / χ²_{α,df_wR}
-#'     C_U = df_wR / χ²_{1-α,df_wR} - 1
-#'     
-#'     If d̂² ≥ t²_{α,df_d} · SE²_d:
-#'       UCB = d̂² - t²_{α,df_d} · SE²_d + θ⁴ · s⁴_wR · C_U²  (or simpler form)
-#'     Else:
-#'       UCB = sqrt((d̂² - t²_{α,df_d}·SE²_d)² + (θ²·s²_wR·C_L)²)
-#'
-#' OK - let me just implement the EXACT formulation from FDA SAS code.
-#' From the FDA guidance SAS code and PharmSci paper implementations:
-#'
-#' @param d_hat Treatment difference on log scale (μ_T - μ_R estimate)
+#' @param d_hat Treatment difference on log scale (μ_T - μ_R estimate),
+#'   from fit_rsabe_seq_mean() on the I_ij contrasts
 #' @param se_d Standard error of d_hat
 #' @param df_d Degrees of freedom for d_hat
-#' @param s2_wR Within-subject variance for reference
+#' @param s2_wR Within-subject variance for reference, from
+#'   fit_rsabe_seq_variance() on the D_ij contrasts
 #' @param df_wR Degrees of freedom for s2_wR
 #' @param alpha Significance level (default 0.05 for 95% UCB)
 #' @param theta_s Regulatory scaling constant (default ln(1.25)/sigma_w0 = 0.8924)
 #' @return List with criterion value, UCB, conclusion
 #' @export
-rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR, 
+rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
                                    alpha = 0.05, theta_s = log(1.25) / 0.25) {
-  
-  cat("  🔬 FDA Linearized RSABE Test (Howe UCB)...\n")
-  cat("    Per Tóthfalusi & Endrényi (2016) Eqs. 26-31 / Howe (1974)\n")
-  
+
+  # Per FDA Progesterone Capsules guidance worked example (Howe 1974). The
+  # step-by-step derivation (x, Es, boundx, boundy, Lm, Ls...) that used to be
+  # printed here is DEBUG-only below - the UCB value and pass/fail verdict
+  # are what a normal run needs, and both are already surfaced in the
+  # analysis summary's RSABE footnote (R/analysis_summary.R) since they're
+  # returned in this function's result list.
+
   # Regulatory constants
   theta2 <- theta_s^2
   sw_R <- sqrt(s2_wR)
-  
-  # ---------------------------------------------------------------------------
-  # Step 1: Point estimates (Eqs. 27, 28a, 28b)
-  #   Linearized criterion: η = d² - θ² · σ²_wR ≤ 0
-  #   Em = d̂²                        (point estimate of d²)
-  #   Es = θ² · s²_wR                 (point estimate of θ² · σ²_wR)
-  #   η̂ = Em - Es                    (point estimate of criterion)
-  # ---------------------------------------------------------------------------
-  Em <- d_hat^2
+
+  # Step 1: Bias-corrected point estimate of d² (guidance: x = estimate² − stderr²)
+  #   Es = θ² · s²_wR ; η̂ = x - Es
+  Em <- d_hat^2 - se_d^2
   Es <- theta2 * s2_wR
   eta_hat <- Em - Es
-  
-  cat(sprintf("    d̂ = %.6f, Em = d̂² = %.6f\n", d_hat, Em))
-  cat(sprintf("    Es = θ² · s²_wR = %.6f · %.6f = %.6f\n", theta2, s2_wR, Es))
-  cat(sprintf("    η̂ (point estimate) = %.6f\n", eta_hat))
-  
-  # ---------------------------------------------------------------------------
-  # Step 2: Individual upper confidence bounds (Eqs. 29a, 29b)
-  #   Cm = (|d̂| + t_{1-α,df_d} · SE_d)²     — UCB for d² (one-sided)
-  #   Cs = θ² · df_wR · s²_wR / χ²_{α,df_wR} — UCB for θ²·σ²_wR
-  #
-  # Note: Cm uses the UPPER bound (|d̂| + t·SE)², not the lower bound.
-  # This is because we are bounding d² FROM ABOVE (conservative for
-  # the 95% UCB of η = d² - θ²·σ²).
-  # Cs uses the LOWER chi-squared quantile χ²_{α} to get the UCB of σ².
-  # ---------------------------------------------------------------------------
+
+  # Step 2: Individual upper confidence bounds
+  #   boundx = max(|d̂-t·SE|, |d̂+t·SE|)²  — the 90% two-sided CI on d̂,
+  #     whichever endpoint is farther from zero, squared
+  #   boundy = y · df_wR / χ²_{1-α,df_wR}   — SAS cinv(0.95, df); note this
+  #     uses the UPPER chi-square percentile, not the lower one — it is
+  #     applied directly to the (negative) y term, not decomposed into a
+  #     separate "upper bound on σ²" the way boundx is for d̂².
   t_alpha <- qt(1 - alpha, df_d)
-  chi2_alpha <- qchisq(alpha, df_wR)  # lower tail
-  
-  Cm <- (abs(d_hat) + t_alpha * se_d)^2
-  Cs <- theta2 * df_wR * s2_wR / chi2_alpha
-  
-  cat(sprintf("    t_{1-α,df_d} = t_{%.3f,%d} = %.4f\n", 1 - alpha, df_d, t_alpha))
-  cat(sprintf("    χ²_{α,df_wR} = χ²_{%.3f,%d} = %.4f\n", alpha, df_wR, chi2_alpha))
-  cat(sprintf("    Cm = (|d̂| + t·SE)² = (%.6f + %.4f·%.6f)² = %.6f\n",
-              abs(d_hat), t_alpha, se_d, Cm))
-  cat(sprintf("    Cs = θ²·df·s²/χ² = %.6f·%d·%.6f/%.4f = %.6f\n",
-              theta2, df_wR, s2_wR, chi2_alpha, Cs))
-  
-  # ---------------------------------------------------------------------------
-  # Step 3: Squared confidence interval half-lengths (Eqs. 30a, 30b)
-  #   Lm = (Cm - Em)²
-  #   Ls = (Cs - Es)²
-  # ---------------------------------------------------------------------------
+  ci_lo <- d_hat - t_alpha * se_d
+  ci_hi <- d_hat + t_alpha * se_d
+  Cm <- max(abs(ci_lo), abs(ci_hi))^2
+
+  chi2_upper <- qchisq(1 - alpha, df_wR)  # SAS cinv(1-alpha, df) — upper tail
+  boundy <- (-Es) * df_wR / chi2_upper
+  Cs <- -boundy  # kept on the same (positive) scale as Es for display/legacy fields
+
+  # Step 3: Squared confidence interval half-lengths
+  #   Lm = (boundx - x)² ; Ls = (boundy - y)² = (Cs - Es)²  [since y=-Es, boundy=-Cs]
   Lm <- (Cm - Em)^2
   Ls <- (Cs - Es)^2
-  
-  cat(sprintf("    Lm = (Cm - Em)² = (%.6f - %.6f)² = %.6f\n", Cm, Em, Lm))
-  cat(sprintf("    Ls = (Cs - Es)² = (%.6f - %.6f)² = %.6f\n", Cs, Es, Ls))
-  
-  # ---------------------------------------------------------------------------
-  # Step 4: Howe's combined UCB (Eq. 31)
-  #   UCB = (Em - Es) + sqrt(Lm + Ls)
-  #
+
+  # Step 4: Howe's combined UCB (critbound)
+  #   UCB = (x + y) + sqrt(Lm + Ls) = (Em - Es) + sqrt(Lm + Ls)
   # RSABE is demonstrated if UCB ≤ 0.
-  # ---------------------------------------------------------------------------
   ucb <- (Em - Es) + sqrt(Lm + Ls)
-  
-  cat(sprintf("    UCB = (Em - Es) + sqrt(Lm + Ls) = %.6f + sqrt(%.6f) = %.6f\n",
-              Em - Es, Lm + Ls, ucb))
-  
+
   # Decision
   rsabe_pass <- (ucb <= 0)
-  cat(sprintf("    UCB ≤ 0? %s → %s\n", ucb <= 0, 
-              ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")))
-  
+  bioeq_log(sprintf(
+    "FDA Linearized RSABE (Howe UCB): d_hat=%.6f SE_d=%.6f Em=%.6f Es=%.6f Cm=%.6f Cs=%.6f Lm=%.6f Ls=%.6f -> UCB=%.6f (<=0? %s -> %s)",
+    d_hat, se_d, Em, Es, Cm, Cs, Lm, Ls, ucb, ucb <= 0,
+    ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")), "DEBUG")
+
   # Scaled BE limits for informational purposes
   scaled_lower <- exp(-theta_s * sw_R) * 100
   scaled_upper <- exp(theta_s * sw_R) * 100
@@ -631,7 +657,7 @@ rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
     theta_s = theta_s,
     theta_sq = theta2,
     t_alpha = t_alpha,
-    chi2_alpha = chi2_alpha,
+    chi2_alpha = chi2_upper,
     Em = Em,
     Es = Es,
     Cm = Cm,
@@ -681,8 +707,9 @@ rsabe_linearized_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
 #' @param d_hat Treatment difference estimate (log-scale: μ_T - μ_R)
 #' @param se_d Standard error of d_hat (from ANOVA)
 #' @param df_d Degrees of freedom for d_hat (from ANOVA, used for CI only)
-#' @param s2_wR Within-subject reference variance (from ISC)
-#' @param df_wR Degrees of freedom for s2_wR (from ISC)
+#' @param s2_wR Within-subject reference variance (from a Reference-only ANOVA;
+#'   see compute_reference_anova_variance())
+#' @param df_wR Degrees of freedom for s2_wR (from the same Reference-only ANOVA)
 #' @param K Design-dependent constant from compute_K_constant()
 #' @param df_nct Degrees of freedom for the noncentral t (from compute_K_constant())
 #' @param alpha Significance level (default 0.05)
@@ -693,32 +720,23 @@ rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
                                K, df_nct,
                                alpha = 0.05, theta_s = log(1.25) / 0.25) {
   
-  cat("  🔬 Non-Central TOST (ncTOST) — Exact Method (Tóthfalusi & Endrényi 2016)...\n")
-  cat("    Per Eqs. 11, 17a, 17b with Hedges' correction (Eq. 8)\n")
-  
+  # Per Eqs. 11, 17a, 17b (Tóthfalusi & Endrényi 2016) with Hedges' correction
+  # (Eq. 8). The step-by-step derivation that used to be printed here is
+  # DEBUG-only below - the overall p-value and pass/fail verdict are what a
+  # normal run needs, surfaced in the analysis summary's RSABE footnote
+  # (R/analysis_summary.R) since they're returned in this function's result.
+
   sw_R <- sqrt(s2_wR)
-  
-  # =========================================================================
-  # Step 1: Compute pivotal index d (Eq. 11 — Glass's estimator)
-  #   d = d̂ / s_wR
-  # =========================================================================
+
+  # Step 1: Compute pivotal index d (Eq. 11 — Glass's estimator): d = d̂ / s_wR
   d_index <- d_hat / sw_R
-  
-  cat(sprintf("    d̂ = %.6f, s_wR = %.6f\n", d_hat, sw_R))
-  cat(sprintf("    d = d̂ / s_wR = %.6f (pivotal index, Eq. 11)\n", d_index))
-  cat(sprintf("    K = %.6f, df_nct = %d\n", K, df_nct))
-  
-  # =========================================================================
+
   # Step 2: Hedges' bias correction (Eq. 8)
   #   cr(df) = 1 - 3 / (4·df - 1)
   #   The unbiased noncentrality parameter estimate is d / (K · cr)
-  # =========================================================================
   cr <- hedges_correction(df_nct)
   stat <- d_index / (K * cr)  # bias-corrected test statistic
-  
-  cat(sprintf("    cr(df) = 1 - 3/(4·%d - 1) = %.6f (Hedges' correction)\n", df_nct, cr))
-  cat(sprintf("    d/(K·cr) = %.6f / (%.6f · %.6f) = %.6f\n", d_index, K, cr, stat))
-  
+
   # =========================================================================
   # Step 3: Noncentral t TOST (Eqs. 17a, 17b)
   #
@@ -746,25 +764,20 @@ rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
   p1 <- 1 - p_lower  # lower test p-value
   p2 <- 1 - p_upper  # upper test p-value
   
-  cat(sprintf("    ncp_lower = -θ/K = %.6f, ncp_upper = θ/K = %.6f\n", ncp_lower, ncp_upper))
-  cat(sprintf("    Lower test: P[t(%d, ncp=%.4f) ≤ %.4f] = %.6f (need > %.3f)\n",
-              df_nct, ncp_lower, stat, p_lower, 1 - alpha))
-  cat(sprintf("    Upper test: P[t(%d, ncp=%.4f) ≥ %.4f] = %.6f (need > %.3f)\n",
-              df_nct, ncp_upper, stat, p_upper, 1 - alpha))
-  
   # Decision: both must exceed 1-α
   lower_pass <- (p_lower > 1 - alpha)
   upper_pass <- (p_upper > 1 - alpha)
   rsabe_pass <- lower_pass && upper_pass
-  
+
   # Overall p-value = max of the two one-sided p-values
   overall_p <- max(p1, p2)
-  
-  cat(sprintf("    Lower test: %s, Upper test: %s\n",
-              ifelse(lower_pass, "PASS", "FAIL"),
-              ifelse(upper_pass, "PASS", "FAIL")))
-  cat(sprintf("    Overall p-value = max(p1, p2) = max(%.6f, %.6f) = %.6f\n", p1, p2, overall_p))
-  cat(sprintf("    → %s\n", ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")))
+
+  bioeq_log(sprintf(
+    "ncTOST: d=%.6f K=%.6f cr=%.6f stat=%.6f | lower=%s (p=%.6f) upper=%s (p=%.6f) | overall_p=%.6f -> %s",
+    d_index, K, cr, stat,
+    ifelse(lower_pass, "PASS", "FAIL"), p_lower,
+    ifelse(upper_pass, "PASS", "FAIL"), p_upper,
+    overall_p, ifelse(rsabe_pass, "RSABE DEMONSTRATED", "RSABE NOT DEMONSTRATED")), "DEBUG")
   
   # =========================================================================
   # Compute display values: CI and scaled limits on ratio scale
@@ -833,9 +846,10 @@ rsabe_nctost_test <- function(d_hat, se_d, df_d, s2_wR, df_wR,
 #' Workflow:
 #'   1. Detect replicate design structure
 #'   2. For each log-transformed PK parameter:
-#'     a. Fit ANOVA model → get d̂, SE_d, df_d
-#'     b. Compute ISC variances → get s²_wR, df_wR
-#'     c. Check switching condition: CV_wR > 30% (s²_wR > s²_w0)
+#'     a. Fit ANOVA model (complete dataset, all subjects) → get d̂, SE_d, df_d
+#'     b. Fit a Reference-only ANOVA (subjects with >=2 Reference periods
+#'        only) → get s²_wR, df_wR — see compute_reference_anova_variance()
+#'     c. Check switching condition: CV_wR ≈ 30% (s_wR ≥ 0.294)
 #'     d. If HV: apply RSABE (scaled limits)
 #'        If not HV: fall back to ABE (fixed 80-125%)
 #'     e. Check point estimate constraint (FDA): PE must be within 80-125%
@@ -851,7 +865,9 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
   # Extract configuration
   alpha <- params$alpha_level %||% 0.05
   parameters <- params$pk_parameters %||% c("lnCmax", "lnAUC0t", "lnAUC0inf")
-  anova_model <- params$anova_model %||% "fixed"
+  # NOTE: anova_model is NOT read from params here — see the auto-selection
+  # right after design detection below. FDA's own guidance dictates the
+  # model by replicate design, not a free user choice.
   rsabe_method <- params$rsabe_method %||% "fda_linearized"
   anova_results_input <- params$anova_results %||% NULL
   
@@ -860,8 +876,14 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
   # At the switching boundary (σ_wR = σ_w0), the scaled limits equal standard ABE:
   #   exp(±θ_s · σ_w0) = exp(±ln(1.25)) = [80%, 125%]
   # For HV drugs (σ_wR > σ_w0), limits expand proportionally.
-  theta_s <- log(1.25) / 0.25  # ≈ 0.8924
-  s2_w0 <- 0.25^2              # switching s²_w0 = 0.0625 (CV ≈ 25.4%)
+  theta_s <- log(1.25) / 0.25  # ≈ 0.8924 (criterion scaling constant; σ_w0 = 0.25)
+  s2_w0 <- 0.25^2              # regulatory σ²_w0 = 0.0625 used in the scaled criterion
+  # FDA switching (decision) cutoff: apply reference scaling only when the
+  # within-subject SD of the reference s_wR ≥ 0.294 (i.e. CV_wR ≈ 30%). NOTE this
+  # is DISTINCT from σ_w0 = 0.25 (CV 25.4%), which is only the criterion constant.
+  # Ref: FDA progesterone guidance; Davit et al. AAPS J 2012.
+  s_wR_switch <- 0.294
+  s2_wR_switch <- s_wR_switch^2  # ≈ 0.0864
   pe_constraint_lower <- 80.0   # Point estimate constraint
   pe_constraint_upper <- 125.0
   
@@ -871,21 +893,62 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
     "FDA Linearized Scaled Criterion"
   }
   
-  cat(sprintf("🔬 Performing RSABE Analysis (%s)...\n", method_label))
-  cat(sprintf("   ANOVA Model: %s\n", anova_model))
-  cat(sprintf("   RSABE Method: %s\n", rsabe_method))
-  cat(sprintf("   α = %.3f (%.0f%% CI)\n", alpha, (1 - 2 * alpha) * 100))
-  cat(sprintf("   Switching variability: s²_w0 = %.4f (CV_w0 ≈ %.1f%%)\n", s2_w0, sqrt(exp(s2_w0) - 1) * 100))
-  
+  bioeq_log(sprintf(
+    "RSABE analysis (%s, method=%s): alpha=%.3f (%.0f%% CI), theta_s=%.4f, switching cutoff s_wR>=%.3f (CV_wR~%.1f%%)",
+    method_label, rsabe_method, alpha, (1 - 2 * alpha) * 100, theta_s,
+    s_wR_switch, sqrt(exp(s_wR_switch^2) - 1) * 100), "DEBUG")
+
   # Detect replicate design
   design_info <- detect_replicate_design(data)
-  
+
   if (!design_info$is_replicate) {
     stop("RSABE analysis requires a replicate design (2x2x3 or 2x2x4). Detected: ", design_info$design_type)
   }
-  
-  cat(sprintf("   Design: %s (%s)\n", design_info$design_type, design_info$design_name))
-  
+
+  bioeq_log(sprintf("Design: %s (%s)", design_info$design_type, design_info$design_name), "DEBUG")
+
+  # Per FDA guidance, the statistical model is dictated by the replicate
+  # design, not a free user choice: PROC GLM (Fixed Effects) for partial-
+  # replicate (3-way) designs, PROC MIXED with DDFM=Satterthwaite for
+  # full-replicate (4-way) designs. Both reduce to the identical
+  # `lm(~ Sequence)` computation for this specific FDA calculation (see
+  # build_rsabe_subject_contrasts()/fit_rsabe_seq_mean()/
+  # fit_rsabe_seq_variance()) — the guidance's own PROC MIXED call declares
+  # no RANDOM/REPEATED statement, so with no random effect and no
+  # heterogeneous-variance term to estimate, its REML residual variance and
+  # Satterthwaite denominator DF are numerically identical to PROC GLM's OLS
+  # residual MS/DF. This is a regulatory labeling distinction, not a
+  # computational one. Any `params$anova_model` the caller supplies is
+  # ignored for RSABE.
+  anova_model <- if (isTRUE(design_info$is_partial_replicate)) "fixed" else "mixed"
+  anova_model_label <- if (anova_model == "fixed") {
+    "Fixed Effects (PROC GLM) — auto-selected: partial-replicate design"
+  } else {
+    "Mixed Effects (PROC MIXED, DDFM=Satterthwaite) — auto-selected: full-replicate design"
+  }
+  bioeq_log(sprintf("ANOVA Model: %s", anova_model_label), "DEBUG")
+
+  # The ANOVA Results display for RSABE uses the SAME calculation ABEL uses
+  # (replicateBE::method.A()/method.B(), auto-selected Fixed/Mixed by design)
+  # — this is deliberately a separate computation from the FDA Howe UCB/
+  # ncTOST decision above, per the user's explicit direction: the ANOVA
+  # table should look identical to ABEL's, and RSABE vs. ABEL should differ
+  # only in the BE Conclusion section, not the ANOVA display. Falls back to
+  # NULL (per-parameter fallback further below) if replicateBE errors.
+  abel_anova_model <- if (isTRUE(design_info$is_partial_replicate)) "fixed" else "nlme"
+  abel_style_anova <- tryCatch({
+    perform_abel_placeholder(data, design = "auto", params = list(
+      alpha_level = alpha,
+      pk_parameters = parameters,
+      anova_model = abel_anova_model,
+      abel_eligible_params = unique(sub("^(ln|log)", "", parameters, ignore.case = TRUE)),
+      abel_upper_cap = "50"
+    ))
+  }, error = function(e) {
+    bioeq_log(sprintf("Could not compute replicateBE-based ANOVA display: %s", e$message), "WARNING")
+    NULL
+  })
+
   # Verify required columns exist
   required_cols <- c("Subject", "Period", "Sequence", "Treatment")
   missing_cols <- setdiff(required_cols, names(data))
@@ -915,25 +978,25 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
     
     # Skip duplicates
     if (base_param_name %in% processed_params) {
-      cat(sprintf("⏭️  Skipping '%s' - already processed as '%s'\n", param, base_param_name))
+      bioeq_log(sprintf("Skipping '%s' - already processed as '%s'", param, base_param_name), "DEBUG")
       next
     }
-    
+
     # Resolve parameter: prefer raw data (we'll log-transform ourselves)
     if (is_log_param) {
       raw_param <- base_param_name
       log_param <- param
-      
+
       if (raw_param %in% names(data)) {
         param_to_use <- raw_param
         need_log_transform <- TRUE
-        cat(sprintf("ℹ️  Using raw '%s' (will log-transform)\n", raw_param))
+        bioeq_log(sprintf("Using raw '%s' (will log-transform)", raw_param), "DEBUG")
       } else if (log_param %in% names(data)) {
         param_to_use <- log_param
         need_log_transform <- FALSE
-        cat(sprintf("ℹ️  Using pre-logged '%s'\n", log_param))
+        bioeq_log(sprintf("Using pre-logged '%s'", log_param), "DEBUG")
       } else {
-        cat(sprintf("⚠️  Parameter '%s' not found, skipping\n", param))
+        bioeq_log(sprintf("Parameter '%s' not found - skipping", param), "WARNING")
         next
       }
     } else {
@@ -946,54 +1009,141 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
           param_to_use <- log_param
           need_log_transform <- FALSE
         } else {
-          cat(sprintf("⚠️  Parameter '%s' not found, skipping\n", param))
+          bioeq_log(sprintf("Parameter '%s' not found - skipping", param), "WARNING")
           next
         }
       }
     }
-    
+
     processed_params <- c(processed_params, base_param_name)
-    
-    cat(sprintf("\n--- RSABE Analysis for %s ---\n", base_param_name))
-    
+
+    bioeq_log(sprintf("RSABE Analysis for %s", base_param_name), "DEBUG")
+
     tryCatch({
-      
+
       # Prepare data: ensure log-transformed column exists
       analysis_data <- data
       log_col_name <- paste0("ln_", base_param_name, "_rsabe")
-      
+
       if (need_log_transform) {
         raw_vals <- as.numeric(analysis_data[[param_to_use]])
         valid_mask <- !is.na(raw_vals) & raw_vals > 0
         analysis_data[[log_col_name]] <- NA_real_
         analysis_data[[log_col_name]][valid_mask] <- log(raw_vals[valid_mask])
-        cat(sprintf("  Log-transformed %s → %s (%d valid values)\n", 
-                    param_to_use, log_col_name, sum(valid_mask)))
+        bioeq_log(sprintf("Log-transformed %s -> %s (%d valid values)",
+                          param_to_use, log_col_name, sum(valid_mask)), "DEBUG")
       } else {
         analysis_data[[log_col_name]] <- as.numeric(analysis_data[[param_to_use]])
       }
-      
+
       # Remove rows with NA in the analysis column
       analysis_data <- analysis_data[!is.na(analysis_data[[log_col_name]]), ]
-      
+
       if (nrow(analysis_data) < 6) {
-        cat(sprintf("  ⚠️  Insufficient data for %s (%d rows), skipping\n", base_param_name, nrow(analysis_data)))
+        bioeq_log(sprintf("Insufficient data for %s (%d rows) - skipping", base_param_name, nrow(analysis_data)), "WARNING")
         next
       }
       
-      # Step 1: Fit ANOVA model for treatment effect
-      model_result <- fit_rsabe_model(analysis_data, log_col_name, anova_model)
-      
-      # Step 2: Compute ISC variances
-      isc_result <- compute_isc_variance(analysis_data, log_col_name)
-      
-      # Step 3: Check switching condition (CV_wR > ~25.4%, i.e., s²_wR > s²_w0)
-      is_hv <- (isc_result$s2_wR > s2_w0)
-      
-      cat(sprintf("  Switching: s²_wR (%.6f) %s s²_w0 (%.6f) → %s\n",
-                  isc_result$s2_wR, ifelse(is_hv, ">", "≤"), s2_w0,
-                  ifelse(is_hv, "HIGH VARIABILITY → Use RSABE", "LOW VARIABILITY → Use ABE")))
-      
+      # Step 1: Fit the FDA guidance's own per-subject contrast models. See
+      # SECTION 1B above — the FDA worked example (Progesterone Capsules
+      # product-specific guidance) collapses each subject's data to I_ij
+      # (treatment contrast) and D_ij (Reference replicate difference)
+      # BEFORE fitting anything; it does not run a multi-term ANOVA on the
+      # raw per-period data for either the treatment effect or s²_wR. These
+      # contrast models — not a general ANOVA — are what actually drive the
+      # RSABE Howe UCB / ncTOST decision below.
+      contrasts_df <- build_rsabe_subject_contrasts(analysis_data, log_col_name)
+      if (is.null(contrasts_df) || nrow(contrasts_df) < 2) {
+        stop("Could not form per-subject Reference-scaled contrasts for ",
+             base_param_name, " (need >=2 subjects with a replicated Reference)")
+      }
+
+      i_fit <- fit_rsabe_seq_mean(contrasts_df$I, contrasts_df$Sequence, alpha = alpha)
+      d_fit <- fit_rsabe_seq_variance(contrasts_df$D, contrasts_df$Sequence)
+
+      d_hat_c    <- i_fit$estimate
+      se_d_c     <- i_fit$se
+      df_d_c     <- i_fit$df
+      s2_wR_c    <- d_fit$s2
+      df_wR_c    <- d_fit$df
+      pe_ratio_c <- exp(d_hat_c) * 100
+      cv_wR_c    <- sqrt(exp(s2_wR_c) - 1) * 100
+      n_R_c      <- nrow(contrasts_df)
+
+      # Test-side replicate difference (only where a subject has 2 Test
+      # periods, i.e. a full-replicate design) — used only for the
+      # heteroscedasticity ratio z = s_wT/s_wR in compute_K_constant() (the
+      # ncTOST path); the FDA guidance's own worked example never uses
+      # s²_wT at all.
+      dt_rows <- contrasts_df[!is.na(contrasts_df$D_T), , drop = FALSE]
+      if (nrow(dt_rows) >= 2) {
+        t_fit   <- fit_rsabe_seq_variance(dt_rows$D_T, dt_rows$Sequence)
+        s2_wT_c <- t_fit$s2
+        df_wT_c <- t_fit$df
+        cv_wT_c <- sqrt(exp(s2_wT_c) - 1) * 100
+        n_T_c   <- nrow(dt_rows)
+      } else {
+        s2_wT_c <- NA_real_; df_wT_c <- NA_real_; cv_wT_c <- NA_real_; n_T_c <- NA_integer_
+      }
+
+      bioeq_log(sprintf(
+        "[%s] FDA contrast model: d_hat=%.6f SE=%.6f df=%d (n=%d subjects w/ replicated Reference) | s2_wR=%.6f (df=%d, CVwR=%.2f%%)",
+        base_param_name, d_hat_c, se_d_c, df_d_c, n_R_c, s2_wR_c, df_wR_c, cv_wR_c), "DEBUG")
+
+      refvar_result <- list(
+        s2_wR = s2_wR_c, cv_wR = cv_wR_c, df_wR = df_wR_c, n_R = n_R_c,
+        anova_wR = anova(d_fit$model), model_wR = d_fit$model, ref_subjects = contrasts_df$Subject,
+        s2_wT = s2_wT_c, cv_wT = cv_wT_c, df_wT = df_wT_c, n_T = n_T_c,
+        anova_wT = if (nrow(dt_rows) >= 2) anova(t_fit$model) else NULL,
+        model_wT = if (nrow(dt_rows) >= 2) t_fit$model else NULL,
+        test_subjects = dt_rows$Subject
+      )
+
+      # Single source of truth for both the RSABE decision AND the ANOVA
+      # Results display — no separate/parallel model is fit any more. The
+      # "ANOVA" here is the I_ij ~ Sequence model (the FDA guidance's own
+      # treatment-effect model); the D_ij ~ Sequence model behind s²_wR is
+      # carried separately (refvar_result$anova_wR above) and rendered as
+      # its own card in the Results dashboard.
+      t_value_c <- d_hat_c / se_d_c
+      p_value_c <- if (df_d_c > 0) 2 * pt(abs(t_value_c), df_d_c, lower.tail = FALSE) else NA_real_
+
+      model_result <- list(
+        d_hat = d_hat_c, se_d = se_d_c, df_d = df_d_c, pe_ratio = pe_ratio_c,
+        t_value = t_value_c, p_value = p_value_c,
+        residual_mse = NA_real_,  # not meaningful for this model; s2_wR is the variance of interest
+        model = i_fit$model,
+        anova_table = anova(i_fit$model),
+        anova_comprehensive = NULL,  # no Subject(Sequence)/Period/Treatment terms in this model
+        subj_seq_analysis = NULL,
+        type3_ss = NULL,
+        lsmeans_result = NULL,  # I_ij is a contrast, not separate T/R means — no LSMeans analog
+        anova_model = anova_model,
+        anova_model_label = anova_model_label,
+        drug_coef_name = "I (T - mean(R1,R2))",
+        n_observations = nrow(contrasts_df),
+        n_subjects = n_R_c
+      )
+
+      # Step 2: Check switching condition — FDA applies reference scaling only
+      # when s_wR ≥ 0.294 (CV_wR ≈ 30%), NOT at σ_w0 = 0.25 (CV 25.4%). ONLY
+      # Reference variability determines this — Test variability (s2_wT) is
+      # not part of the switching criterion; it factors into the scaled
+      # criterion/bound computation for heteroscedastic designs (see
+      # compute_K_constant()), which is a separate step below.
+      is_hv <- (refvar_result$s2_wR >= s2_wR_switch)
+
+      bioeq_log(sprintf("[%s] Switching: s_wR (%.4f) %s cutoff (%.3f) -> %s",
+                        base_param_name, sqrt(refvar_result$s2_wR), ifelse(is_hv, ">=", "<"), s_wR_switch,
+                        ifelse(is_hv, "HIGH VARIABILITY -> Use RSABE", "LOW VARIABILITY -> Use ABE")), "DEBUG")
+
+      # The replicateBE-based fit for this parameter (same ANOVA as ABE/ABEL,
+      # already computed above for the ANOVA Results display) — needed here
+      # too, since the non-HV branch below reuses its PE/CI directly.
+      abel_param_result <- if (!is.null(abel_style_anova)) {
+        abel_style_anova$anova_results$anova_results[[base_param_name]]
+      } else NULL
+
       if (is_hv) {
         # =====================================================================
         # HIGH VARIABILITY: Apply RSABE (scaled limits)
@@ -1002,23 +1152,23 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
         if (rsabe_method == "nctost") {
           # ncTOST exact method — per Tóthfalusi & Endrényi (2016)
           # Compute design-dependent constant K and degrees of freedom
-          K_result <- compute_K_constant(design_info, isc_result)
+          K_result <- compute_K_constant(design_info, refvar_result)
           K_val <- K_result$K
           df_nct_val <- K_result$df_nct
           
           # If K could not be computed from design structure, estimate from SE_d / s_wR
           if (is.na(K_val)) {
-            K_val <- model_result$se_d / sqrt(isc_result$s2_wR)
-            cat(sprintf("    K estimated from SE_d/s_wR: %.6f / %.6f = %.6f\n",
-                        model_result$se_d, sqrt(isc_result$s2_wR), K_val))
+            K_val <- model_result$se_d / sqrt(refvar_result$s2_wR)
+            bioeq_log(sprintf("K estimated from SE_d/s_wR: %.6f / %.6f = %.6f",
+                              model_result$se_d, sqrt(refvar_result$s2_wR), K_val), "DEBUG")
           }
           
           rsabe_test <- rsabe_nctost_test(
             d_hat = model_result$d_hat,
             se_d = model_result$se_d,
             df_d = model_result$df_d,
-            s2_wR = isc_result$s2_wR,
-            df_wR = isc_result$df_wR,
+            s2_wR = refvar_result$s2_wR,
+            df_wR = refvar_result$df_wR,
             K = K_val,
             df_nct = df_nct_val,
             alpha = alpha,
@@ -1036,8 +1186,8 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
             d_hat = model_result$d_hat,
             se_d = model_result$se_d,
             df_d = model_result$df_d,
-            s2_wR = isc_result$s2_wR,
-            df_wR = isc_result$df_wR,
+            s2_wR = refvar_result$s2_wR,
+            df_wR = refvar_result$df_wR,
             alpha = alpha,
             theta_s = theta_s
           )
@@ -1058,13 +1208,13 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
         # Overall RSABE pass: scaling criterion + PE constraint
         be_pass <- rsabe_test$rsabe_pass && pe_within_constraint
         
-        cat(sprintf("  PE constraint: %.2f%% within [%.0f%%, %.0f%%]? %s\n",
-                    model_result$pe_ratio, pe_constraint_lower, pe_constraint_upper,
-                    ifelse(pe_within_constraint, "YES", "NO")))
-        cat(sprintf("  Overall RSABE: %s (scaling: %s, PE: %s)\n",
-                    ifelse(be_pass, "PASS", "FAIL"),
-                    ifelse(rsabe_test$rsabe_pass, "PASS", "FAIL"),
-                    ifelse(pe_within_constraint, "PASS", "FAIL")))
+        bioeq_log(sprintf(
+          "[%s] PE constraint: %.2f%% within [%.0f%%, %.0f%%]? %s | Overall RSABE: %s (scaling: %s, PE: %s)",
+          base_param_name, model_result$pe_ratio, pe_constraint_lower, pe_constraint_upper,
+          ifelse(pe_within_constraint, "YES", "NO"),
+          ifelse(be_pass, "PASS", "FAIL"),
+          ifelse(rsabe_test$rsabe_pass, "PASS", "FAIL"),
+          ifelse(pe_within_constraint, "PASS", "FAIL")), "DEBUG")
         
         # Store results
         ci_list[[base_param_name]] <- list(
@@ -1076,8 +1226,8 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
           geometric_mean_ratio = model_result$pe_ratio / 100,
           within_limits = be_pass,
           # RSABE-specific
-          cv_wr = isc_result$cv_wR,
-          cv_wt = isc_result$cv_wT %||% NA,
+          cv_wr = refvar_result$cv_wR,
+          cv_wt = refvar_result$cv_wT %||% NA,
           scaled_lower_limit = scaled_lower,
           scaled_upper_limit = scaled_upper,
           limits_used = list(lower = scaled_lower, upper = scaled_upper, type = "scaled"),
@@ -1085,9 +1235,9 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
           regulator = "FDA",
           degrees_freedom = model_result$df_d,
           n_subjects = model_result$n_subjects,
-          sw_test = if (!is.na(isc_result$s2_wT)) sqrt(isc_result$s2_wT) else NA,
-          sw_reference = sqrt(isc_result$s2_wR),
-          sw_ratio = if (!is.na(isc_result$s2_wT)) sqrt(isc_result$s2_wT / isc_result$s2_wR) else NA,
+          sw_test = if (!is.na(refvar_result$s2_wT)) sqrt(refvar_result$s2_wT) else NA,
+          sw_reference = sqrt(refvar_result$s2_wR),
+          sw_ratio = if (!is.na(refvar_result$s2_wT)) sqrt(refvar_result$s2_wT / refvar_result$s2_wR) else NA,
           # RSABE decision components
           rsabe_scaling = TRUE,
           pe_constraint_pass = pe_within_constraint,
@@ -1097,7 +1247,7 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
         
         rsabe_details[[base_param_name]] <- list(
           rsabe_test = rsabe_test,
-          isc_result = isc_result,
+          refvar_result = refvar_result,
           model_result = model_result,
           is_hv = TRUE,
           pe_constraint_pass = pe_within_constraint,
@@ -1107,49 +1257,79 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
       } else {
         # =====================================================================
         # LOW VARIABILITY: Fall back to standard ABE (fixed 80-125%)
+        #
+        # Per FDA guidance Step 1a, this is literally "use the two one-sided
+        # tests procedure" — i.e. the SAME treatment-effect ANOVA (auto-
+        # selected Fixed/Mixed by design) that ABE/ABEL use for this dataset,
+        # not the FDA I_ij contrast model (that model exists only to feed the
+        # Howe UCB/ncTOST scaling math, which isn't used once a parameter
+        # isn't high-variability). PE/CI here are pulled from the SAME
+        # replicateBE-based fit (`abel_style_anova`) already computed above
+        # for the ANOVA Results display, so ABE, ABEL, and RSABE report an
+        # identical PE/CI for a given dataset+model whenever RSABE falls back
+        # to unscaled ABE. Falls back to the FDA contrast model's own CI only
+        # if that fit is unavailable (e.g. replicateBE errored).
         # =====================================================================
-        
-        cat(sprintf("  📋 Using standard ABE limits (80-125%%) for %s\n", base_param_name))
-        
-        # Compute standard ABE CI
-        t_crit <- qt(1 - alpha, model_result$df_d)
-        ci_lower_val <- exp(model_result$d_hat - t_crit * model_result$se_d) * 100
-        ci_upper_val <- exp(model_result$d_hat + t_crit * model_result$se_d) * 100
-        
+
+        abel_ci <- if (!is.null(abel_style_anova)) {
+          abel_style_anova$confidence_intervals[[base_param_name]]
+        } else NULL
+
+        if (!is.null(abel_ci)) {
+          pe_val       <- abel_ci$point_estimate
+          ci_lower_val <- abel_ci$ci_lower
+          ci_upper_val <- abel_ci$ci_upper
+          df_display   <- abel_param_result$residual_df %||% model_result$df_d
+          n_display    <- abel_param_result$n_observations %||% model_result$n_subjects
+          bioeq_log(sprintf("Using standard ABE limits (80-125%%) for %s - PE/CI from the same %s ANOVA as ABE/ABEL",
+                            base_param_name, anova_model_label), "DEBUG")
+        } else {
+          # Fallback: FDA contrast model's own CI (only reached if replicateBE failed)
+          t_crit <- qt(1 - alpha, model_result$df_d)
+          pe_val       <- model_result$pe_ratio
+          ci_lower_val <- exp(model_result$d_hat - t_crit * model_result$se_d) * 100
+          ci_upper_val <- exp(model_result$d_hat + t_crit * model_result$se_d) * 100
+          df_display   <- model_result$df_d
+          n_display    <- model_result$n_subjects
+          bioeq_log(sprintf(
+            "Using standard ABE limits (80-125%%) for %s - replicateBE fit unavailable, using FDA contrast model's CI instead",
+            base_param_name), "WARNING")
+        }
+
         be_pass <- (ci_lower_val >= 80.0) && (ci_upper_val <= 125.0)
-        
-        cat(sprintf("  ABE: PE=%.2f%%, CI [%.2f%%, %.2f%%], Limits [80%%, 125%%], BE=%s\n",
-                    model_result$pe_ratio, ci_lower_val, ci_upper_val, ifelse(be_pass, "Pass", "Fail")))
-        
+
+        bioeq_log(sprintf("[%s] ABE: PE=%.2f%%, CI [%.2f%%, %.2f%%], Limits [80%%, 125%%], BE=%s",
+                          base_param_name, pe_val, ci_lower_val, ci_upper_val, ifelse(be_pass, "Pass", "Fail")), "DEBUG")
+
         ci_list[[base_param_name]] <- list(
           parameter = base_param_name,
-          point_estimate = model_result$pe_ratio,
+          point_estimate = pe_val,
           ci_lower = ci_lower_val,
           ci_upper = ci_upper_val,
           confidence_level = (1 - 2 * alpha) * 100,
-          geometric_mean_ratio = model_result$pe_ratio / 100,
+          geometric_mean_ratio = pe_val / 100,
           within_limits = be_pass,
-          cv_wr = isc_result$cv_wR,
-          cv_wt = isc_result$cv_wT %||% NA,
+          cv_wr = refvar_result$cv_wR,
+          cv_wt = refvar_result$cv_wT %||% NA,
           scaled_lower_limit = 80.0,
           scaled_upper_limit = 125.0,
           limits_used = list(lower = 80, upper = 125, type = "fixed"),
           method = "ABE (low variability — RSABE not required)",
           regulator = "FDA",
-          degrees_freedom = model_result$df_d,
-          n_subjects = model_result$n_subjects,
-          sw_test = if (!is.na(isc_result$s2_wT)) sqrt(isc_result$s2_wT) else NA,
-          sw_reference = sqrt(isc_result$s2_wR),
-          sw_ratio = if (!is.na(isc_result$s2_wT)) sqrt(isc_result$s2_wT / isc_result$s2_wR) else NA,
+          degrees_freedom = df_display,
+          n_subjects = n_display,
+          sw_test = if (!is.na(refvar_result$s2_wT)) sqrt(refvar_result$s2_wT) else NA,
+          sw_reference = sqrt(refvar_result$s2_wR),
+          sw_ratio = if (!is.na(refvar_result$s2_wT)) sqrt(refvar_result$s2_wT / refvar_result$s2_wR) else NA,
           rsabe_scaling = FALSE,
           pe_constraint_pass = NA,
           rsabe_criterion_pass = NA,
           is_high_variability = FALSE
         )
-        
+
         rsabe_details[[base_param_name]] <- list(
           rsabe_test = NULL,
-          isc_result = isc_result,
+          refvar_result = refvar_result,
           model_result = model_result,
           is_hv = FALSE,
           pe_constraint_pass = NA,
@@ -1157,28 +1337,49 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
         )
       }
       
-      # Store ANOVA-like results for compatibility
-      all_results[[base_param_name]] <- list(
-        model = model_result$model,
-        anova = model_result$anova_table,
-        treatment_coef = model_result$d_hat,
-        treatment_se = model_result$se_d,
-        residual_mse = model_result$residual_mse,
-        residual_df = model_result$df_d,
-        n_observations = model_result$n_observations,
-        anova_method = model_result$anova_model,
-        cv_wr_percent = isc_result$cv_wR,
-        cv_wt_percent = isc_result$cv_wT %||% NA,
-        s2_wR = isc_result$s2_wR,
-        s2_wT = isc_result$s2_wT,
-        df_wR = isc_result$df_wR,
-        df_wT = isc_result$df_wT
-      )
-      
+      # ANOVA Results display: use the replicateBE-based result (identical
+      # calculation/formatting to ABEL) when available (abel_param_result was
+      # computed earlier, right after the switching decision above). Falls
+      # back to the FDA contrast-model's own ANOVA only if replicateBE failed
+      # for this parameter — this fallback is display-only and never touches
+      # the Howe UCB/ncTOST decision above, which always uses the FDA values
+      # regardless of which branch fires here.
+      all_results[[base_param_name]] <- if (!is.null(abel_param_result)) {
+        abel_param_result
+      } else {
+        list(
+          model = model_result$model,
+          anova = model_result$anova_table,
+          anova_comprehensive = NULL,
+          subj_seq_analysis = NULL,
+          type3_ss = NULL,
+          lsmeans_result = NULL,
+          treatment_coef = model_result$d_hat,
+          treatment_se = model_result$se_d,
+          residual_mse = model_result$residual_mse,
+          residual_df = model_result$df_d,
+          n_observations = model_result$n_observations,
+          anova_method = model_result$anova_model,
+          anova_model_label = model_result$anova_model_label,
+          cv_wr_percent = refvar_result$cv_wR,
+          cv_wt_percent = refvar_result$cv_wT %||% NA,
+          s2_wR = refvar_result$s2_wR,
+          s2_wT = refvar_result$s2_wT,
+          df_wR = refvar_result$df_wR,
+          df_wT = refvar_result$df_wT,
+          anova_wR = refvar_result$anova_wR,
+          anova_wT = refvar_result$anova_wT,
+          model_wR = refvar_result$model_wR,
+          model_wT = refvar_result$model_wT,
+          n_wR = refvar_result$n_R,
+          n_wT = refvar_result$n_T
+        )
+      }
+
       conclusion_list[[base_param_name]] <- be_pass
       
     }, error = function(e) {
-      cat(sprintf("  ❌ Error analyzing %s: %s\n", base_param_name, e$message))
+      bioeq_log(sprintf("Error analyzing %s: %s", base_param_name, e$message), "ERROR")
     })
   }
   
@@ -1194,7 +1395,7 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
       anova_results = all_results,
       design = design_info$design_type,
       parameters = names(all_results),
-      note = sprintf("RSABE analysis using %s with ISC variance estimation", method_label)
+      note = sprintf("RSABE analysis using %s with FDA guidance per-subject contrast estimation (I_ij/D_ij)", method_label)
     ),
     design_type = design_info$design_type,
     n_subjects = length(unique(data$Subject)),
@@ -1214,6 +1415,6 @@ perform_rsabe <- function(data, design = "auto", params = list()) {
                                     sqrt(exp(s2_w0) - 1) * 100)
   )
   
-  cat("✅ RSABE analysis completed!\n")
+  bioeq_log("RSABE analysis completed", "DEBUG")
   return(results)
 }
