@@ -2391,91 +2391,14 @@ results_dashboard_server <- function(id, be_results, nca_results, analysis_confi
       # replace the single Intra/Inter columns with Intra-subject Reference and,
       # when estimable (full replicate), Intra-subject Test boxes.
       #
-      # Per-product variability is estimated by fitting a SAS-style ANOVA on the
-      # product-only subset (FDA / Schuirmann reference approach):
-      #     y ~ Seq + Subject(Seq) + Period
-      # The residual MSE from that model is s2_w (within-subject variance) and
-      # CV%_w = 100 * sqrt(exp(MSE) - 1) on the log scale.
-      replicate_info <- tryCatch({
-        mdl <- param_result$model
-        if (is.null(mdl) || is.null(mdl$model)) NULL else {
-          mf <- mdl$model
-          if (!all(c("subj", "drug") %in% names(mf))) NULL else {
-            yname <- names(mf)[1]
-            d <- data.frame(
-              y = as.numeric(mf[[yname]]),
-              subj = as.character(mf$subj),
-              drug = as.character(mf$drug),
-              prd  = if ("prd" %in% names(mf)) as.character(mf$prd) else NA_character_,
-              seq  = if ("seq" %in% names(mf)) as.character(mf$seq) else NA_character_,
-              stringsAsFactors = FALSE
-            )
-            d <- d[is.finite(d$y), , drop = FALSE]
-            tab <- table(d$subj, d$drug)
-            is_replicate_design <- any(tab > 1)
-            if (!is_replicate_design) NULL else {
-              # Identify reference vs test levels (factor order: ref first)
-              drug_lvls <- if (is.factor(mf$drug)) levels(mf$drug) else sort(unique(d$drug))
-              ref_lvl  <- drug_lvls[1]
-              test_lvl <- if (length(drug_lvls) >= 2) drug_lvls[2] else NA_character_
-
-              # SAS-style per-product ANOVA: y ~ Seq + Subject(Seq) + Period
-              # Returns residual MSE and DF, or NA when not estimable.
-              fit_within_anova <- function(df_drug) {
-                if (nrow(df_drug) == 0) return(list(s2 = NA_real_, df = 0L))
-                # Need >=2 reps for some subject to estimate within-subject error
-                rc <- table(df_drug$subj)
-                if (!any(rc >= 2)) return(list(s2 = NA_real_, df = 0L))
-                df_drug$subj <- factor(df_drug$subj)
-                terms <- "y ~ 1"
-                if (!all(is.na(df_drug$seq)) && length(unique(df_drug$seq)) >= 2) {
-                  df_drug$seq <- factor(df_drug$seq)
-                  terms <- paste(terms, "+ seq + subj:seq")
-                } else {
-                  terms <- paste(terms, "+ subj")
-                }
-                if (!all(is.na(df_drug$prd)) && length(unique(df_drug$prd)) >= 2) {
-                  df_drug$prd <- factor(df_drug$prd)
-                  terms <- paste(terms, "+ prd")
-                }
-                fit <- tryCatch(
-                  lm(as.formula(terms), data = df_drug),
-                  error = function(e) NULL
-                )
-                if (is.null(fit)) return(list(s2 = NA_real_, df = 0L))
-                rdf <- df.residual(fit)
-                if (is.null(rdf) || is.na(rdf) || rdf <= 0)
-                  return(list(s2 = NA_real_, df = 0L))
-                rss <- sum(residuals(fit)^2)
-                list(s2 = rss / rdf, df = as.integer(rdf))
-              }
-
-              data_logged <- isTRUE(param_result$data_was_logged) ||
-                             grepl("^(ln|log)", param_name, ignore.case = TRUE)
-              cv_from_s2 <- function(s2) {
-                if (is.na(s2) || s2 < 0) return(NA_real_)
-                if (data_logged) 100 * sqrt(exp(s2) - 1)
-                else 100 * sqrt(s2) / abs(mean(d$y, na.rm = TRUE))
-              }
-
-              ref_pool  <- fit_within_anova(d[d$drug == ref_lvl, , drop = FALSE])
-              test_pool <- if (!is.na(test_lvl))
-                fit_within_anova(d[d$drug == test_lvl, , drop = FALSE])
-              else list(s2 = NA_real_, df = 0L)
-
-              list(
-                is_replicate = TRUE,
-                ref_label  = ref_lvl,
-                test_label = test_lvl,
-                s2_wR = ref_pool$s2,  df_wR = ref_pool$df,
-                s2_wT = test_pool$s2, df_wT = test_pool$df,
-                cv_wR = cv_from_s2(ref_pool$s2),
-                cv_wT = cv_from_s2(test_pool$s2)
-              )
-            }
-          }
-        }
-      }, error = function(e) NULL)
+      # compute_replicate_intra_subject_variability() (R/simple_anova.R) does the
+      # actual per-arm SAS-style ANOVA (y ~ Seq + Subject(Seq) + Period on each
+      # arm separately) - shared with the SAS-style HTML report's Intra-subject
+      # Variability Summary section (sas_style_report.R) so the two stay in sync.
+      data_logged <- isTRUE(param_result$data_was_logged) ||
+                     grepl("^(ln|log)", param_name, ignore.case = TRUE)
+      replicate_info <- compute_replicate_intra_subject_variability(
+        param_result$model, is_log_scale = data_logged)
 
       # ── Summary card: 3 focused columns ───────────────────────────────────────
       summary_card <- {

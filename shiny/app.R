@@ -206,6 +206,25 @@ source("server/randomization_server.R",     local = TRUE)
 # Define utility operators and functions
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
+# Serve the repo-root docs/ statically so the root README's relative image
+# links (docs/images/*.gif) resolve when the README is rendered inline on
+# the Help & Support tab (includeMarkdown() renders the markdown but does
+# not rewrite relative asset paths for Shiny's web server). Handles both
+# launch conventions: cwd == repo root (shiny::runApp("shiny")) or
+# cwd == shiny/ (running app.R directly from inside shiny/).
+.bioeq_docs_dir <- if (dir.exists("docs")) "docs" else file.path("..", "docs")
+if (dir.exists(.bioeq_docs_dir)) shiny::addResourcePath("docs", .bioeq_docs_dir)
+
+# Root project README, shown inline on the Help & Support tab. shiny::runApp()
+# changes the working directory to the app dir (shiny/) while serving, which
+# also has its own (dev-oriented) README.md - check the repo-root one first,
+# since that's the actual project overview this is meant to show.
+.bioeq_readme_path <- if (file.exists(file.path("..", "README.md"))) {
+  file.path("..", "README.md")
+} else {
+  "README.md"
+}
+
 # Define UI
 ui <- dashboardPage(
   skin = "blue",
@@ -232,8 +251,8 @@ ui <- dashboardPage(
       id = "sidebar",
       menuItem("Data Upload", tabName = "upload", icon = icon("upload")),
       menuItem("Analysis Setup", tabName = "setup", icon = icon("cogs")),
-      menuItem("Results", tabName = "results", icon = icon("chart-line")),
-      menuItem("Plots", tabName = "plots", icon = icon("chart-area")),
+      menuItem("Results", tabName = "results", icon = icon("chart-bar")),
+      menuItem("Plots", tabName = "plots", icon = icon("chart-line")),
       menuItem("Exports & Reports", tabName = "exports", icon = icon("download")),
       menuItem("Validation", tabName = "validation", icon = icon("check-circle")),
       br(),
@@ -247,7 +266,7 @@ ui <- dashboardPage(
     div(
       style = "position: fixed; bottom: 15px; left: 15px; right: 15px; text-align: center; 
                border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;",
-      p("Version BETA", style = "color: #a0aec0; font-size: 11px; margin: 5px 0; font-weight: 500;"),
+      p(paste0("Version ", get_bioeq_config("bioeq_version") %||% "1.0.0"), style = "color: #a0aec0; font-size: 11px; margin: 5px 0; font-weight: 500;"),
       p("© 2025 BioEQ Team", style = "color: #a0aec0; font-size: 11px; margin: 0; font-weight: 500;")
     )
   ),
@@ -327,10 +346,10 @@ ui <- dashboardPage(
     
     # Custom CSS for responsive design
     tags$head(
-      tags$title("BioEQ - BETA"),
+      tags$title("BioEQ"),
       # Force the browser tab title even after shinydashboard overwrites it
       # with a serialized version of the dashboardHeader `title` HTML.
-      tags$script(HTML("document.title = 'BioEQ - BETA';")),  
+      tags$script(HTML("document.title = 'BioEQ';")),
       tags$link(rel = "icon", href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧪</text></svg>"),
       tags$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
       tags$link(rel = "stylesheet", type = "text/css", href = "custom.css"),
@@ -953,68 +972,67 @@ ui <- dashboardPage(
       # Help Tab
       tabItem(
         tabName = "help",
+
+        # Title banner - same gradient-header pattern as every other module,
+        # icon matching the sidebar's "Help & Support" menuItem icon.
+        div(
+          class = "help-header",
+          style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
+          h3(icon("question-circle"), " Help & Support",
+             style = "margin: 0; font-weight: 700;"),
+          p("Getting-started guidance, data templates, and where to go for support.",
+            style = "margin: 4px 0 0 0; font-size: 13px; color: #e2e8f0;")
+        ),
+
+        # Quick Links - one horizontal row across the top.
         fluidRow(
-          box(
-            title = "Help & Support", 
-            status = "info", 
-            solidHeader = TRUE,
-            width = 8,
-            h4("Getting Started"),
-            p("Follow these steps to perform bioequivalence analysis:"),
-            tags$ol(
-              tags$li(tags$strong("Upload Data:"), " Upload your concentration-time data in CSV format"),
-              tags$li(tags$strong("Configure Analysis:"), " Select study design and analysis parameters"),
-              tags$li(tags$strong("Review Results:"), " Examine NCA parameters and ANOVA results")
-            ),
-            br(),
-            h4("Data Format Requirements"),
-            p("Your CSV file should contain the following columns:"),
-            tags$ul(
-              tags$li(tags$strong("Subject:"), " Unique subject identifier (1, 2, 3, ...)"),
-              tags$li(tags$strong("Treatment:"), " Treatment code (R for Reference, T for Test)"),
-              tags$li(tags$strong("Time:"), " Sampling time in hours (0, 0.25, 0.5, 1, ...)"),
-              tags$li(tags$strong("Concentration:"), " Drug concentration in ng/mL")
-            )
-          ),
           box(
             title = "Quick Links",
             status = "warning",
             solidHeader = TRUE,
-            width = 4,
-            downloadButton("download_example_data", "Download Example Data",
-                            class = "btn btn-primary btn-block", icon = icon("download")),
-            br(), br(),
-            tags$a(href = "#", class = "btn btn-info btn-block",
-                   icon("book"), " User Manual"),
-            br(),
-            tags$a(href = "#", class = "btn btn-success btn-block",
-                   icon("video"), " Video Tutorials"),
-            br(),
-            tags$a(href = "mailto:support@bioeq.com", class = "btn btn-warning btn-block",
-                   icon("envelope"), " Contact Support")
+            width = 12,
+            div(style = "display: flex; flex-wrap: wrap; gap: 10px;",
+              tags$span(class = "btn btn-default disabled",
+                        style = "flex: 1 1 180px; pointer-events: none; opacity: 0.65;",
+                        icon("book"), " User Manual ", tags$small("(Coming Soon)")),
+              tags$span(class = "btn btn-default disabled",
+                        style = "flex: 1 1 180px; pointer-events: none; opacity: 0.65;",
+                        icon("video"), " Video Tutorials ", tags$small("(Coming Soon)")),
+              tags$a(href = "mailto:support@bioeq.com",
+                     class = "btn btn-warning", style = "flex: 1 1 180px;",
+                     icon("envelope"), " Contact Support"),
+              downloadButton("download_template", "CSV Template (Concentration-Time)",
+                              class = "btn btn-outline-primary",
+                              style = "flex: 1 1 220px;"),
+              downloadButton("download_pk_template", "CSV Template (PK Parameters)",
+                              class = "btn btn-outline-primary",
+                              style = "flex: 1 1 220px;")
+            )
           )
         ),
+
+        # README, from "## Data Format" onward only - a user reading this has
+        # already loaded the app, so the install/launch/overview sections
+        # above that point in the source README don't apply here.
         fluidRow(
           box(
-            title = "Data Templates",
+            title = "Application Information",
             status = "primary",
             solidHeader = TRUE,
             width = 12,
-            p("Starter files matching the column layout BioEQ expects — fill in your own data and upload."),
-            div(class = "row",
-              div(class = "col-sm-4",
-                downloadButton("download_template", "CSV Template (Concentration-Time)",
-                                class = "btn btn-outline-primary btn-block")
-              ),
-              div(class = "col-sm-4",
-                downloadButton("download_excel_template", "Excel Template (Concentration-Time)",
-                                class = "btn btn-outline-primary btn-block")
-              ),
-              div(class = "col-sm-4",
-                downloadButton("download_pk_template", "CSV Template (PK Parameters)",
-                                class = "btn btn-outline-primary btn-block")
-              )
-            )
+            if (file.exists(.bioeq_readme_path)) {
+              readme_lines <- readLines(.bioeq_readme_path, warn = FALSE)
+              start_idx <- which(grepl("^##\\s+Data Format", readme_lines))[1]
+              if (!is.na(start_idx)) {
+                shiny::markdown(readme_lines[start_idx:length(readme_lines)])
+              } else {
+                # Heading not found (README restructured) - show the whole
+                # thing rather than silently show nothing.
+                shiny::markdown(readme_lines)
+              }
+            } else {
+              p(class = "text-muted", "README.md not found.")
+            }
           )
         )
       )

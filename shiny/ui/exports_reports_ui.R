@@ -13,10 +13,6 @@ fluidPage(
       }
       .export-card h4 {
         color: #495057;
-        margin-bottom: 5px;
-      }
-      .export-card p.subtitle {
-        color: #6c757d;
         margin-bottom: 15px;
       }
       .report-card {
@@ -28,10 +24,6 @@ fluidPage(
       }
       .report-card h4 {
         color: #495057;
-        margin-bottom: 5px;
-      }
-      .report-card p.subtitle {
-        color: #6c757d;
         margin-bottom: 15px;
       }
       .export-btn {
@@ -59,11 +51,7 @@ fluidPage(
         style = "padding: 12px 18px; margin-bottom: 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2c5282 100%); border-radius: 8px; color: white;",
         h3(
           icon("download"), " Exports & Reports",
-          style = "margin: 0 0 4px 0; font-size: 20px; font-weight: 600;"
-        ),
-        p(
-          "Download analysis results as CSV files or a comprehensive analysis report.",
-          style = "margin: 0; font-size: 13px; opacity: 0.85;"
+          style = "margin: 0; font-size: 20px; font-weight: 600;"
         )
       )
     )
@@ -94,9 +82,7 @@ fluidPage(
       column(12,
         div(class = "export-card",
           h4(icon("file-csv"), " Data Exports (CSV)"),
-          p(class = "subtitle",
-            "Download rectangular CSV files suitable for import into SAS, Phoenix WinNonlin, R, or Excel."),
-          
+
           # Metadata toggle
           fluidRow(
             column(12,
@@ -123,13 +109,9 @@ fluidPage(
                 downloadButton("download_nca_subject_data",
                   "NCA Subject-Level Data",
                   class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 8px 0;",
-                  "All PK parameters per subject \u00D7 treatment \u00D7 period"),
                 downloadButton("download_nca_summary",
                   "NCA Summary Statistics",
-                  class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
-                  "Test vs Reference means, CV%, ratio by parameter")
+                  class = "btn-outline-primary btn-sm export-btn")
               )
             ),
             
@@ -140,13 +122,9 @@ fluidPage(
                 downloadButton("download_anova_results",
                   "ANOVA Results",
                   class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 8px 0;",
-                  "Type I/III SS tables, F-values, p-values (SAS-style)"),
                 downloadButton("download_be_results",
                   "BE Assessment Results",
-                  class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
-                  "CIs, GMR, limits, N, DF, pass/fail per parameter")
+                  class = "btn-outline-primary btn-sm export-btn")
               )
             ),
             
@@ -156,9 +134,7 @@ fluidPage(
                 h6(icon("database"), " Source Data"),
                 downloadButton("download_raw_data",
                   "Uploaded Raw Data",
-                  class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
-                  "Original uploaded dataset as-is")
+                  class = "btn-outline-primary btn-sm export-btn")
               )
             )
           ),
@@ -171,13 +147,9 @@ fluidPage(
                 downloadButton("download_missing_data_log",
                   "Missing Data Log",
                   class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 8px 0;",
-                  "Position-aware imputation/removal log (BLQ, middle, terminal)"),
                 downloadButton("download_carryover_summary",
                   "Carryover Summary",
-                  class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
-                  "Pre-dose vs. Cmax per period, ICH M13A 5% threshold")
+                  class = "btn-outline-primary btn-sm export-btn")
               )
             )
           )
@@ -190,19 +162,13 @@ fluidPage(
       column(12,
         div(class = "export-card",
           h4(icon("chart-line"), " Plot Exports (PDF)"),
-          p(class = "subtitle",
-            "Download the same profile and regression plots shown in the Plots tab, as a printable PDF."),
           fluidRow(
             column(6,
               div(class = "export-btn-group",
                 h6(icon("chart-area"), " Concentration-Time Profiles"),
                 downloadButton("download_concentration_profiles_pdf",
                   "Concentration-Time Profiles (PDF)",
-                  class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
-                  "Mean profile(s) - Test vs. Reference, plus T1/T2/R1/R2 for replicate designs - ",
-                  "followed by one full page per individual subject. Linear scale, then the ",
-                  "same set again on a natural log scale.")
+                  class = "btn-outline-primary btn-sm export-btn")
               )
             ),
             column(6,
@@ -210,10 +176,7 @@ fluidPage(
                 h6(icon("chart-area"), " Lambda Z Regression"),
                 downloadButton("download_lambda_z_plots_pdf",
                   "Lambda Z Regression Plots (PDF)",
-                  class = "btn-outline-primary btn-sm export-btn"),
-                tags$small(class = "text-muted d-block", style = "margin: 2px 0 0 0;",
-                  "Semi-log terminal-phase regression per subject, with the fitted line ",
-                  "and selected terminal points highlighted.")
+                  class = "btn-outline-primary btn-sm export-btn")
               )
             )
           )
@@ -226,12 +189,6 @@ fluidPage(
       column(12,
         div(class = "report-card",
           h4(icon("file-alt"), " Reports"),
-          p(class = "subtitle",
-            "Comprehensive SAS-style analysis report (HTML). ",
-            "Combines the analysis configuration, untransformed descriptive statistics, ",
-            "log-scale ANOVA tables (Type I & III), per-product intra-subject variability, ",
-            "the final BE conclusion, and a reproducible analysis summary ",
-            "in a single self-contained document."),
           fluidRow(
             column(6,
               downloadButton("download_sas_style_report",
@@ -239,10 +196,7 @@ fluidPage(
                 icon = icon("file-code"),
                 class = "btn-primary export-btn",
                 style = "width: 100%; margin-bottom: 10px;"
-              ),
-              tags$small(class = "text-muted d-block",
-                "Descriptive stats (untransformed) + ANOVA on log scale + ",
-                "intra-subject CV% + final BE table.")
+              )
             ),
             column(6,
               div(

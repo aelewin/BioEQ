@@ -295,4 +295,4 @@ For issues or questions:
 
 ---
 Author: Amanda Lewin
-*Version BETA 
+*Version 1.0.0*

@@ -117,7 +117,25 @@ randomization_ui <- function(id) {
       ),
 
       # ----------------------------------------------------------------------
-      # Tab 2: Verify
+      # Tab 2: Audit / Report
+      # ----------------------------------------------------------------------
+      tabPanel(
+        tags$span(icon("file-shield"), " Report"),
+        br(),
+        fluidRow(
+          box(
+            title = NULL, status = "primary", solidHeader = FALSE,
+            width = 12,
+            verbatimTextOutput(ns("audit_text")),
+            downloadButton(ns("dl_report"), "Download randomization report (.html)",
+                           icon = icon("file-lines"),
+                           class = "btn-primary")
+          )
+        )
+      ),
+
+      # ----------------------------------------------------------------------
+      # Tab 3: Verify
       # ----------------------------------------------------------------------
       tabPanel(
         tags$span(icon("circle-check"), " Verify Schedule"),
@@ -174,26 +192,6 @@ randomization_ui <- function(id) {
             uiOutput(ns("verify_status")),
             br(),
             DT::dataTableOutput(ns("verify_table"))
-          )
-        )
-      ),
-
-      # ----------------------------------------------------------------------
-      # Tab 3: Audit / Report
-      # ----------------------------------------------------------------------
-      tabPanel(
-        tags$span(icon("file-shield"), " Report"),
-        br(),
-        fluidRow(
-          box(
-            title = NULL, status = "primary", solidHeader = FALSE,
-            width = 12,
-            verbatimTextOutput(ns("audit_text")),
-            downloadButton(ns("dl_audit"),  "Download audit text (.txt)",
-                           class = "btn-default"),
-            downloadButton(ns("dl_report"), "Download randomization report (.html)",
-                           icon = icon("file-lines"),
-                           class = "btn-primary")
           )
         )
       )

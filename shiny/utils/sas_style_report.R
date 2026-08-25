@@ -643,8 +643,23 @@
   for (p in names(anova_data)) {
     pr <- anova_data[[p]]
     if (is.null(pr) || "error" %in% names(pr)) next
+    # Plain-ABE results (via perform_simple_anova(), keyed under BOTH e.g.
+    # "Cmax" and "lnCmax" - param_mapping in analysis_setup_server.R
+    # deliberately runs ANOVA on both, for other display purposes) carry a
+    # raw/untransformed twin of each log-scale parameter. Skip the raw twin
+    # here rather than feeding its linear-scale residual variance into the
+    # log-scale sqrt(exp(s2)-1) formula below, which silently produces "Inf%"
+    # nonsense. Detected by sibling presence, NOT by "does this key start with
+    # ln/log" - RSABE/ABEL (R/be_analysis.R) key their results under the base
+    # name only (e.g. "Cmax", no "lnCmax" sibling ever exists) even though
+    # that IS the log-scale analysis, so a blanket ln-prefix filter would skip
+    # them entirely.
+    has_raw_log_sibling <- !grepl("^(ln|log)", p, ignore.case = TRUE) &&
+      (paste0("ln", p) %in% names(anova_data) || paste0("log", p) %in% names(anova_data))
+    if (has_raw_log_sibling) next
     disp <- .display_param(p)
     cvR <- NA_real_; s2R <- NA_real_; cvT <- NA_real_; s2T <- NA_real_
+    n_wR <- NA_integer_; n_wT <- NA_integer_
     src <- ""
     if (!is.null(pr$replicatebe_output)) {
       rb <- pr$replicatebe_output
@@ -654,23 +669,45 @@
       sT <- suppressWarnings(as.numeric(rb$swT))
       if (!is.na(sR)) s2R <- sR^2
       if (!is.na(sT)) s2T <- sT^2
+      n_wR <- pr$n_wR %||% NA; n_wT <- pr$n_wT %||% NA
       src <- "ABEL (replicateBE)"
     } else if (!is.null(pr$s2_wR)) {
+      # RSABE's own Reference-only ANOVA (compute_reference_anova_variance()).
+      # Test-arm variance (s2_wT) IS populated here for a full replicate design
+      # (RSABE's own code sets it whenever estimable) - only genuinely absent
+      # for a partial replicate, where Test isn't repeated. Label reflects
+      # which is actually the case rather than always saying "Reference-only".
       s2R <- as.numeric(pr$s2_wR)
       s2T <- as.numeric(pr$s2_wT %||% NA)
       cvR <- as.numeric(pr$cv_wr_percent %||% NA)
       cvT <- as.numeric(pr$cv_wt_percent %||% NA)
-      src <- "RSABE (Reference-only ANOVA)"
-    } else if (!is.null(pr$residual_mse)) {
-      mse <- as.numeric(pr$residual_mse)
-      if (!is.na(mse) && mse >= 0 && mse < 5) {
-        s2R <- mse; cvR <- 100 * sqrt(exp(mse) - 1)
-        src <- "ABE (pooled residual MSE)"
+      n_wR <- pr$n_wR %||% NA; n_wT <- pr$n_wT %||% NA
+      src <- if (!is.na(s2T)) "RSABE (Reference/Test ANOVA)" else "RSABE (Reference-only ANOVA)"
+    } else {
+      # Plain ABE (Fixed Effects/Mixed Effects, not ABEL/RSABE).
+      # compute_replicate_intra_subject_variability() (R/simple_anova.R) returns
+      # a real per-arm split ONLY for a genuine replicate design (some subject
+      # has >1 observation of the same drug) - a Reference/Test intra-subject
+      # split is not a computable quantity for a 2x2x2 crossover (each subject
+      # gets each treatment exactly once) or a parallel design (no repeated
+      # dosing of any treatment within a subject at all), so it correctly
+      # returns NULL for both. This parameter is simply omitted from this
+      # section in that case - NOT replaced with a pooled or per-arm-labeled
+      # substitute, which would misrepresent an uncomputed split as if it were
+      # computed. (Overall/pooled within-subject variability for those designs
+      # is already shown elsewhere in the report, under "Coeff Var" in the
+      # Model Summary table - unlabeled by arm, which is the honest framing.)
+      rep_info <- tryCatch(
+        compute_replicate_intra_subject_variability(pr$model, is_log_scale = TRUE),
+        error = function(e) NULL)
+      if (!is.null(rep_info)) {
+        s2R <- rep_info$s2_wR; s2T <- rep_info$s2_wT
+        cvR <- rep_info$cv_wR; cvT <- rep_info$cv_wT
+        n_wR <- rep_info$n_wR; n_wT <- rep_info$n_wT
+        src <- if (!is.na(s2T)) "ABE (Reference/Test ANOVA)" else "ABE (Reference-only ANOVA)"
       }
     }
     if (is.na(cvR) && is.na(s2R)) next
-    n_wR <- pr$n_wR %||% NA
-    n_wT <- pr$n_wT %||% NA
     rows[[length(rows) + 1]] <- data.frame(
       Parameter = disp,
       n_R       = .fmt_int(n_wR),
@@ -685,7 +722,21 @@
       stringsAsFactors = FALSE
     )
   }
-  if (length(rows) == 0) return("")
+  if (length(rows) == 0) {
+    # Keep the section (header included at the call site) rather than
+    # vanishing it - an explanatory note in an always-present section reads
+    # better than a numbering gap (section 3 jumping straight to 5) and is
+    # more informative than silence. No table, since there's genuinely no
+    # per-arm data to show - not a pooled substitute, not a blank Ref/Test
+    # split, just a plain statement of why.
+    return(paste0(
+      "<p class='sas-note'>Not applicable for this study design. A Reference/Test ",
+      "intra-subject variability split requires a replicate design (each subject ",
+      "dosed with at least one treatment two or more times) - not calculable here. ",
+      "Overall pooled within-subject variability is still reported, unlabeled by ",
+      "arm, as \u201cCoeff Var\u201d in each parameter's Model Summary table above.</p>"
+    ))
+  }
   tab <- do.call(rbind, rows)
   colnames(tab) <- c("Parameter", "n (Ref)", "CVwR (%)", "swR", "s\u00b2wR",
                      "n (Test)", "CVwT (%)", "swT", "s\u00b2wT", "Source")
@@ -1024,6 +1075,11 @@ generate_sas_style_html_report <- function(be_results,
   code_block <- .section_reproducible_code(analysis_config, be_results, ran_nca)
 
   # ── Header ────────────────────────────────────────────────────────────────
+  bioeq_ver <- tryCatch(
+    as.character(get_bioeq_config("bioeq_version")),
+    error = function(e) NA_character_)
+  r_ver <- as.character(getRversion())
+
   header_html <- paste0(
     "<div class='sas-header'>",
     "<h1>BioEQ &mdash; Bioequivalence Analysis Report</h1>",
@@ -1036,6 +1092,9 @@ generate_sas_style_html_report <- function(be_results,
     "<tr><th>N Subjects</th><td>", .fmt_int(n_subj), "</td></tr>",
     "<tr><th>Alpha</th><td>", .fmt_num(alpha, 4),
     " (", ci_label, ")</td></tr>",
+    if (!is.na(bioeq_ver)) paste0(
+      "<tr><th>BioEQ Version</th><td>", .html_escape(bioeq_ver), "</td></tr>") else "",
+    "<tr><th>R Version</th><td>", .html_escape(r_ver), "</td></tr>",
     "</table></div>"
   )
 
@@ -1085,8 +1144,7 @@ generate_sas_style_html_report <- function(be_results,
       "<h2 class='sas-section'>3. Full ANOVA &mdash; Log-transformed Data</h2>",
       "<p class='sas-note'>Model: ln(PK) = Sequence + Subject(Sequence) + ",
       "Period + Treatment. Same Type III SS engine as the interactive ",
-      "ANOVA Results tab (emmeans-based; matches SAS PROC GLM exactly, ",
-      "including the Sequence row under Subject(Sequence) nesting).</p>",
+      "ANOVA Results tab (emmeans-based; matches SAS PROC GLM).</p>",
       full_anova_block) else "",
 
     if (nzchar(intra_block)) paste0(

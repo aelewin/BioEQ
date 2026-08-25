@@ -529,6 +529,108 @@ compute_reference_anova_variance <- function(data, param_col) {
   )
 }
 
+#' Per-product (Reference/Test) intra-subject variability from a fitted
+#' crossover model's own model frame
+#'
+#' Given a fitted `lm` whose model frame carries `subj`/`drug` (and, when
+#' present, `seq`/`prd`) columns — the shape `perform_simple_anova()`'s fixed-
+#' effects branch and RSABE's `fit_rsabe_model()` both produce — detects
+#' whether the design is a replicate (any subject has more than one
+#' observation of the same drug) and, if so, fits a per-arm
+#' `y ~ seq + subj:seq + prd` ANOVA separately on the Reference-only and
+#' Test-only rows (SAS/FDA Method A) to get each arm's within-subject
+#' (intra-subject) variance. For a plain 2x2x2 crossover (each subject
+#' receives each treatment only once) or a parallel design (no repeated
+#' dosing of any treatment, no `subj` term in the model at all), per-arm
+#' intra-subject variance is not estimable — returns NULL, and the caller
+#' should fall back to (or, for parallel, omit) a pooled/overall statistic.
+#'
+#' This is the SAME computation `compute_reference_anova_variance()` above
+#' performs, but driven directly off an already-fit model's own frame instead
+#' of requiring a fresh `data`/`param_col` pair with capitalized
+#' `Subject`/`Treatment`/`Period`/`Sequence` columns and literal "R"/"T"
+#' Treatment values — convenient for callers (the ANOVA Results tab, the
+#' SAS-style HTML report) that already have the fitted model in hand and
+#' would otherwise have to reconstruct/recode a data frame just to call it.
+#'
+#' @param model A fitted `lm` object with `subj`/`drug` columns in its model
+#'   frame (and, for crossover designs, `seq`/`prd`)
+#' @param is_log_scale Whether the response is already log-transformed
+#'   (controls whether CV% is back-transformed via `sqrt(exp(s2)-1)*100` or a
+#'   raw coefficient of variation against the mean)
+#' @return list(is_replicate, ref_label, test_label, s2_wR, df_wR, s2_wT,
+#'   df_wT, cv_wR, cv_wT, n_wR, n_wT), or NULL when the model isn't a
+#'   replicate-design fit (no `subj`/`drug` terms, or no subject has more than
+#'   one observation of the same drug)
+#' @export
+compute_replicate_intra_subject_variability <- function(model, is_log_scale = TRUE) {
+  tryCatch({
+    if (is.null(model) || is.null(model$model)) return(NULL)
+    mf <- model$model
+    if (!all(c("subj", "drug") %in% names(mf))) return(NULL)
+
+    yname <- names(mf)[1]
+    d <- data.frame(
+      y = as.numeric(mf[[yname]]),
+      subj = as.character(mf$subj),
+      drug = as.character(mf$drug),
+      prd  = if ("prd" %in% names(mf)) as.character(mf$prd) else NA_character_,
+      seq  = if ("seq" %in% names(mf)) as.character(mf$seq) else NA_character_,
+      stringsAsFactors = FALSE
+    )
+    d <- d[is.finite(d$y), , drop = FALSE]
+    tab <- table(d$subj, d$drug)
+    if (!any(tab > 1)) return(NULL)  # not a replicate design - no per-arm split estimable
+
+    drug_lvls <- if (is.factor(mf$drug)) levels(mf$drug) else sort(unique(d$drug))
+    ref_lvl  <- drug_lvls[1]
+    test_lvl <- if (length(drug_lvls) >= 2) drug_lvls[2] else NA_character_
+
+    fit_within_anova <- function(df_drug) {
+      if (nrow(df_drug) == 0) return(list(s2 = NA_real_, df = 0L))
+      rc <- table(df_drug$subj)
+      if (!any(rc >= 2)) return(list(s2 = NA_real_, df = 0L))
+      df_drug$subj <- factor(df_drug$subj)
+      terms <- "y ~ 1"
+      if (!all(is.na(df_drug$seq)) && length(unique(df_drug$seq)) >= 2) {
+        df_drug$seq <- factor(df_drug$seq)
+        terms <- paste(terms, "+ seq + subj:seq")
+      } else {
+        terms <- paste(terms, "+ subj")
+      }
+      if (!all(is.na(df_drug$prd)) && length(unique(df_drug$prd)) >= 2) {
+        df_drug$prd <- factor(df_drug$prd)
+        terms <- paste(terms, "+ prd")
+      }
+      fit <- tryCatch(lm(as.formula(terms), data = df_drug), error = function(e) NULL)
+      if (is.null(fit)) return(list(s2 = NA_real_, df = 0L))
+      rdf <- df.residual(fit)
+      if (is.null(rdf) || is.na(rdf) || rdf <= 0) return(list(s2 = NA_real_, df = 0L))
+      rss <- sum(residuals(fit)^2)
+      list(s2 = rss / rdf, df = as.integer(rdf))
+    }
+
+    cv_from_s2 <- function(s2) {
+      if (is.na(s2) || s2 < 0) return(NA_real_)
+      if (is_log_scale) 100 * sqrt(exp(s2) - 1)
+      else 100 * sqrt(s2) / abs(mean(d$y, na.rm = TRUE))
+    }
+
+    ref_pool  <- fit_within_anova(d[d$drug == ref_lvl, , drop = FALSE])
+    test_pool <- if (!is.na(test_lvl)) fit_within_anova(d[d$drug == test_lvl, , drop = FALSE]) else list(s2 = NA_real_, df = 0L)
+
+    list(
+      is_replicate = TRUE,
+      ref_label = ref_lvl, test_label = test_lvl,
+      s2_wR = ref_pool$s2,  df_wR = ref_pool$df,
+      s2_wT = test_pool$s2, df_wT = test_pool$df,
+      cv_wR = cv_from_s2(ref_pool$s2), cv_wT = cv_from_s2(test_pool$s2),
+      n_wR = length(unique(d$subj[d$drug == ref_lvl])),
+      n_wT = if (!is.na(test_lvl)) length(unique(d$subj[d$drug == test_lvl])) else NA_integer_
+    )
+  }, error = function(e) NULL)
+}
+
 #' Group x Treatment interaction test — supportive/exploratory analysis only
 #'
 #' Fits a diagnostic-only model containing the Group x Treatment interaction

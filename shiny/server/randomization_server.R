@@ -344,12 +344,6 @@ randomization_server <- function(id, ss_result = NULL) {
 
     output$audit_text <- renderText({ .audit_text() })
 
-    output$dl_audit <- downloadHandler(
-      filename = function() sprintf("randomization_audit_seed%s_%s.txt",
-                                    input$seed, format(Sys.Date(), "%Y%m%d")),
-      content  = function(file) writeLines(.audit_text(), file)
-    )
-
     output$dl_report <- downloadHandler(
       filename = function() sprintf("randomization_report_seed%s_%s.html",
                                     input$seed, format(Sys.Date(), "%Y%m%d")),
@@ -409,13 +403,13 @@ randomization_server <- function(id, ss_result = NULL) {
           .df_to_html(as.data.frame(table(Stratum = r$schedule$Stratum,
                                           Sequence = r$schedule$Sequence))),
 
-          "<h2>Randomization Schedule</h2>",
-          .df_to_html(r$schedule),
-
           "<h2>Verification</h2>",
           "<pre>",
           .escape_html(paste0("Reproduce in R (>= 3.6.0):\n", .repro_code(m))),
           "</pre>",
+
+          "<h2>Randomization Schedule (by Subject)</h2>",
+          .df_to_html(r$schedule),
 
           "<div class='sig'>",
           "<p><strong>Prepared by:</strong> ___________________________&nbsp;&nbsp;",

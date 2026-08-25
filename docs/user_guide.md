@@ -5,15 +5,10 @@
 > - **Existing content carried over** from the previous guide, lightly noted where it needs a
 >   fact-check or update — quoted so nothing has to be re-found later.
 > - **No existing content** — a short scope note (what the section needs to cover, based on the
->   live app) so drafting has a starting point instead of a blank page.
+>   live app).
 > - **Removed** — content that existed before but is dropped here, with a one-line reason, so it
 >   doesn't silently reappear.
 >
-> Scope: this guide covers the **Shiny web application only**. The R-console/package usage mode
-> (`init_bioeq()`, `help_bioeq()`, etc.) is intentionally out of scope — see
-> `bioeq-dead-code-audit-2026-08` memory for why. The outline below mirrors the app's actual
-> navigation, audited directly from `shiny/app.R` and each `shiny/ui/*.R` file (not inherited
-> from the old doc's table of contents, which had drifted from the real app).
 
 ## Table of Contents
 1. [Introduction](#1-introduction)
@@ -187,8 +182,6 @@ highest R version demanded anywhere in the dependency tree.
 
 ## 3. Interface Overview
 
-**Removed**: the old nav list — wrong (`"Advanced Options"` tab doesn't exist; missing half the
-real tabs).
 
 **No existing content.** The real top-level navigation, audited from `shiny/app.R`'s sidebar
 (in order): Data Upload, Analysis Setup, Results, Plots, Exports & Reports, Validation, Anomaly
@@ -227,10 +220,6 @@ session) as the answer to "what if I don't have a file yet."
 
 ## 5. Analysis Setup
 
-**Removed**: the flat "Configuration Options" bullet list — doesn't reflect the real 3-step
-structure, and several items (e.g. generic "Regulatory Standard: FDA/EMA/ICH" selector) don't
-match how the real UI actually exposes these choices.
-
 **No existing content** — needs to be written fresh as three subsections matching the real UI:
 
 ### 5.1 Step 1: NCA Analysis Setup
@@ -251,7 +240,6 @@ index) toggle — none of which the old guide covered at all.
 
 ## 6. Results
 
-**Existing content carried over**, generic but directionally still fine as a starting point:
 > **Analysis Output:**
 > - Summary Statistics, ANOVA Results, Bioequivalence Assessment (90% CI), Conclusion
 >
@@ -269,7 +257,7 @@ subsection:
 ### 6.5 ANOVA Results
 
 ### 6.6 Interpreting Your Results
-**Existing placeholder, kept as-is** — still the right pointer:
+**Existing placeholder** 
 > Draft source content (per-PK-parameter meaning, what the ANOVA Treatment/Subject/Period/
 > Sequence effects indicate, FDA/EMA/ICH acceptance criteria, plain-language BE conclusion
 > summaries, and study-design tradeoffs) already exists in
@@ -280,11 +268,6 @@ subsection:
 ---
 
 ## 7. Plots
-
-**Removed**: the entire old "Plotting and Visualization" section — every code example calls
-either a console-only function or a function that was never real (`plot_individual_profiles()`,
-`plot_pk_comparison()`, `plot_missing_data()`, `plot_outliers()` do not exist anywhere in the
-codebase). None of it is salvageable as-is, though the *topics* below map loosely to real tabs.
 
 **No existing content** — needs to be written fresh as the 5 real sub-tabs:
 
@@ -298,27 +281,16 @@ codebase). None of it is salvageable as-is, though the *topics* below map loosel
 
 ## 8. Exports & Reports
 
-**Existing content carried over — needs correction, not just fact-checking**: the old doc claims
-PDF and Word report generation. That's **not accurate today** — confirm against the real Exports
-& Reports tab before writing this section: it offers CSV/Excel data exports (NCA Subject-Level,
-NCA Summary, ANOVA Results, BE Assessment Results, raw uploaded data) and one **HTML** analysis
-report (`generate_sas_style_html_report()`) with a documented Print → Save as PDF workaround for
-a PDF copy — there is no direct Word export path currently wired up (Word support via
-`officer`/`flextable` is a `Suggests`-level dependency the app checks for and disables cleanly
-when absent, per its own startup log).
-
-> **Report Contents** (from the old doc — still a reasonable description of the HTML report's
-> actual content, keep):
+> **Report Contents**:
 > - Study summary and design, data characteristics and validation, statistical analysis
->   methodology, results tables and figures, bioequivalence conclusions
+>   methodology, results tables and figures, bioequivalence conclusions - Needs expansion for othe exports available
 
 ---
 
 ## 9. Validation
 
-**No existing content at all** — this entire tab was undocumented in the old guide. Scope:
-explain the two-track validation framing (NCA validated against Phoenix WinNonlin, currently
-pending/no populated datasets; ANOVA/BE validated against SAS PROC GLM/MIXED/TTEST via
+**No existing content** Scope:
+explain the two-track validation framing (NCA validated against Phoenix WinNonlin); ANOVA/BE validated against SAS PROC GLM/MIXED/TTEST via
 literature-consensus reference values and the `replicateBE` package), the Coverage Map, and how
 to read a validation run's PASS/FAIL output.
 
@@ -326,8 +298,7 @@ to read a validation run's PASS/FAIL output.
 
 ## 10. Anomaly Detection
 
-**No existing content at all** — this entire tab was undocumented in the old guide. Needs the
-most net-new writing of any section. Subsections, matching the real UI:
+**No existing content** —
 
 ### 10.1 Data Selection
 ### 10.2 Pairwise Comparison
@@ -348,9 +319,6 @@ describing unbuilt functionality as if it works.
 
 ## 11. Sample Size
 
-**Removed**: the old "Study Planning" section's R-console examples (`calculate_sample_size()`
-called directly) — out of scope now.
-
 **No existing content** — needs to cover the real tab: Study Parameters, the CV Back-Calculator,
 the Sample Size Result panel, and the Power Curve visualization. Also mention the
 dropout-rate-adjustment feature (rounds additional-subjects-needed up to the next multiple of the
@@ -360,8 +328,7 @@ design's group count) — a real feature with no prior documentation anywhere.
 
 ## 12. Randomization
 
-**No existing content at all** — this entire tab was undocumented in the old guide. Subsections,
-matching the real UI:
+**No existing content** — Subsections, matching the real UI:
 
 ### 12.1 Generate Schedule
 Scope: design parameters, block/stratified randomization options, seed handling, and the three
@@ -375,10 +342,7 @@ a schedule.
 
 ## 13. Data Requirements
 
-**Existing content carried over — needs a correction**: the old doc uses `Formulation` as the
-treatment-column name; the real app's convention is `Treatment` (confirmed throughout this
-session's testing). Fix before publishing, and confirm the rest against the real column-mapping
-UI (§4) rather than restating from memory:
+Fix before publishing:
 
 > Required columns for concentration-time data:
 > - `Subject`: Subject identifier (numeric or character)
@@ -407,9 +371,6 @@ as-is:
 >   confirm the current real limit before publishing rather than carrying either number over
 >   unverified)*
 
-**Removed**: every R-console troubleshooting item (`validate_be_data()`, `estimate_lambda_z()`
-manual calls, memory.limit(), data.table advice, etc.) — out of scope.
-
 **No existing content** — the error-message table is worth rebuilding, but sourced from real
 `validate()`/`stop()` messages actually thrown by the Shiny server code (grep
 `shiny/server/*.R` for `showNotification`/`stop(`/`validate(need(` calls) rather than the old
@@ -419,8 +380,7 @@ table's unverified guesses.
 
 ## 15. Getting Help
 
-**No existing content specific to the app.** Old doc's "Getting Help" was entirely R-console
-(`help()`, `test_bioeq()`, `run_bioeq_demo()` — all removed). Scope for this section: the app's
+**No existing content specific to the app.** Scope for this section: the app's
 own Help & Support tab (Getting Started steps, Data Format Requirements, Quick Links — Download
 Example Data, Data Templates, User Manual/Video Tutorials placeholders, Contact Support) — point
 readers there rather than to a console function reference.
